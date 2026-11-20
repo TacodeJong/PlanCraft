@@ -1203,6 +1203,25 @@ mod tests {
         assert!(!h.state().events.iter().any(|e| matches!(e, GridEvent::MoveColumn { .. })), "{:?}", h.state().events);
     }
 
+    /// On Apple keyboards the key labeled Delete is Backspace; both must clear/delete.
+    #[test]
+    fn backspace_and_delete_both_emit_delete_key() {
+        let mut h = harness(three_columns(), 3, None);
+        focus(&mut h, (1, 0));
+        h.state_mut().grid.whole_row = true;
+        h.key_press(Key::Backspace);
+        h.run_steps(2);
+        assert!(
+            h.state().events.iter().any(|e| matches!(e, GridEvent::DeleteKey { row: 1, col: None })),
+            "Backspace: {:?}",
+            h.state().events
+        );
+        h.state_mut().events.clear();
+        h.key_press(Key::Delete);
+        h.run_steps(2);
+        assert!(h.state().events.iter().any(|e| matches!(e, GridEvent::DeleteKey { row: 1, col: None })), "Delete: {:?}", h.state().events);
+    }
+
     /// Regression: Shift+Tab moved the cursor right, like Tab, when no cell was being edited.
     #[test]
     fn shift_tab_moves_the_cursor_left() {

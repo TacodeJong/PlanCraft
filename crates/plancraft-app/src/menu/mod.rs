@@ -182,6 +182,35 @@ mod tests {
         assert_eq!(titles, ["File", "Edit", "View", "Format", "Project", "Window", "Help"]);
     }
 
+    /// Edit ▸ Delete Resource and Project ▸ Delete Resource stay available when a resource is selected.
+    #[test]
+    fn delete_resource_appears_in_edit_and_project_menus() {
+        use crate::menu::state::command_enabled;
+        let mut s = snap();
+        s.task_selected = false;
+        s.resource_selected = true;
+        s.view = ViewKind::ResourceSheet;
+        assert!(command_enabled(&Command::DeleteSelection, &s));
+        assert!(command_enabled(&Command::DeleteResources, &s));
+        s.view = ViewKind::Gantt;
+        assert!(!command_enabled(&Command::DeleteSelection, &s), "Gantt needs a task selection");
+        let bar = build_menu_bar(&s, LayoutKind::Desktop);
+        let edit = bar.menus.iter().find(|m| m.title == "Edit").unwrap();
+        assert!(
+            edit.children.iter().any(|n| matches!(n, Node::Item(it) if it.id == "edit.delete" && it.label.contains("Resource"))),
+            "Edit ▸ Delete Resource on a resource view"
+        );
+        let project = bar.menus.iter().find(|m| m.title == "Project" || m.title == lang::text("tab.project")).unwrap();
+        assert!(
+            project.children.iter().any(|n| matches!(n, Node::Item(it) if it.id == "project.deleteResource")),
+            "Project menu lists Delete Resource"
+        );
+        assert!(
+            project.children.iter().any(|n| matches!(n, Node::Item(it) if it.id == "project.addResource")),
+            "Project menu lists Add Resource"
+        );
+    }
+
     #[test]
     fn mac_layout_moves_about_settings_quit_into_app_menu() {
         crate::lang::set_current(crate::lang::Lang::En);

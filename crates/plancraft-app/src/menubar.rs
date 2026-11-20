@@ -439,7 +439,14 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
                 res,
                 Command::ResourceInfo,
             );
-            b(ui, "trash-2", None, "Delete the selected resources", res, Command::DeleteResources);
+            b(
+                ui,
+                "trash-2",
+                Some(crate::lang::text("tb.delete_resource")),
+                "Delete the selected resources (replace assignments when they are used)",
+                res,
+                Command::DeleteResources,
+            );
             sep(ui);
             b(ui, "scale", Some(crate::lang::text("tb.level")), "Delay tasks to resolve resource overallocations", doc, Command::LevelAll);
             b(ui, "rotate-ccw", Some(crate::lang::text("tb.clear_level")), "Remove all leveling delays", doc, Command::ClearLeveling);

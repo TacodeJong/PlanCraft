@@ -164,7 +164,7 @@ fn edit_menu(s: &MenuSnapshot) -> Vec<Node> {
         item(s, "edit.copy", Command::Copy, "Copy"),
         item(s, "edit.paste", Command::Paste, "Paste"),
         item(s, "edit.fillDown", Command::FillDown, "Fill Down"),
-        item(s, "edit.delete", Command::DeleteSelection, "Delete"),
+        item(s, "edit.delete", Command::DeleteSelection, delete_label(s)),
         Node::Separator,
         item(s, "edit.find", Command::Find(false), "Find…"),
         item(s, "edit.replace", Command::Find(true), "Replace…"),
@@ -249,6 +249,10 @@ fn project_menu(s: &MenuSnapshot) -> Vec<Node> {
         item(s, "project.info", Command::ProjectInfo, lang::text("tb.project_info")),
         item(s, "project.workingTime", Command::ChangeWorkingTime, lang::text("tb.working_time")),
         Node::Separator,
+        item(s, "project.addResource", Command::InsertResource, lang::text("tb.add_resource")),
+        item(s, "project.resourceInfo", Command::ResourceInfo, lang::text("tb.information")),
+        item(s, "project.deleteResource", Command::DeleteResources, lang::text("menu.delete_resource")),
+        Node::Separator,
         item(s, "project.links", Command::ExternalLinks, lang::text("tb.links")),
         item(s, "project.refresh", Command::RefreshExternal, "Refresh Links"),
         Node::Separator,
@@ -261,6 +265,20 @@ fn project_menu(s: &MenuSnapshot) -> Vec<Node> {
         item(s, "project.stats", Command::Statistics, lang::text("tb.statistics")),
         item(s, "project.mcp", Command::McpPanel, lang::text("tb.agents")),
     ])
+}
+
+/// Edit ▸ Delete names the thing it will remove on a resource view.
+fn delete_label(s: &MenuSnapshot) -> &'static str {
+    if s.resource_selected
+        && matches!(
+            s.view,
+            ViewKind::ResourceSheet | ViewKind::ResourceUsage | ViewKind::Workload | ViewKind::TeamPlanner | ViewKind::Timesheet
+        )
+    {
+        lang::text("menu.delete_resource")
+    } else {
+        lang::text("menu.delete")
+    }
 }
 
 fn help_menu(s: &MenuSnapshot) -> Vec<Node> {

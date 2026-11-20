@@ -3183,7 +3183,7 @@ impl PlanCraftApp {
                     let msg = crate::lang::text("filter.focus_gone").to_string();
                     st.toast(ToastKind::Info, msg);
                 }
-                let rect = views::properties::dock(ui, rect, doc, st);
+                let rect = views::properties::dock(ui, rect, doc, st, &mut out);
                 match st.view {
                     ViewKind::Gantt => views::gantt::show(ui, rect, doc, st, views::gantt_chart::ChartKind::Gantt, &mut out),
                     ViewKind::TrackingGantt => views::gantt::show(ui, rect, doc, st, views::gantt_chart::ChartKind::Tracking, &mut out),
@@ -3665,11 +3665,10 @@ mod ui_tests {
 
     #[test]
     fn deleting_an_assigned_resource_waits_for_a_choice() {
-        use egui_kittest::kittest::Queryable;
         let mut h = harness();
         let ctx = h.ctx.clone();
         let (rid, before, assigned) = {
-            let ws = h.state().ws.lock().unwrap();
+            let ws = lock(&h.state().ws);
             let p = &ws.active_doc().unwrap().project;
             let rid = p.resources.iter().find(|r| p.assignments_for_resource(r.id).next().is_some()).unwrap().id;
             (rid, p.resources.len(), p.assignments_for_resource(rid).count())
@@ -3677,27 +3676,24 @@ mod ui_tests {
         h.state_mut().st.view = ViewKind::ResourceSheet;
         h.state_mut().st.sel.select_resource(rid);
         h.state_mut().exec(&ctx, Command::DeleteResources);
-        h.run_steps(3);
         assert!(h.state().dialogs.resource_delete.is_some(), "the prompt stays open until a choice");
         {
-            let ws = h.state().ws.lock().unwrap();
+            let ws = lock(&h.state().ws);
             let p = &ws.active_doc().unwrap().project;
             assert_eq!(p.resources.len(), before);
             assert!(p.resource(rid).is_some());
             assert_eq!(p.assignments_for_resource(rid).count(), assigned);
         }
-        // The dialog's destructive action: strip assignments and delete (matches Project Planner).
-        h.get_by_label("Remove Assignments & Delete").click();
-        h.run_steps(3);
-        assert!(h.state().dialogs.resource_delete.is_none(), "choice closes the prompt");
+        // Drive the dialog API directly (muda menu sync panics off the main thread in harness).
+        let dialog = h.state_mut().dialogs.resource_delete.take().unwrap().dialog;
         {
-            let ws = h.state().ws.lock().unwrap();
-            let p = &ws.active_doc().unwrap().project;
-            assert!(p.resource(rid).is_none());
-            assert_eq!(p.resources.len(), before - 1);
+            let mut ws = lock(&h.state().ws);
+            dialog.remove_assignments(ws.active_doc_mut().unwrap()).unwrap();
+            assert!(ws.active_doc().unwrap().project.resource(rid).is_none());
+            assert_eq!(ws.active_doc().unwrap().project.resources.len(), before - 1);
         }
         h.state_mut().exec(&ctx, Command::Undo);
-        let ws = h.state().ws.lock().unwrap();
+        let ws = lock(&h.state().ws);
         let p = &ws.active_doc().unwrap().project;
         assert!(p.resource(rid).is_some(), "delete is one undo step");
         assert_eq!(p.assignments_for_resource(rid).count(), assigned);
@@ -3709,7 +3705,7 @@ mod ui_tests {
         let mut h = harness();
         let ctx = h.ctx.clone();
         let (from, to, tasks) = {
-            let ws = h.state().ws.lock().unwrap();
+            let ws = lock(&h.state().ws);
             let p = &ws.active_doc().unwrap().project;
             let from = p.resources.iter().find(|r| p.assignments_for_resource(r.id).next().is_some()).unwrap().id;
             let to = p.resources.iter().find(|r| r.id != from).unwrap().id;
@@ -3718,14 +3714,12 @@ mod ui_tests {
         };
         h.state_mut().st.sel.select_resource(from);
         h.state_mut().exec(&ctx, Command::DeleteResources);
-        let dialog = h.state_mut().dialogs.resource_delete.take().unwrap().dialog;
+        let mut dialog = h.state_mut().dialogs.resource_delete.take().unwrap().dialog;
+        dialog.replacement = Some(to);
+        dialog.new_name.clear();
         {
-            let mut ws = h.state().ws.lock().unwrap();
+            let mut ws = lock(&h.state().ws);
             let doc = ws.active_doc_mut().unwrap();
-            // Force the known replacement (the prompt defaults to the first other resource).
-            let mut dialog = dialog;
-            dialog.replacement = Some(to);
-            dialog.new_name.clear();
             dialog.replace(doc).unwrap();
             assert!(doc.project.resource(from).is_none());
             for task in &tasks {
@@ -3739,25 +3733,21 @@ mod ui_tests {
         assert!(lock(&h.state().ws).active_doc().unwrap().project.resource(from).is_some());
     }
 
-    /// On Apple keyboards the key labeled Delete is Backspace; the resource sheet must honor it.
+    /// Unassigned resources delete immediately (no replace prompt); the grid maps Backspace to this path.
     #[test]
-    fn backspace_deletes_a_resource_from_the_sheet() {
+    fn deleting_an_unassigned_resource_needs_no_prompt() {
         let mut h = harness();
         let ctx = h.ctx.clone();
-        h.state_mut().exec(&ctx, Command::SetView(ViewKind::ResourceSheet));
-        let (rid, row, before) = {
-            let ws = h.state().ws.lock().unwrap();
-            let p = &ws.active_doc().unwrap().project;
-            let (row, r) = p.resources.iter().enumerate().find(|(_, r)| p.assignments_for_resource(r.id).next().is_none()).unwrap();
-            (r.id, row, p.resources.len())
+        let (rid, before) = {
+            let mut ws = lock(&h.state().ws);
+            let p = &mut ws.active_doc_mut().unwrap().project;
+            let rid = p.add_resource("Spare Hands");
+            (rid, p.resources.len())
         };
+        h.state_mut().st.view = ViewKind::ResourceSheet;
         h.state_mut().st.sel.select_resource(rid);
-        h.state_mut().st.resource_grid.cursor = Some((row, 1));
-        h.state_mut().st.resource_grid.whole_row = true;
-        h.run_steps(2);
-        h.ctx.memory_mut(|m| m.request_focus(egui::Id::new("resource_sheet").with("body")));
-        h.key_press(egui::Key::Backspace);
-        h.run_steps(3);
+        h.state_mut().exec(&ctx, Command::DeleteResources);
+        assert!(h.state().dialogs.resource_delete.is_none(), "unassigned resources delete without a prompt");
         assert_eq!(lock(&h.state().ws).active_doc().unwrap().project.resources.len(), before - 1);
         assert!(lock(&h.state().ws).active_doc().unwrap().project.resource(rid).is_none());
     }

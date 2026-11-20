@@ -4,6 +4,7 @@ use egui::{Rect, RichText, Sense, Stroke, Ui, vec2};
 use plancraft_core::prelude::*;
 use plancraft_core::workspace::Document;
 
+use crate::commands::Command;
 use crate::edit::EditExt;
 use crate::format;
 use crate::state::{PropTab, ToastKind, UiState, ViewKind};
@@ -13,7 +14,7 @@ const MIN_W: f32 = 280.0;
 const MAX_W: f32 = 520.0;
 
 /// Draws the pane when it is open and returns the rect left for the active view.
-pub fn dock(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState) -> Rect {
+pub fn dock(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: &mut Vec<Command>) -> Rect {
     let room = (rect.width() - 200.0).max(0.0);
     if !st.properties_visible || room < 1.0 {
         return rect;
@@ -30,18 +31,18 @@ pub fn dock(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState) -> Re
     }
     ui.painter().rect_filled(pane, 0.0, theme::pal().BG);
     ui.painter().vline(pane.left(), pane.y_range(), Stroke::new(1.0, theme::pal().GRID_LINE_STRONG));
-    show(ui, pane.shrink2(vec2(10.0, 8.0)), doc, st);
+    show(ui, pane.shrink2(vec2(10.0, 8.0)), doc, st, out);
     Rect::from_min_max(rect.min, pos2(handle.left(), rect.bottom()))
 }
 
-fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState) {
+fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: &mut Vec<Command>) {
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
     egui::ScrollArea::vertical().show(&mut child, |ui| {
         crate::widgets::craft::section_label(ui, st.t("tb.properties"));
         ui.add_space(2.0);
         if resource_view(st.view) {
             match st.sel.single_resource().or_else(|| (st.view == ViewKind::Timesheet).then_some(st.timesheet_resource).flatten()) {
-                Some(id) => resource_pane(ui, doc, st, id),
+                Some(id) => resource_pane(ui, doc, st, id, out),
                 None if st.sel.resources.len() > 1 => {
                     ui.label(RichText::new(st.t("prop.several_resources")).color(theme::pal().TEXT_WEAK));
                 }
@@ -70,7 +71,7 @@ fn resource_view(view: ViewKind) -> bool {
     matches!(view, ViewKind::ResourceSheet | ViewKind::ResourceUsage | ViewKind::Workload | ViewKind::TeamPlanner | ViewKind::Timesheet)
 }
 
-fn resource_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState, id: ResourceId) {
+fn resource_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState, id: ResourceId, out: &mut Vec<Command>) {
     let Some(resource) = doc.project.resource(id) else {
         empty(ui);
         return;
@@ -146,6 +147,10 @@ fn resource_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState, id: Resource
             }
             Ok(())
         });
+    }
+    ui.add_space(10.0);
+    if ui.button(crate::lang::text("menu.delete_resource")).clicked() {
+        out.push(Command::DeleteResources);
     }
 }
 
