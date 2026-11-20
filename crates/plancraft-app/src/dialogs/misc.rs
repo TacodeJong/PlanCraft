@@ -462,7 +462,7 @@ pub fn about(ctx: &Context, open: &mut bool) {
                 ui.heading("PlanCraft");
                 ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
                 ui.add_space(6.0);
-                ui.label("Fork of PlanCraft with Project Planner scheduling and UI.");
+                ui.label("Based on PlanCraft, with extended scheduling and UI.");
                 ui.label("Project planning and scheduling, written entirely in Rust.");
                 ui.label("Tasks · Milestones · Resources · Calendars · Workload · Time tracking");
                 ui.label("Built-in MCP server for AI agents.");

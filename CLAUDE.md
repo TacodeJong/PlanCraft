@@ -1,6 +1,6 @@
 # PlanCraft — notes for AI assistants (AGENTS.md and CLAUDE.md are identical; keep them in sync)
 
-- **This repo is a fork** of [rallegretti/PlanCraft](https://github.com/rallegretti/PlanCraft) v0.7.0, published as [TacodeJong/PlanCraft](https://github.com/TacodeJong/PlanCraft) **v0.8.0**. See [docs/FORK.md](docs/FORK.md). Prefer fork behaviour (Merlin rules, ArtCraft UI, EN/NL, Project Planner import) over stock upstream unless the task says otherwise.
+- **This repo is a new app line** based on [rallegretti/PlanCraft](https://github.com/rallegretti/PlanCraft) v0.7.0, published as [TacodeJong/PlanCraft](https://github.com/TacodeJong/PlanCraft) **v0.8.0**. See [docs/FORK.md](docs/FORK.md). Prefer this line’s behaviour (Merlin rules, ArtCraft UI, EN/NL, extra import/export) over stock upstream unless the task says otherwise.
 - Rust workspace: `plancraft-core` (logic), `plancraft-mcp` (MCP server), `plancraft-server` (PlanCraft Server for shared editing, also `plancraft serve`), `plancraft-app` (egui desktop app, binary `plancraft`).
 - Hard rule from the owner: everything in Rust; no calling into C/Python/other languages for features (scripts/adapters are fine when unavoidable). `cargo deny check` bans crates that compile C (`deny.toml`); `cargo tree -p plancraft-app -i cc -e build` should print nothing.
 - Brand: ArtCraft family (brutalist dark default); do not revert to upstream’s Office-like chrome. Logo must never resemble a "P" letter.

@@ -1,17 +1,17 @@
-# This fork
+# Based on PlanCraft
 
-This repository is a fork of [rallegretti/PlanCraft](https://github.com/rallegretti/PlanCraft) **v0.7.0**, maintained at [TacodeJong/PlanCraft](https://github.com/TacodeJong/PlanCraft). Upstream remains CC0; this fork stays on the same license.
+This repository ([TacodeJong/PlanCraft](https://github.com/TacodeJong/PlanCraft)) is a **new desktop planner** built on [rallegretti/PlanCraft](https://github.com/rallegretti/PlanCraft) **v0.7.0**. Upstream remains CC0; this line stays on the same license.
 
-Version **0.8.0** marks the first published release of the fork (branched from upstream `0.7.0`).
+Version **0.8.0** is the first published release of this line (branched from upstream `0.7.0`).
 
 ## Why it exists
 
-It adapts PlanCraft so existing Project Planner documents open here, schedule with PlanCraft’s engine under Merlin-style rules, and pick up UI and reporting features the Swift Project Planner app had that stock PlanCraft 0.7.0 did not.
+PlanCraft 0.7.0 is a strong base. This line keeps that engine and file format, then adds scheduling rules, a different UI chrome, localization, and reporting/export work aimed at day-to-day project planning — not a thin skin over the upstream app.
 
-## What this fork adds (high level)
+## What 0.8.0 adds (high level)
 
-- **Scheduling:** stretch / span group rules, dual date bounds, explicit Unrestricted / On / No-earlier / No-later / Between date modes per side (Swift `DateMode` parity), successor capping aligned with Project Planner.
-- **Import / export:** Project Planner JSON import; MSPDI fixes and Planner extended attributes; Excel report / Gantt / Task Usage exports; Task Usage print.
+- **Scheduling:** stretch / span group rules, dual date bounds, explicit Unrestricted / On / No-earlier / No-later / Between date modes per side, successor capping for stretch/span.
+- **Import / export:** additional JSON import path; MSPDI fixes and extended attributes; Excel report / Gantt / Task Usage exports; Task Usage print.
 - **Views & chrome:** properties pane; Overview; Deliveries / agenda; Report view; ArtCraft restyle; Lucide icons; native macOS menus (muda); EN/NL localization; dd-mm-yyyy dates.
 - **Editing:** Quick Entry; Distill Plan (keychain-stored API keys); row marks; status ↔ Task Board sync; column chooser / drag-reorder; global Q/M/D timescale; subtree filter; scheduling warnings surfaced in UI and MCP.
 
@@ -21,4 +21,4 @@ Keep `upstream` pointed at `https://github.com/rallegretti/PlanCraft.git` and me
 
 ## Out of scope (for now)
 
-Reminders, Planner-JSON round-trip export, Distill from PDF/Word/Excel, and other items listed under “Deliberately out” in the project backlog stay deferred unless product decisions change.
+Reminders, round-trip of the extra JSON import format, Distill from PDF/Word/Excel, and similar deferred items stay out unless product decisions change.

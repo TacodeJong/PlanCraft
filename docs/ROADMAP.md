@@ -1,6 +1,6 @@
 # Roadmap
 
-This file tracks upstream PlanCraft history. Fork-specific changes and the v0.8.0 publish are summarized in [FORK.md](FORK.md).
+This file tracks upstream PlanCraft history. How this line differs and the v0.8.0 publish are summarized in [FORK.md](FORK.md).
 
 ## Done (v0.1)
 
