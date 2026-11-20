@@ -164,7 +164,8 @@ impl DateBounds {
 /// minimum only → no earlier than, maximum only → no later than, both → between.
 ///
 /// An unrestricted side carries no date of its own: it is placed by predecessors, its group and
-/// any backward pressure from successors.
+/// any backward pressure from successors. Stretch (remaining space) applies only while both sides
+/// are unrestricted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DateMode {
     Unrestricted,
@@ -593,8 +594,8 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "DateBounds::is_empty")]
     pub bounds: DateBounds,
     /// Share the parent group's remaining space. Used only while [`ScheduleRules::stretch`] is on.
-    /// A date bound limits where the task may sit; it does not turn stretching off. A task whose
-    /// start and finish are both pinned already has its duration, so it does not stretch.
+    /// Stretching applies when both start and finish are [`DateMode::Unrestricted`] (Project Planner
+    /// `groupShare`); any own date on either side keeps the stored duration instead.
     #[serde(default, skip_serializing_if = "is_false")]
     pub fills_group: bool,
     /// Duration as a percentage of the parent group's share. Used only while [`ScheduleRules::span`] is on.
@@ -829,6 +830,16 @@ impl Task {
 
     pub fn is_summary(&self) -> bool {
         self.sched.is_summary
+    }
+
+    /// How the start side is restricted (bounds only — same pair Project Planner feeds `DateMode`).
+    pub fn start_mode(&self) -> DateMode {
+        DateMode::of(self.bounds.start_earliest, self.bounds.start_latest)
+    }
+
+    /// How the finish side is restricted (bounds only).
+    pub fn finish_mode(&self) -> DateMode {
+        DateMode::of(self.bounds.finish_earliest, self.bounds.finish_latest)
     }
 
     pub fn is_complete(&self) -> bool {

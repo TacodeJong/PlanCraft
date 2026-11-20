@@ -1227,3 +1227,173 @@ fn a_date_mode_edit_returns_a_manual_task_to_automatic_keeping_the_other_pin() {
     assert_eq!(t.start_mode(), DateMode::Unrestricted);
     assert_eq!(t.finish_mode(), DateMode::On, "the typed finish survives as an On rule");
 }
+
+/// Stretch / span / successor-cap matrix (Project Planner `groupShare` + `limitingSuccessorShares`).
+#[test]
+fn stretch_span_successor_matrix() {
+    use plancraft_core::schedule::project_calendar;
+
+    #[derive(Clone, Copy)]
+    enum Child {
+        Fill { stored_days: i64 },
+        Percent { pct: f64, stored_days: i64 },
+        Own { days: i64 },
+        OwnFnlt { days: i64, finish_day: i64 },
+    }
+    struct Case {
+        name: &'static str,
+        window_days: Option<i64>,
+        children: &'static [Child],
+        link_last_two_fs: bool,
+        expect: fn(&Project, &[TaskId]),
+    }
+
+    let cases = [
+        Case {
+            name: "two fills split a ten-day window",
+            window_days: Some(10),
+            children: &[Child::Fill { stored_days: 1 }, Child::Fill { stored_days: 1 }],
+            link_last_two_fs: false,
+            expect: |p, ids| {
+                let w = 10 * DAY;
+                assert!((span_of(p, ids[0]) - w / 2).abs() <= 1);
+                assert!((span_of(p, ids[1]) - w / 2).abs() <= 1);
+            },
+        },
+        Case {
+            name: "25% plus fill takes the rest",
+            window_days: Some(10),
+            children: &[Child::Percent { pct: 25.0, stored_days: 1 }, Child::Fill { stored_days: 1 }],
+            link_last_two_fs: false,
+            expect: |p, ids| {
+                let w = 10 * DAY;
+                assert!((span_of(p, ids[0]) - w / 4).abs() <= 1);
+                assert!((span_of(p, ids[1]) - w * 3 / 4).abs() <= 1);
+            },
+        },
+        Case {
+            name: "own date cancels fill",
+            window_days: Some(8),
+            children: &[Child::Own { days: 1 }],
+            link_last_two_fs: false,
+            expect: |p, ids| {
+                assert_eq!(span_of(p, ids[0]), DAY);
+            },
+        },
+        Case {
+            name: "fnlt successor caps a linked fill",
+            window_days: None,
+            children: &[Child::Fill { stored_days: 5 }, Child::OwnFnlt { days: 1, finish_day: 3 }],
+            link_last_two_fs: true,
+            expect: |p, ids| {
+                let draft = p.task(ids[0]).unwrap();
+                let send = p.task(ids[1]).unwrap();
+                assert!(draft.sched.finish.unwrap() <= send.sched.start.unwrap());
+                assert!(span_of(p, ids[0]) < 5 * DAY);
+                assert_eq!(send.sched.duration, DAY);
+            },
+        },
+        Case {
+            name: "ruleset off ignores fills",
+            window_days: Some(10),
+            children: &[Child::Fill { stored_days: 2 }, Child::Fill { stored_days: 2 }],
+            link_last_two_fs: false,
+            expect: |p, ids| {
+                assert_eq!(span_of(p, ids[0]), 2 * DAY);
+                assert_eq!(span_of(p, ids[1]), 2 * DAY);
+            },
+        },
+    ];
+
+    for case in cases {
+        let mut p = Project::new(case.name, plancraft_core::dates::ymd(2026, 1, 5).unwrap());
+        if case.name != "ruleset off ignores fills" {
+            p.settings.rules = ScheduleRules::on();
+        }
+        let g = p.add_task("Group", None);
+        let project_start = p.start;
+        if let Some(days) = case.window_days {
+            let end = project_calendar(&p).add(project_start, days * DAY);
+            let t = p.task_mut(g).unwrap();
+            t.bounds.start_earliest = Some(project_start);
+            t.bounds.finish_latest = Some(end);
+        }
+        let mut ids = Vec::new();
+        for (n, child) in case.children.iter().enumerate() {
+            let id = p.add_task(format!("C{n}"), None);
+            let project_start = p.start;
+            let finish_pin = match *child {
+                Child::OwnFnlt { finish_day, .. } => Some(project_calendar(&p).add(project_start, finish_day * DAY)),
+                _ => None,
+            };
+            let t = p.task_mut(id).unwrap();
+            t.outline_level = 2;
+            t.estimated = false;
+            match *child {
+                Child::Fill { stored_days } => {
+                    t.fills_group = true;
+                    t.duration = stored_days * DAY;
+                }
+                Child::Percent { pct, stored_days } => {
+                    t.duration_percent = Some(pct);
+                    t.fills_group = false;
+                    t.duration = stored_days * DAY;
+                }
+                Child::Own { days } => {
+                    t.fills_group = true;
+                    t.duration = days * DAY;
+                    t.bounds.start_earliest = Some(project_start);
+                }
+                Child::OwnFnlt { days, .. } => {
+                    t.fills_group = true;
+                    t.duration = days * DAY;
+                    t.bounds.finish_latest = finish_pin;
+                    t.bounds.finish_latest_fixed = true;
+                }
+            }
+            ids.push(id);
+        }
+        if case.link_last_two_fs && ids.len() >= 2 {
+            let a = ids[ids.len() - 2];
+            let b = ids[ids.len() - 1];
+            p.link(a.into(), b, LinkType::FS, Lag::None).unwrap();
+        }
+        recalculate(&mut p);
+        (case.expect)(&p, &ids);
+        eprintln!("ok: {}", case.name);
+    }
+}
+
+fn span_of(p: &Project, id: TaskId) -> Minutes {
+    use plancraft_core::schedule::project_calendar;
+    let t = p.task(id).unwrap();
+    match (t.sched.start, t.sched.finish) {
+        (Some(s), Some(f)) => project_calendar(p).between(s, f),
+        _ => t.sched.duration,
+    }
+}
+
+/// PLANNER-cyclus: 1.7.1 Beleidsbrief opstellen must not finish after pinned 1.7.2.
+#[test]
+fn cyclus_beleidsbrief_predecessor_respects_fnlt_successor() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../Real files to evaluate");
+    let json = std::fs::read_to_string(dir.join("PLANNER-cyclus.json")).expect("PLANNER-cyclus.json");
+    let (mut p, _) = plancraft_core::planner_json::import_text(&json, "PLANNER-cyclus").unwrap();
+    assert!(p.settings.rules.enabled(), "import turns the ruleset on");
+    recalculate(&mut p);
+    let draft = p.tasks.iter().find(|t| t.name == "Beleidsbrief opstellen").expect("1.7.1");
+    let send = p.tasks.iter().find(|t| t.name.starts_with("Beleidsbrief verzenden AB")).expect("1.7.2");
+    assert!(send.bounds.finish_latest_fixed, "send carries a fixed FNLT");
+    let df = draft.sched.finish.expect("draft finish");
+    let ss = send.sched.start.expect("send start");
+    assert!(
+        df <= ss,
+        "1.7.1 finishes {df} after 1.7.2 starts {ss} (draft dur {}, send dur {})",
+        draft.sched.duration,
+        send.sched.duration
+    );
+    assert_eq!(send.sched.duration, send.duration.max(0), "pinned send keeps its own duration, not a stretch");
+    assert_eq!(send.finish_mode(), DateMode::NoLater);
+    assert_eq!(draft.start_mode(), DateMode::Unrestricted);
+    assert_eq!(draft.finish_mode(), DateMode::Unrestricted);
+}

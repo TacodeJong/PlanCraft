@@ -93,12 +93,38 @@ pub fn resolve(p: &Project) -> SharePlan {
                 }
                 assign(&mut plan, &summary, i, value, &mut allotted);
             }
-        } else if windowed || length > 0 {
-            let name = group.name.as_str();
-            plan.notes.push(format!("Group {name} has no room left for its unrestricted activities; they keep their own duration"));
         } else {
+            // Keep the stored duration as the budget so successor capping can still shrink it
+            // (Project Planner leaves it out of shareBudgets; we must not draw past a pinned successor).
+            for &i in &fills {
+                if summary.get(i).copied().unwrap_or(false) {
+                    continue;
+                }
+                if plan.durations.get(i).copied().flatten().is_none()
+                    && let Some(t) = p.tasks.get(i)
+                    && let Some(slot) = plan.durations.get_mut(i)
+                {
+                    *slot = Some(t.duration.max(0));
+                }
+            }
             let name = group.name.as_str();
-            plan.notes.push(format!("Group {name} has no window for its stretch activities; they keep their own duration"));
+            if windowed || length > 0 {
+                plan.notes.push(format!("Group {name} has no room left for its unrestricted activities; they keep their own duration"));
+            } else {
+                plan.notes.push(format!("Group {name} has no window for its stretch activities; they keep their own duration"));
+            }
+        }
+    }
+    // Percent / fill rows that never received a group allotment still need a budget for capping.
+    for (i, share) in shares.iter().enumerate() {
+        if share.is_none() || summary.get(i).copied().unwrap_or(false) {
+            continue;
+        }
+        if plan.durations.get(i).copied().flatten().is_none()
+            && let Some(t) = p.tasks.get(i)
+            && let Some(slot) = plan.durations.get_mut(i)
+        {
+            *slot = Some(t.duration.max(0));
         }
     }
     cap_for_successors(p, &mut plan);
@@ -107,18 +133,22 @@ pub fn resolve(p: &Project) -> SharePlan {
 
 fn assign(plan: &mut SharePlan, summary: &[bool], i: usize, value: Minutes, allotted: &mut [Option<Minutes>]) {
     let value = value.max(0);
-    if summary.get(i).copied().unwrap_or(false) {
-        if let Some(slot) = plan.group_min.get_mut(i) {
+    if !summary.get(i).copied().unwrap_or(false) {
+        if let Some(slot) = plan.durations.get_mut(i) {
             *slot = Some(value);
         }
-        if let Some(slot) = allotted.get_mut(i) {
-            *slot = Some(value);
-        }
-    } else if let Some(slot) = plan.durations.get_mut(i) {
+        return;
+    }
+    if let Some(slot) = plan.group_min.get_mut(i) {
+        *slot = Some(value);
+    }
+    if let Some(slot) = allotted.get_mut(i) {
         *slot = Some(value);
     }
 }
 
+/// Project Planner `groupShare`: a percentage when set; otherwise fill only while `fillsGroup`
+/// and both date sides are unrestricted. Any own date on either side keeps the stored duration.
 fn share_of(p: &Project, i: usize, parent: Option<usize>, is_summary: bool) -> Option<Share> {
     parent?;
     let t = p.tasks.get(i)?;
@@ -132,37 +162,14 @@ fn share_of(p: &Project, i: usize, parent: Option<usize>, is_summary: bool) -> O
     {
         return Some(Share::Percent(pct.min(1000.0)));
     }
-    if p.settings.rules.stretch && t.fills_group && stretches(t) {
+    if p.settings.rules.stretch
+        && t.fills_group
+        && t.start_mode() == DateMode::Unrestricted
+        && t.finish_mode() == DateMode::Unrestricted
+    {
         return Some(Share::Fill);
     }
     None
-}
-
-/// A single bound, a start-no-earlier-than or a deadline on its own still stretches: the bound
-/// limits placement, it does not cancel the share. Stretching stops only when both the start and
-/// the finish are already pinned, because that pair is the duration.
-fn stretches(t: &Task) -> bool {
-    !(fixed_start(t) && fixed_finish(t))
-}
-
-fn fixed_start(t: &Task) -> bool {
-    if matches!(t.constraint.kind, ConstraintKind::Mso) && t.constraint.date.is_some() {
-        return true;
-    }
-    match (t.bounds.start_earliest, t.bounds.start_latest) {
-        (Some(a), Some(b)) => a == b && t.bounds.start_latest_fixed,
-        _ => false,
-    }
-}
-
-fn fixed_finish(t: &Task) -> bool {
-    if t.deadline.is_some() || (matches!(t.constraint.kind, ConstraintKind::Mfo) && t.constraint.date.is_some()) {
-        return true;
-    }
-    match (t.bounds.finish_earliest, t.bounds.finish_latest) {
-        (Some(a), Some(b)) => a == b && t.bounds.finish_latest_fixed,
-        _ => false,
-    }
 }
 
 fn bound_start(t: &Task) -> Option<DateTime> {
@@ -267,13 +274,77 @@ fn percent_minutes(length: Minutes, pct: f64) -> Minutes {
     if !v.is_finite() { 0 } else { crate::limits::clamp_minutes(v.round() as Minutes) }
 }
 
-/// Shrink a stretch or percent task when a successor's hard date cannot be met.
+/// Project Planner `limitingSuccessorShares`: shrink stretch/percent durations so a fixed
+/// successor date is still met. Bars must not finish after a pinned successor; when the window
+/// is empty the share collapses to zero and a note is kept (impossible dependency stays visible).
+///
+/// Rows that were classified as fill/percent but kept their stored duration (no group window)
+/// are included too — otherwise a FNLT successor leaves the stretch bar crossing the pin.
 fn cap_for_successors(p: &Project, plan: &mut SharePlan) {
-    if plan.durations.iter().all(Option::is_none) && plan.group_min.iter().all(Option::is_none) {
+    let n = p.tasks.len();
+    let parent = schedule::parents(p);
+    let summary: Vec<bool> = (0..n).map(|i| p.has_children(i)).collect();
+    let mut budgets: Vec<(usize, Minutes)> = Vec::new();
+    for i in 0..n {
+        if let Some(m) = plan.durations.get(i).copied().flatten() {
+            budgets.push((i, m));
+            continue;
+        }
+        // No allotment written: still a share row that fell back to its own duration.
+        if share_of(p, i, parent.get(i).copied().flatten(), summary.get(i).copied().unwrap_or(false)).is_none() {
+            continue;
+        }
+        let stored = p.tasks.get(i).map(|t| t.duration.max(0)).unwrap_or(0);
+        budgets.push((i, stored));
+    }
+    if budgets.is_empty() {
         return;
     }
     let mut probe = p.clone();
     probe.settings.rules = ScheduleRules::default();
+    apply_plan_durations(&mut probe, plan);
+    schedule::recalculate(&mut probe);
+    let cal = project_calendar(p);
+    let hard_finish = successor_hard_finishes(p, &probe, &cal);
+    let mut shrunk = false;
+    let mut impossible = false;
+    for &(i, current) in &budgets {
+        let Some(start) = probe.tasks.get(i).and_then(|t| t.sched.start) else { continue };
+        let Some(cap) = hard_finish.get(i).copied().flatten() else { continue };
+        if cap <= start {
+            set_duration(plan, i, 0);
+            shrunk = true;
+            impossible = true;
+            continue;
+        }
+        let max_dur = cal.between(start, cap).max(0);
+        if max_dur >= current {
+            continue;
+        }
+        set_duration(plan, i, max_dur);
+        shrunk = true;
+        if max_dur == 0 {
+            impossible = true;
+        }
+    }
+    if shrunk {
+        plan.notes.push("A stretch or percent task was shortened so a successor's fixed date could still be met.".into());
+    }
+    if impossible {
+        plan.notes.push(
+            "A stretch or percent task has no room before a successor's fixed date; it was collapsed so bars do not cross that date."
+                .into(),
+        );
+    }
+}
+
+fn set_duration(plan: &mut SharePlan, i: usize, value: Minutes) {
+    if let Some(slot) = plan.durations.get_mut(i) {
+        *slot = Some(value);
+    }
+}
+
+fn apply_plan_durations(probe: &mut Project, plan: &SharePlan) {
     for (i, d) in plan.durations.iter().enumerate() {
         if let Some(m) = *d
             && let Some(t) = probe.tasks.get_mut(i)
@@ -282,45 +353,151 @@ fn cap_for_successors(p: &Project, plan: &mut SharePlan) {
             t.duration = m;
         }
     }
-    schedule::recalculate(&mut probe);
-    let cal = project_calendar(p);
-    let mut shrunk = false;
+}
+
+/// Latest finish each task may keep so every fixed successor date still holds (Swift `successorHard`
+/// on F). Own fixed finishes seed the cap; dependency edges carry it backward with lag.
+fn successor_hard_finishes(p: &Project, probe: &Project, cal: &crate::calendar::WorkCal<'_>) -> Vec<Option<DateTime>> {
+    let n = p.tasks.len();
+    let mut hard = vec![None; n];
     for (i, t) in p.tasks.iter().enumerate() {
-        let Some(current) = plan.durations.get(i).copied().flatten() else { continue };
-        let Some(start) = probe.tasks.get(i).and_then(|t| t.sched.start) else { continue };
-        let Some(cap) = earliest_successor_cap(p, &cal, t.id) else { continue };
-        if cap <= start {
-            if let Some(slot) = plan.durations.get_mut(i) {
-                *slot = Some(t.duration.max(0));
-            }
-            shrunk = true;
-            continue;
-        }
-        let max_dur = cal.between(start, cap).max(0);
-        if max_dur < current {
-            if let Some(slot) = plan.durations.get_mut(i) {
-                *slot = Some(max_dur);
-            }
-            shrunk = true;
+        if let Some(cap) = own_hard_finish(t, probe.tasks.get(i).map(|r| r.sched.duration).unwrap_or(t.duration), cal)
+            && let Some(slot) = hard.get_mut(i)
+        {
+            *slot = Some(cap);
         }
     }
-    if shrunk {
-        plan.notes.push("A stretch or percent task was shortened so a successor's fixed date could still be met.".into());
+    // Propagate backward in reverse outline order (successors usually sit below predecessors).
+    for _ in 0..n.saturating_add(1).min(64) {
+        let mut changed = false;
+        for succ_i in (0..n).rev() {
+            let Some(succ) = p.tasks.get(succ_i) else { continue };
+            let succ_hard = hard.get(succ_i).copied().flatten();
+            let succ_start_hard = hard_start_of(p, probe, cal, succ_i, succ_hard);
+            for dep in &succ.predecessors {
+                let Some(pred_id) = dep.predecessor.local() else { continue };
+                let Some(pred_i) = p.tasks.iter().position(|t| t.id == pred_id) else { continue };
+                let Some(at) = link_pred_finish_cap(cal, dep, succ_start_hard, succ_hard, probe.tasks.get(succ_i)) else {
+                    continue;
+                };
+                let slot = match hard.get_mut(pred_i) {
+                    Some(s) => s,
+                    None => continue,
+                };
+                let next = match *slot {
+                    Some(c) if c <= at => c,
+                    _ => {
+                        changed = true;
+                        at
+                    }
+                };
+                *slot = Some(next);
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    hard
+}
+
+fn link_pred_finish_cap(
+    cal: &crate::calendar::WorkCal<'_>,
+    dep: &Dependency,
+    succ_start_hard: Option<DateTime>,
+    succ_finish_hard: Option<DateTime>,
+    succ: Option<&Task>,
+) -> Option<DateTime> {
+    let lag = dep.lag;
+    match dep.kind {
+        LinkType::FS => {
+            let hard = succ_start_hard?;
+            Some(match lag {
+                Lag::None | Lag::Working(0) => hard,
+                Lag::Working(m) => cal.sub(hard, m),
+                _ => hard,
+            })
+        }
+        LinkType::SS => {
+            // A start-to-start hard date still bounds how late the predecessor may run when we
+            // only have a finish-side budget: treat it like FS for duration limiting.
+            let _ = succ;
+            let hard = succ_start_hard?;
+            Some(match lag {
+                Lag::None | Lag::Working(0) => hard,
+                Lag::Working(m) => cal.sub(hard, m),
+                _ => hard,
+            })
+        }
+        LinkType::FF => {
+            let hard = succ_finish_hard?;
+            Some(match lag {
+                Lag::None | Lag::Working(0) => hard,
+                Lag::Working(m) => cal.sub(hard, m),
+                _ => hard,
+            })
+        }
+        LinkType::SF => {
+            let hard = succ_finish_hard?;
+            Some(match lag {
+                Lag::None | Lag::Working(0) => hard,
+                Lag::Working(m) => cal.sub(hard, m),
+                _ => hard,
+            })
+        }
     }
 }
 
+fn hard_start_of(
+    p: &Project,
+    probe: &Project,
+    cal: &crate::calendar::WorkCal<'_>,
+    i: usize,
+    finish_hard: Option<DateTime>,
+) -> Option<DateTime> {
+    let t = p.tasks.get(i)?;
+    if let Some(d) = hard_pinned_start(t) {
+        return Some(d);
+    }
+    let finish = finish_hard.or_else(|| own_hard_finish(t, probe.tasks.get(i).map(|r| r.sched.duration).unwrap_or(t.duration), cal))?;
+    let dur = probe.tasks.get(i).map(|r| r.sched.duration).unwrap_or(t.duration).max(0);
+    if dur > 0 { Some(cal.sub(finish, dur)) } else { Some(finish) }
+}
+
+fn own_hard_finish(t: &Task, duration: Minutes, cal: &crate::calendar::WorkCal<'_>) -> Option<DateTime> {
+    if let Some(d) = hard_pinned_start(t) {
+        return Some(if duration > 0 { cal.add(d, duration) } else { d });
+    }
+    if t.bounds.finish_latest_fixed {
+        return t.bounds.finish_latest;
+    }
+    t.constraint.date.filter(|_| matches!(t.constraint.kind, ConstraintKind::Mfo | ConstraintKind::Fnlt))
+}
+
+fn hard_pinned_start(t: &Task) -> Option<DateTime> {
+    if t.bounds.start_latest_fixed {
+        return t.bounds.start_latest;
+    }
+    t.constraint.date.filter(|_| matches!(t.constraint.kind, ConstraintKind::Mso | ConstraintKind::Snlt))
+}
+
+/// Direct FS/FF hard date of a successor, for sizing a fill window before the CPM probe.
 fn earliest_successor_cap(p: &Project, cal: &crate::calendar::WorkCal<'_>, pred: crate::ids::TaskId) -> Option<DateTime> {
     let mut cap: Option<DateTime> = None;
     for succ in &p.tasks {
         for dep in &succ.predecessors {
-            if dep.predecessor.local() != Some(pred) || dep.kind != LinkType::FS {
+            if dep.predecessor.local() != Some(pred) {
                 continue;
             }
-            let Some(hard) = hard_start(succ) else { continue };
+            let hard = match dep.kind {
+                LinkType::FS | LinkType::SS => hard_start_for_link(cal, succ),
+                LinkType::FF | LinkType::SF => own_hard_finish(succ, succ.duration.max(0), cal),
+            };
+            let Some(hard) = hard else { continue };
             let at = match dep.lag {
                 Lag::None | Lag::Working(0) => hard,
                 Lag::Working(m) => cal.sub(hard, m),
-                _ => continue,
+                _ => hard,
             };
             cap = Some(cap.map_or(at, |c| c.min(at)));
         }
@@ -328,18 +505,14 @@ fn earliest_successor_cap(p: &Project, cal: &crate::calendar::WorkCal<'_>, pred:
     cap
 }
 
-fn hard_start(t: &Task) -> Option<DateTime> {
-    if t.bounds.start_latest_fixed
-        && let Some(d) = t.bounds.start_latest
-    {
+/// Pinned start for an FS/SS edge: fixed start, or finish − duration for a fixed finish / FNLT / MFO.
+fn hard_start_for_link(cal: &crate::calendar::WorkCal<'_>, t: &Task) -> Option<DateTime> {
+    if let Some(d) = hard_pinned_start(t) {
         return Some(d);
     }
-    if t.bounds.finish_latest_fixed
-        && let Some(d) = t.bounds.finish_latest
-    {
-        return Some(d);
-    }
-    t.constraint.date.filter(|_| matches!(t.constraint.kind, ConstraintKind::Mso | ConstraintKind::Snlt | ConstraintKind::Mfo))
+    let finish = own_hard_finish(t, t.duration.max(0), cal)?;
+    let dur = t.duration.max(0);
+    if dur > 0 { Some(cal.sub(finish, dur)) } else { Some(finish) }
 }
 
 #[cfg(test)]
@@ -537,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn a_start_bound_does_not_cancel_stretching() {
+    fn a_start_bound_cancels_stretching_like_project_planner() {
         let (mut p, g) = group_with_window(8);
         let a = p.add_task("Bound", None);
         let earliest = p.start;
@@ -551,11 +724,47 @@ mod tests {
             t.constraint = Constraint { kind: ConstraintKind::Snet, date: Some(earliest) };
         }
         recalculate(&mut p);
+        assert_eq!(p.task(a).unwrap().start_mode(), DateMode::NoEarlier);
+        assert_eq!(span(&p, a), 480, "an own start date keeps the stored duration (groupShare is nil)");
         let window = {
             let t = p.task(g).unwrap();
             project_calendar(&p).between(t.bounds.start_earliest.unwrap(), t.bounds.finish_latest.unwrap())
         };
-        assert!((span(&p, a) - window).abs() <= 1, "the earliest start still leaves the child filling {window}, got {}", span(&p, a));
+        assert!(window > 480, "the group window is wider than the kept duration");
         assert_eq!(p.task(a).unwrap().duration, 480, "the stored duration stays the fallback");
+    }
+
+    #[test]
+    fn a_fixed_fnlt_successor_caps_a_stretch_predecessor() {
+        let mut p = Project::new("FNLT", crate::dates::ymd(2026, 1, 5).unwrap());
+        p.settings.rules = ScheduleRules::on();
+        let _g = p.add_task("Group", None);
+        let draft = p.add_task("Draft", None);
+        let send = p.add_task("Send", None);
+        {
+            let t = p.task_mut(draft).unwrap();
+            t.outline_level = 2;
+            t.fills_group = true;
+            t.duration = 5 * 480;
+            t.estimated = false;
+        }
+        // Finish no later than the end of working day 3 (start + 3 days of work).
+        let pin = project_calendar(&p).add(p.start, 3 * 480);
+        {
+            let t = p.task_mut(send).unwrap();
+            t.outline_level = 2;
+            t.fills_group = true;
+            t.duration = 480;
+            t.estimated = false;
+            t.bounds.finish_latest = Some(pin);
+            t.bounds.finish_latest_fixed = true;
+        }
+        p.link(draft.into(), send, LinkType::FS, Lag::None).unwrap();
+        recalculate(&mut p);
+        let df = p.task(draft).unwrap().sched.finish.unwrap();
+        let ss = p.task(send).unwrap().sched.start.unwrap();
+        assert!(df <= ss, "draft finishes {df} after send starts {ss}");
+        assert!(span(&p, draft) < 5 * 480, "the stretch draft was shortened, got {}", span(&p, draft));
+        assert_eq!(p.task(send).unwrap().sched.duration, 480, "a finish-bound send does not stretch");
     }
 }
