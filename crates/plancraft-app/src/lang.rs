@@ -326,6 +326,41 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         "filter.recipient" => ("Recipient", "Ontvanger"),
         "prop.name" => ("Name", "Naam"),
         "prop.group_color" => ("Group color", "Groepskleur"),
+        "prop.outline" => ("Outline", "Overzicht"),
+        "prop.level" => ("level", "niveau"),
+        "prop.milestone" => ("Mark as milestone", "Markeer als mijlpaal"),
+        "prop.moment" => ("Date", "Datum"),
+        "prop.add_predecessor" => ("Add predecessor", "Voorganger toevoegen"),
+        "prop.remove_predecessor" => ("Remove this predecessor", "Deze voorganger verwijderen"),
+        "prop.add_fs" => (
+            "Adds a finish-to-start link on each selected activity.",
+            "Voegt op elke geselecteerde activiteit een eind-startkoppeling toe.",
+        ),
+        "prop.assigned" => ("Assigned resources", "Toegewezen resources"),
+        "prop.new_resource" => ("New resource", "Nieuwe resource"),
+        "prop.no_selection" => {
+            ("No selection. Select an activity or a resource.", "Geen selectie. Selecteer een activiteit of een resource.")
+        }
+        "prop.several_resources" => ("Several resources are selected.", "Er zijn meerdere resources geselecteerd."),
+        "prop.activities" => ("activities", "activiteiten"),
+        "prop.milestone_differs" => ("Milestone differs between the selection.", "Mijlpaal verschilt binnen de selectie."),
+        "prop.differs" => {
+            ("Differs between the selection. Ticking sets them all.", "Verschilt binnen de selectie. Aanvinken zet ze allemaal.")
+        }
+        "prop.from_children" => ("Calculated from the subtasks", "Berekend uit de subtaken"),
+        "prop.milestone_duration" => ("A milestone is a moment and has no duration", "Een mijlpaal is een moment en heeft geen duur"),
+        "prop.kind" => ("Kind", "Soort"),
+        "prop.type" => ("Type", "Type"),
+        "prop.email" => ("Email", "E-mail"),
+        "prop.group" => ("Group", "Groep"),
+        "prop.max_units" => ("Max units", "Max. eenheden"),
+        "common.multiple_lc" => ("multiple", "meerdere"),
+        "common.none_lc" => ("none", "geen"),
+        "common.clear" => ("Clear", "Wissen"),
+        "col.status" => ("Status", "Status"),
+        "col.row_mark" => ("Row Mark", "Markering"),
+        "tb.columns" => ("Columns", "Kolommen"),
+        "tb.columns_hint" => ("Choose the visible table columns", "Kies de zichtbare tabelkolommen"),
         "common.yes" => ("Yes", "Ja"),
         "qe.new" => ("New Task", "Nieuwe taak"),
         "qe.indent" => ("Indent Task", "Taak inspringen"),

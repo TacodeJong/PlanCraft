@@ -1333,6 +1333,16 @@ impl Project {
         let pct = pct.min(100);
         let t = self.row_mut(idx)?;
         t.percent_complete = pct;
+        // Keep the workflow status consistent with the progress (SPECS: status and percent
+        // cascade together): 100% is done, 0% is not started, and anything in between cannot
+        // stay "not started" or "done". "Started" and "in progress" both describe partial
+        // progress, so they are kept as entered.
+        t.status = match pct {
+            0 => TaskStatus::NotStarted,
+            100 => TaskStatus::Done,
+            _ if matches!(t.status, TaskStatus::NotStarted | TaskStatus::Done) => TaskStatus::Busy,
+            _ => t.status,
+        };
         if pct == 0 || pct == 100 {
             // Nothing left to resume.
             t.splits.clear();

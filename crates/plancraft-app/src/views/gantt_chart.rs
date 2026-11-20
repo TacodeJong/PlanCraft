@@ -470,7 +470,7 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
                 theme::pal().MILESTONE
             };
             diamond(&bp, pos2(x0, yc), 6.5, shown(fill), Stroke::new(1.0, shown(theme::pal().BG)));
-            let label = t.sched.finish.map(|f| f.format("%-m/%-d").to_string()).unwrap_or_default().to_string();
+            let label = t.sched.finish.map(|f| crate::format::day_month(f.date())).unwrap_or_default();
             bp.text(pos2(x0 + 10.0, yc), Align2::LEFT_CENTER, label, label_font.clone(), theme::pal().TEXT);
             if t.deadline.is_some_and(|dl| t.sched.finish.is_some_and(|f| f > dl)) {
                 bp.text(pos2(x0 - 10.0, yc), Align2::RIGHT_CENTER, "⚠", label_font.clone(), theme::pal().ERROR);

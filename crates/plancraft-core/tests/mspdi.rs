@@ -590,7 +590,7 @@ fn planner_fields_round_trip_and_dates_hold() {
     assert!(stretch_body.contains(&format!("<Duration>{resolved}</Duration>")), "{stretch_body}");
     assert!(!stretch_body.contains(&format!("<Duration>{stored}</Duration>")));
     let pinned_body = task_body(&xml, "Pinned");
-    assert_eq!(tag(&pinned_body, "ConstraintType"), "2", "a must-start that still matches the bound is kept");
+    assert_eq!(tag(pinned_body, "ConstraintType"), "2", "a must-start that still matches the bound is kept");
     assert_eq!(pinned_body.matches("<ConstraintType>").count(), 1);
 
     let order = [

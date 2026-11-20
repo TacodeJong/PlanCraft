@@ -40,6 +40,8 @@ pub struct MenuInfo {
     pub history_open: bool,
     /// Fields offered for sorting and grouping: (key, title), the table's columns first.
     pub fields: Vec<(String, String)>,
+    /// The Columns menu: (key, title, on, required). Only the name column is required.
+    pub columns: Vec<(String, String, bool, bool)>,
 }
 
 const TAB_ROW_H: f32 = 28.0;
@@ -590,6 +592,23 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
                     }
                 }
             });
+            // Which columns the task table shows: a per-user choice, saved like the theme.
+            let columns_btn = ui
+                .add_enabled(!info.columns.is_empty(), egui::Button::new(crate::lang::text("tb.columns")))
+                .on_hover_text(crate::lang::text("tb.columns_hint"));
+            egui::Popup::from_toggle_button_response(&columns_btn).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(
+                |ui| {
+                    ui.set_min_width(200.0);
+                    egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
+                        for (key, title, on, required) in &info.columns {
+                            let mut on = *on;
+                            if ui.add_enabled(!required, egui::Checkbox::new(&mut on, title)).changed() {
+                                push(Command::ToggleColumn(key.clone()));
+                            }
+                        }
+                    });
+                },
+            );
             let title_of = |key: &Option<String>, none: &str| {
                 key.as_ref().and_then(|k| info.fields.iter().find(|(fk, _)| fk == k)).map_or_else(|| none.to_string(), |(_, t)| t.clone())
             };

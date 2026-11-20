@@ -27,7 +27,7 @@ pub fn paint_header(painter: &Painter, rect: Rect, g: &GanttState) -> Vec<(f32, 
             painter.vline(x0.round() + 0.5, y0..=y1, Stroke::new(1.0, theme::pal().GRID_LINE_STRONG));
             let cell = Rect::from_x_y_ranges(x0.max(rect.left())..=x1.min(rect.right()), y0..=y1);
             if cell.width() > 8.0 {
-                let label = unit.label(t, x1 - x0);
+                let label = unit.label(t, x1 - x0, crate::format::names());
                 let anchor = if collect || x1 - x0 < 60.0 { Align2::CENTER_CENTER } else { Align2::LEFT_CENTER };
                 let pos = if anchor == Align2::CENTER_CENTER { cell.center() } else { pos2(cell.left() + 4.0, cell.center().y) };
                 painter.with_clip_rect(cell).text(pos, anchor, label, font.clone(), theme::pal().TEXT);

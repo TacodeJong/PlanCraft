@@ -52,36 +52,38 @@ impl Unit {
     }
 
     /// Label for the unit starting at `t`, shortened to fit `width` (pixels or points).
-    pub fn label(self, t: DateTime, width: f32) -> String {
+    /// Dates are `dd-mm`; `names` gives the day and month names in the interface language.
+    pub fn label(self, t: DateTime, width: f32, names: &crate::dates::DateNames) -> String {
         let d = t.date();
-        let first = |s: String| s.chars().next().map(String::from).unwrap_or_default();
+        let first = |s: &str| s.chars().next().map(String::from).unwrap_or_default();
+        let dm_year = |d: Date| format!("{:02}-{:02}-'{:02}", d.day(), d.month(), d.year().rem_euclid(100));
         match self {
             Unit::Hours6 => format!("{:02}", t.hour32()),
             Unit::Day => {
                 if width >= 90.0 {
-                    d.format("%a %b %-d").to_string()
+                    format!("{} {} {}", names.weekday(d), d.day(), names.month_short(d))
                 } else if width >= 26.0 {
-                    d.format("%-d").to_string()
+                    d.day().to_string()
                 } else {
-                    first(d.format("%a").to_string())
+                    first(names.weekday(d))
                 }
             }
             Unit::Week => {
                 if width >= 110.0 {
-                    format!("Week of {}", d.format("%b %-d, '%y"))
+                    format!("{} {}", names.week_of, dm_year(d))
                 } else if width >= 60.0 {
-                    d.format("%b %-d, '%y").to_string()
+                    dm_year(d)
                 } else {
-                    d.format("%-d").to_string()
+                    d.day().to_string()
                 }
             }
             Unit::Month => {
                 if width >= 90.0 {
-                    d.format("%B %Y").to_string()
+                    format!("{} {}", names.month(d), d.year32())
                 } else if width >= 40.0 {
-                    d.format("%b '%y").to_string()
+                    format!("{} '{:02}", names.month_short(d), d.year().rem_euclid(100))
                 } else {
-                    first(d.format("%b").to_string())
+                    first(names.month_short(d))
                 }
             }
             Unit::Quarter => {
@@ -124,7 +126,18 @@ mod tests {
             // Never panics at chrono's limits.
             let _ = u.next(DateTime::MAX);
             let _ = u.floor(DateTime::MIN);
-            let _ = u.label(DateTime::MAX, 100.0);
+            let _ = u.label(DateTime::MAX, 100.0, &crate::dates::NAMES_EN);
         }
+    }
+
+    #[test]
+    fn labels_are_dd_mm_and_speak_the_given_language() {
+        let t = crate::dates::ymd(2026, 10, 15).map(crate::dates::midnight).unwrap();
+        assert_eq!(Unit::Day.label(t, 100.0, &crate::dates::NAMES_NL), "do 15 okt");
+        assert_eq!(Unit::Day.label(t, 100.0, &crate::dates::NAMES_EN), "Thu 15 Oct");
+        assert_eq!(Unit::Week.label(t, 120.0, &crate::dates::NAMES_NL), "Week van 15-10-'26");
+        assert_eq!(Unit::Week.label(t, 80.0, &crate::dates::NAMES_EN), "15-10-'26");
+        assert_eq!(Unit::Month.label(t, 100.0, &crate::dates::NAMES_NL), "oktober 2026");
+        assert_eq!(Unit::Month.label(t, 50.0, &crate::dates::NAMES_EN), "Oct '26");
     }
 }

@@ -504,11 +504,18 @@ impl TaskInfo {
             if self.finish_latest_fixed != o.finish_latest_fixed {
                 t.bounds.finish_latest_fixed = self.finish_latest_fixed;
             }
+            // Stretch and percent-of-group both size a share: setting one clears the other.
             if self.fills_group != o.fills_group {
                 t.fills_group = self.fills_group;
+                if self.fills_group {
+                    t.duration_percent = None;
+                }
             }
             if let Some(pct) = percent {
                 t.duration_percent = pct;
+                if pct.is_some() {
+                    t.fills_group = false;
+                }
             }
         }
         if self.mode == ScheduleMode::Manual && (self.start != o.start || self.finish != o.finish) {
@@ -760,16 +767,20 @@ impl TaskInfo {
 
     fn general(&mut self, ui: &mut Ui, p: &Project) {
         egui::Grid::new("ti_general").num_columns(4).spacing([12.0, 8.0]).show(ui, |ui| {
+            // A group's progress rolls up from its subtasks: visible but not editable here.
             ui.label("Percent complete:");
-            ui.add(egui::TextEdit::singleline(&mut self.percent).desired_width(60.0));
+            ui.add_enabled(!self.summary, egui::TextEdit::singleline(&mut self.percent).desired_width(60.0))
+                .on_disabled_hover_text(crate::lang::text("prop.from_children"));
             ui.label("Status:");
-            let status_label = self.status.map(TaskStatus::label).unwrap_or("meerdere");
-            egui::ComboBox::from_id_salt("ti_status").width(120.0).selected_text(status_label).show_ui(ui, |ui| {
-                for status in TaskStatus::ALL {
-                    if ui.selectable_label(self.status == Some(status), status.label()).clicked() {
-                        self.status = Some(status);
+            ui.add_enabled_ui(!self.summary, |ui| {
+                let status_label = self.status.map(crate::lang::status_name).unwrap_or_else(|| crate::lang::text("common.multiple_lc"));
+                egui::ComboBox::from_id_salt("ti_status").width(120.0).selected_text(status_label).show_ui(ui, |ui| {
+                    for status in TaskStatus::ALL {
+                        if ui.selectable_label(self.status == Some(status), crate::lang::status_name(status)).clicked() {
+                            self.status = Some(status);
+                        }
                     }
-                }
+                });
             });
             ui.end_row();
             ui.label("Priority:");
@@ -787,13 +798,22 @@ impl TaskInfo {
             let start_minute = p.settings.time.default_start_time;
             let finish_minute = p.settings.time.default_finish_time;
             let empty = if self.others.is_empty() { "geen" } else { "meerdere" };
-            ui.label("Start:");
-            if let Some(next) = pick_date(ui, "ti_start", self.start, false, manual, start_minute, empty) {
-                self.start = next;
-            }
-            ui.label("Finish:");
-            if let Some(next) = pick_date(ui, "ti_finish", self.finish, false, manual, finish_minute, empty) {
-                self.finish = next;
+            if self.milestone && !self.is_multi() {
+                // A milestone is one moment, not a start-finish span.
+                ui.label("Date:");
+                if let Some(next) = pick_date(ui, "ti_start", self.start, false, manual, start_minute, empty) {
+                    self.start = next;
+                }
+            } else {
+                // A summary's dates come from its subtasks: shown greyed, not editable.
+                ui.label("Start:");
+                if let Some(next) = pick_date(ui, "ti_start", self.start, false, manual && !self.summary, start_minute, empty) {
+                    self.start = next;
+                }
+                ui.label("Finish:");
+                if let Some(next) = pick_date(ui, "ti_finish", self.finish, false, manual && !self.summary, finish_minute, empty) {
+                    self.finish = next;
+                }
             }
             ui.end_row();
             ui.label("Actual start:");
@@ -833,10 +853,17 @@ impl TaskInfo {
                 self.start_latest = next;
             }
             ui.end_row();
+            // The "moves the plan" ticks only mean something once their date is set.
             ui.label("");
-            ui.checkbox(&mut self.start_latest_fixed, "Start no later than moves the plan");
+            ui.add_enabled(
+                self.start_latest.is_some(),
+                egui::Checkbox::new(&mut self.start_latest_fixed, "Start no later than moves the plan"),
+            );
             ui.label("");
-            ui.checkbox(&mut self.finish_latest_fixed, "Finish no later than moves the plan");
+            ui.add_enabled(
+                self.finish_latest.is_some(),
+                egui::Checkbox::new(&mut self.finish_latest_fixed, "Finish no later than moves the plan"),
+            );
             ui.end_row();
             ui.label("Finish no earlier than:");
             if let Some(next) = pick_date(ui, "ti_fnet", self.finish_earliest, true, true, finish_minute, empty) {
@@ -851,10 +878,17 @@ impl TaskInfo {
         let share = self.share_fields(p);
         if share {
             ui.add_space(6.0);
-            ui.checkbox(&mut self.fills_group, "Stretch to fill the group");
+            // Mutually exclusive with percent-of-group: ticking one clears the other.
+            if ui.checkbox(&mut self.fills_group, "Stretch to fill the group").changed() && self.fills_group {
+                self.group_percent.clear();
+            }
             ui.horizontal(|ui| {
                 ui.label("Percent of group:");
-                ui.add(egui::TextEdit::singleline(&mut self.group_percent).desired_width(60.0).hint_text("none"));
+                if ui.add(egui::TextEdit::singleline(&mut self.group_percent).desired_width(60.0).hint_text("none")).changed()
+                    && !self.group_percent.trim().is_empty()
+                {
+                    self.fills_group = false;
+                }
             });
         }
         if self.mode == ScheduleMode::Auto {
@@ -864,11 +898,18 @@ impl TaskInfo {
             ui.add_space(6.0);
             egui::Grid::new("ti_computed").num_columns(4).spacing([12.0, 4.0]).show(ui, |ui| {
                 ui.label(RichText::new("Scheduled:").color(theme::pal().TEXT_WEAK));
-                ui.label(format!("{} – {}", format::date_long(t.sched.start), format::date_long(t.sched.finish)));
+                if self.milestone {
+                    // One moment; work does not apply to a milestone.
+                    ui.label(format::date_long(t.sched.start));
+                } else {
+                    ui.label(format!("{} – {}", format::date_long(t.sched.start), format::date_long(t.sched.finish)));
+                }
                 ui.end_row();
-                ui.label(RichText::new("Work:").color(theme::pal().TEXT_WEAK));
-                ui.label(format!("{} planned, {} actual", format_work(t.sched.work), format_work(t.sched.actual_work)));
-                ui.end_row();
+                if !self.milestone {
+                    ui.label(RichText::new("Work:").color(theme::pal().TEXT_WEAK));
+                    ui.label(format!("{} planned, {} actual", format_work(t.sched.work), format_work(t.sched.actual_work)));
+                    ui.end_row();
+                }
                 ui.label(RichText::new("Slack:").color(theme::pal().TEXT_WEAK));
                 ui.label(format!(
                     "total {}, free {}{}",

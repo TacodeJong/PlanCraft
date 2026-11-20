@@ -189,6 +189,7 @@ fn printing_10000_linked_tasks_is_fast() {
         printed: p.start,
         palette: print::layout::Palette::default(),
         legend: print::LegendWords::english(),
+        names: plancraft_core::dates::NAMES_EN,
     });
     let took = t.elapsed();
     assert!(doc.pages.len() > 100);

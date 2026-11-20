@@ -50,7 +50,7 @@ pub fn show(ui: &mut Ui, rect: Rect, p: &Project, shown: &[bool], g: &mut GanttS
     painter.text(
         pos2(rect.left() + 10.0, bar.center().y + 7.0),
         Align2::LEFT_CENTER,
-        start.format("%a %-m/%-d/%y").to_string(),
+        crate::format::weekday_date(start.date()),
         FontId::proportional(11.5),
         theme::pal().TEXT,
     );
@@ -64,7 +64,7 @@ pub fn show(ui: &mut Ui, rect: Rect, p: &Project, shown: &[bool], g: &mut GanttS
     painter.text(
         pos2(rect.right() - 10.0, bar.center().y + 7.0),
         Align2::RIGHT_CENTER,
-        finish.format("%a %-m/%-d/%y").to_string(),
+        crate::format::weekday_date(finish.date()),
         FontId::proportional(11.5),
         theme::pal().TEXT,
     );
@@ -92,7 +92,7 @@ pub fn show(ui: &mut Ui, rect: Rect, p: &Project, shown: &[bool], g: &mut GanttS
             painter.text(
                 pos2(label_x, bar.top() - 7.0),
                 Align2::LEFT_CENTER,
-                unit.label(m, x_of(next) - label_x),
+                unit.label(m, x_of(next) - label_x, crate::format::names()),
                 FontId::proportional(10.5),
                 theme::pal().TEXT_WEAK,
             );

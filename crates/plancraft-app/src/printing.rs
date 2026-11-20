@@ -114,7 +114,7 @@ fn print_cell(cell: &crate::widgets::grid::Cell, pal: &Palette) -> PrintCell {
 fn task_sheet(p: &Project, st: &UiState, title: &str, pal: &Palette, all_columns: bool) -> Sheet {
     let mut fields: Vec<Field> = Vec::new();
     let mut x = crate::widgets::grid::ROW_NUM_W;
-    for f in fields::table_fields(p, st.table) {
+    for f in fields::visible_fields(p, st.table, st.columns.get(st.table.label())) {
         let w = st.column_widths.get(&(st.table, f.key())).copied().unwrap_or_else(|| f.def(p).width);
         if !all_columns && x >= st.table_width && !fields.is_empty() {
             break;
@@ -263,6 +263,7 @@ pub fn document(
         printed: plancraft_core::dates::now(),
         palette: Palette::default(),
         legend: legend_words(),
+        names: *crate::format::names(),
     })
 }
 

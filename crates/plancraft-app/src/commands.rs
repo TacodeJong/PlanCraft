@@ -123,6 +123,9 @@ pub enum Command {
     },
     /// Back to the current table's default columns.
     ResetColumns,
+    /// Switch the column with field key `key` on or off for this user (the Columns menu;
+    /// saved in the app settings, not the plan).
+    ToggleColumn(String),
     CustomFields,
     CollapseAll,
     ExpandAll,

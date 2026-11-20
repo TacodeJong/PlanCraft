@@ -23,9 +23,9 @@ pub struct NetPrintOptions {
     pub ids_only: bool,
 }
 
-/// A date as the app shows it.
+/// A date as the app shows it: `dd-mm-yyyy`.
 pub(crate) fn date(d: Option<DateTime>) -> String {
-    d.map(|d| d.format("%a %m/%d/%y").to_string()).unwrap_or_else(|| "NA".into())
+    d.map(|d| crate::dates::dmy(d.date())).unwrap_or_else(|| "NA".into())
 }
 
 /// Text whose top is at `y` (as the app places a line of text), cut to `max` points.

@@ -506,6 +506,9 @@ pub struct UiState {
     pub view_orders: std::collections::HashMap<u64, ViewOrder>,
     /// Column widths of task tables, by table and field key (survive column changes).
     pub column_widths: std::collections::HashMap<(TaskTable, String), f32>,
+    /// Task table columns this user switched on or off, by table label (mirrors the app
+    /// settings, where the choice is saved like the theme and language).
+    pub columns: std::collections::HashMap<String, crate::settings::ColumnChoice>,
     pub table: TaskTable,
     pub gantt: GanttState,
     pub network: NetworkState,
@@ -571,6 +574,7 @@ impl Default for UiState {
             collapsed_groups: HashSet::new(),
             view_orders: Default::default(),
             column_widths: std::collections::HashMap::new(),
+            columns: std::collections::HashMap::new(),
             table: TaskTable::Entry,
             gantt: GanttState::default(),
             network: NetworkState::default(),

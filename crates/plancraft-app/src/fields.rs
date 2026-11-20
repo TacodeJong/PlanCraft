@@ -23,7 +23,7 @@ pub enum Field {
 }
 
 /// Built-in columns and their keys (as saved in table layouts). Keys never change.
-const BUILTIN: [(TaskCol, &str); 55] = [
+const BUILTIN: [(TaskCol, &str); 57] = [
     (TaskCol::Indicators, "indicators"),
     (TaskCol::Mode, "mode"),
     (TaskCol::Wbs, "wbs"),
@@ -35,6 +35,8 @@ const BUILTIN: [(TaskCol, &str); 55] = [
     (TaskCol::Successors, "successors"),
     (TaskCol::Resources, "resources"),
     (TaskCol::PercentComplete, "percent_complete"),
+    (TaskCol::Status, "status"),
+    (TaskCol::RowMark, "row_mark"),
     (TaskCol::Work, "work"),
     (TaskCol::ActualWork, "actual_work"),
     (TaskCol::RemainingWork, "remaining_work"),
@@ -328,6 +330,73 @@ fn generated_from_key(key: &str) -> Option<TaskCol> {
     (generated().any(|c| c == col) && Field::Builtin(col).key() == key).then_some(col)
 }
 
+/// Columns the chooser offers beyond a table's own layout: cheap, commonly wanted singles
+/// (the Swift app's inspector offers these too).
+const CHOOSER_EXTRAS: [TaskCol; 9] = [
+    TaskCol::Wbs,
+    TaskCol::Status,
+    TaskCol::RowMark,
+    TaskCol::PercentComplete,
+    TaskCol::Resources,
+    TaskCol::Work,
+    TaskCol::Cost,
+    TaskCol::Deadline,
+    TaskCol::Notes,
+];
+
+/// The columns the table shows for this user: the layout minus the keys switched off in the app
+/// settings, plus the ones switched on that the layout lacks. The name column always shows, and
+/// an empty result falls back to the full layout (a damaged settings file never empties a table).
+pub fn visible_fields(p: &Project, table: TaskTable, choice: Option<&crate::settings::ColumnChoice>) -> Vec<Field> {
+    let layout = table_fields(p, table);
+    let Some(choice) = choice else { return layout };
+    let mut list: Vec<Field> =
+        layout.iter().copied().filter(|f| *f == Field::Builtin(TaskCol::Name) || !choice.hidden.iter().any(|k| *k == f.key())).collect();
+    for key in &choice.extra {
+        if let Some(f) = Field::from_key(p, key)
+            && !list.contains(&f)
+        {
+            list.push(f);
+        }
+    }
+    if list.is_empty() { layout } else { list }
+}
+
+/// What the Columns menu lists for `table`: the layout's columns, then the extras and the
+/// project's custom fields. Each entry is (key, title, on, required); only the name is required.
+pub fn column_choices(p: &Project, table: TaskTable, choice: Option<&crate::settings::ColumnChoice>) -> Vec<(String, String, bool, bool)> {
+    let visible = visible_fields(p, table, choice);
+    let mut all = table_fields(p, table);
+    for f in CHOOSER_EXTRAS.into_iter().map(Field::Builtin).chain(p.custom_fields.iter().map(|f| Field::Custom(f.id))) {
+        if !all.contains(&f) {
+            all.push(f);
+        }
+    }
+    all.into_iter().map(|f| (f.key(), f.title(p), visible.contains(&f), f == Field::Builtin(TaskCol::Name))).collect()
+}
+
+/// Flips one column on or off in this user's choice for `table`. The name column stays on.
+pub fn toggle_column(p: &Project, table: TaskTable, choice: &mut crate::settings::ColumnChoice, key: &str) {
+    if key == "name" || Field::from_key(p, key).is_none() {
+        return;
+    }
+    if table_fields(p, table).iter().any(|f| f.key() == key) {
+        match choice.hidden.iter().position(|k| k == key) {
+            Some(i) => {
+                choice.hidden.remove(i);
+            }
+            None => choice.hidden.push(key.to_string()),
+        }
+    } else {
+        match choice.extra.iter().position(|k| k == key) {
+            Some(i) => {
+                choice.extra.remove(i);
+            }
+            None => choice.extra.push(key.to_string()),
+        }
+    }
+}
+
 /// Every field a column can show: the built-in columns, the numbered baselines and interim plans,
 /// then the custom fields.
 pub fn all_fields(p: &Project) -> Vec<Field> {
@@ -398,6 +467,49 @@ mod tests {
         // A layout with some known columns keeps just those.
         p.set_table_columns(TaskTable::Entry.label(), &["nonsense".to_string(), "name".to_string()]).unwrap();
         assert_eq!(table_fields(&p, TaskTable::Entry), vec![Field::from_key(&p, "name").unwrap()]);
+    }
+
+    /// The column chooser: hiding removes a column (never the name), extras append, and the
+    /// choice is plain data that a settings round-trip keeps.
+    #[test]
+    fn column_choice_hides_and_adds_columns_but_never_the_name() {
+        let p = plancraft_core::sample::demo_project(plancraft_core::dates::ymd(2026, 10, 19).unwrap());
+        let table = TaskTable::Entry;
+        let mut choice = crate::settings::ColumnChoice::default();
+        let default: Vec<String> = visible_fields(&p, table, None).iter().map(Field::key).collect();
+        assert!(default.contains(&"duration".to_string()));
+
+        toggle_column(&p, table, &mut choice, "duration");
+        let keys: Vec<String> = visible_fields(&p, table, Some(&choice)).iter().map(Field::key).collect();
+        assert!(!keys.contains(&"duration".to_string()), "{keys:?}");
+        assert_eq!(keys.len(), default.len() - 1);
+
+        // The status column is not in the Entry layout: switching it on appends it.
+        toggle_column(&p, table, &mut choice, "status");
+        let keys: Vec<String> = visible_fields(&p, table, Some(&choice)).iter().map(Field::key).collect();
+        assert_eq!(keys.last().map(String::as_str), Some("status"));
+        let listed = column_choices(&p, table, Some(&choice));
+        assert!(listed.iter().any(|(k, _, on, _)| k == "status" && *on));
+        assert!(listed.iter().any(|(k, _, on, _)| k == "duration" && !*on));
+        assert!(listed.iter().any(|(k, _, _, required)| k == "name" && *required));
+
+        // The name cannot be hidden; junk keys change nothing.
+        toggle_column(&p, table, &mut choice, "name");
+        toggle_column(&p, table, &mut choice, "from_the_future");
+        assert!(visible_fields(&p, table, Some(&choice)).contains(&Field::Builtin(TaskCol::Name)));
+        assert!(choice.hidden.iter().all(|k| k != "name" && k != "from_the_future"), "{choice:?}");
+
+        // Toggling back restores the defaults exactly.
+        toggle_column(&p, table, &mut choice, "duration");
+        toggle_column(&p, table, &mut choice, "status");
+        assert!(choice.hidden.is_empty() && choice.extra.is_empty());
+        let keys: Vec<String> = visible_fields(&p, table, Some(&choice)).iter().map(Field::key).collect();
+        assert_eq!(keys, default);
+
+        // A hostile choice hiding everything never empties the table.
+        let all_hidden =
+            crate::settings::ColumnChoice { hidden: table_fields(&p, table).iter().map(Field::key).collect(), extra: Vec::new() };
+        assert!(!visible_fields(&p, table, Some(&all_hidden)).is_empty());
     }
 
     #[test]

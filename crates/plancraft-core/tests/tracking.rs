@@ -261,3 +261,45 @@ fn logged_time_starts_on_the_workers_calendar() {
     p.log_time(a, ben, d(10, 24), 60, "").unwrap();
     assert_eq!(p.task(a).unwrap().actual_start, Some(dt(10, 24, 0)), "Ben works Saturdays");
 }
+
+/// Status and % complete stay consistent (SPECS.md: they cascade together). Editing the percent
+/// moves the status: 100% is done, 0% is not started, and partial progress cannot stay
+/// "not started" or "done". "Started" and "in progress" are both partial and are kept as entered.
+#[test]
+fn percent_complete_keeps_the_status_consistent() {
+    let mut p = project();
+    let t = task(&mut p, "Write", 2 * DAY);
+    recalculate(&mut p);
+    let status = |p: &Project| p.task(t).unwrap().status;
+
+    p.set_percent_complete(t, 100).unwrap();
+    assert_eq!(status(&p), TaskStatus::Done);
+    p.set_percent_complete(t, 0).unwrap();
+    assert_eq!(status(&p), TaskStatus::NotStarted);
+    // The screenshot bug: "Niet gestart" with 100% could never fix itself. In between, a
+    // not-started (or done) task becomes busy.
+    p.set_percent_complete(t, 40).unwrap();
+    assert_eq!(status(&p), TaskStatus::Busy);
+    p.set_task_status(t, TaskStatus::Started).unwrap();
+    p.set_percent_complete(t, 60).unwrap();
+    assert_eq!(status(&p), TaskStatus::Started, "started is partial progress too and is kept");
+    p.set_percent_complete(t, 100).unwrap();
+    assert_eq!(status(&p), TaskStatus::Done);
+    p.set_percent_complete(t, 60).unwrap();
+    assert_eq!(status(&p), TaskStatus::Busy, "no longer done");
+
+    // Explicit status changes keep setting the percent, as before.
+    p.set_task_status(t, TaskStatus::Done).unwrap();
+    assert_eq!(p.task(t).unwrap().percent_complete, 100);
+    p.set_task_status(t, TaskStatus::NotStarted).unwrap();
+    assert_eq!(p.task(t).unwrap().percent_complete, 0);
+
+    // Through a summary, the leaves and their statuses follow.
+    let parent = p.add_task("Phase", None);
+    let child = p.add_task("Step", None);
+    p.set_duration(child, DAY, false).unwrap();
+    p.indent(child).unwrap();
+    recalculate(&mut p);
+    p.set_percent_complete(parent, 100).unwrap();
+    assert_eq!(p.task(child).unwrap().status, TaskStatus::Done);
+}

@@ -25,7 +25,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
         if ui.button("⏴").clicked() {
             st.calendar_month = (plancraft_core::dates::shift_days(month, -1)).with_day(1).unwrap_or(month);
         }
-        ui.label(egui::RichText::new(month.format("%B %Y").to_string()).size(16.0).strong());
+        ui.label(egui::RichText::new(crate::format::month_year(month)).size(16.0).strong());
         if ui.button("⏵").clicked() {
             st.calendar_month = (plancraft_core::dates::shift_days(month, 32)).with_day(1).unwrap_or(month);
         }
@@ -43,7 +43,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
     let weeks = 6;
     let cell_w = area.width() / 7.0;
     let cell_h = (area.height() - header_h) / weeks as f32;
-    for (i, name) in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].iter().enumerate() {
+    for (i, name) in crate::format::names().weekdays.iter().enumerate() {
         let r = Rect::from_min_size(pos2(area.left() + i as f32 * cell_w, area.top()), vec2(cell_w, header_h));
         painter.rect_filled(r, 0.0, theme::pal().HEADER_BG);
         painter.text(r.center(), Align2::CENTER_CENTER, *name, FontId::proportional(12.0), theme::pal().TEXT);
@@ -62,7 +62,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
             painter.rect_filled(r, 0.0, fill);
             painter.rect_stroke(r, 0.0, Stroke::new(1.0, theme::pal().GRID_LINE), egui::StrokeKind::Inside);
             let color = if day.month32() == month.month32() { theme::pal().TEXT } else { theme::pal().TEXT_WEAK };
-            let label = if day.day32() == 1 { day.format("%b %-d").to_string() } else { day.day32().to_string() };
+            let label = if day.day32() == 1 { crate::format::day_month_name(day) } else { day.day32().to_string() };
             if day == today {
                 painter.rect_filled(Rect::from_min_size(r.right_top() + vec2(-34.0, 3.0), vec2(30.0, 16.0)), 8.0, theme::pal().ACCENT);
                 painter.text(r.right_top() + vec2(-19.0, 11.0), Align2::CENTER_CENTER, &label, FontId::proportional(11.5), Color32::WHITE);

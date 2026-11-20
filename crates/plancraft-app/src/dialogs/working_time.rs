@@ -56,7 +56,7 @@ impl WorkingTime {
             if ui.small_button("⏴").clicked() {
                 self.month = (plancraft_core::dates::shift_days(self.month, -1)).with_day(1).unwrap_or(self.month);
             }
-            ui.label(RichText::new(self.month.format("%B %Y").to_string()).strong());
+            ui.label(RichText::new(crate::format::month_year(self.month)).strong());
             if ui.small_button("⏵").clicked() {
                 self.month = (plancraft_core::dates::shift_days(self.month, 32)).with_day(1).unwrap_or(self.month);
             }

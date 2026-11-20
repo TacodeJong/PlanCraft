@@ -115,6 +115,24 @@ impl Default for AiSettings {
     }
 }
 
+/// One task table's column visibility as this user set it, keyed by the table's English label
+/// (see `crate::columns::TaskTable::label`). A personal setting like the theme: it never touches
+/// the plan's saved layout, which stays shared.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ColumnChoice {
+    /// Layout columns switched off.
+    pub hidden: Vec<String>,
+    /// Columns switched on that the layout does not have (shown after it).
+    pub extra: Vec<String>,
+}
+
+impl ColumnChoice {
+    pub fn is_empty(&self) -> bool {
+        self.hidden.is_empty() && self.extra.is_empty()
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
@@ -132,6 +150,8 @@ pub struct AppSettings {
     pub ai: AiSettings,
     /// Servers plans were opened from, last used first (never a password).
     pub servers: Vec<KnownServer>,
+    /// Task table columns switched on or off per table, by the table's label.
+    pub columns: std::collections::HashMap<String, ColumnChoice>,
 }
 
 /// A PlanCraft Server this person opened plans from.
@@ -173,6 +193,7 @@ impl Default for AppSettings {
             open_to_overview: true,
             ai: AiSettings::default(),
             servers: Vec::new(),
+            columns: std::collections::HashMap::new(),
         }
     }
 }
@@ -229,6 +250,14 @@ impl AppSettings {
         let clip = |s: &mut String, n: usize| *s = s.chars().filter(|c| !c.is_control()).take(n).collect();
         clip(&mut self.ai.model, 200);
         clip(&mut self.ai.base_url, 500);
+        // Column choices hold short field keys; anything bigger is not ours. Unknown keys are
+        // harmless (`fields::visible_fields` ignores them and never empties a table).
+        self.columns.retain(|table, c| !table.is_empty() && table.len() <= 64 && c.hidden.len() <= 200 && c.extra.len() <= 200);
+        for c in self.columns.values_mut() {
+            for key in c.hidden.iter_mut().chain(c.extra.iter_mut()) {
+                clip(key, 64);
+            }
+        }
         self
     }
 
@@ -285,10 +314,13 @@ mod tests {
     fn settings_round_trip_privately_and_garbage_gives_defaults() {
         let tmp = TempDir::new("settings");
         let path = tmp.0.join("cfg").join("settings.json");
-        let s = AppSettings { mcp_port: 9000, table_width: 500.0, ..AppSettings::default() };
+        let mut s = AppSettings { mcp_port: 9000, table_width: 500.0, ..AppSettings::default() };
+        // A hidden table column survives the round trip (the chooser's choice is per user).
+        s.columns.insert("Entry".into(), ColumnChoice { hidden: vec!["duration".into()], extra: vec!["status".into()] });
         s.save_to(&path).unwrap();
         let back = AppSettings::load_from(&path);
         assert_eq!((back.mcp_port, back.table_width), (9000, 500.0));
+        assert_eq!(back.columns.get("Entry"), Some(&ColumnChoice { hidden: vec!["duration".into()], extra: vec!["status".into()] }));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

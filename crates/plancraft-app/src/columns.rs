@@ -21,6 +21,10 @@ pub enum TaskCol {
     Successors,
     Resources,
     PercentComplete,
+    /// The workflow status (not started, started, in progress, done).
+    Status,
+    /// The row's coloured mark.
+    RowMark,
     Work,
     ActualWork,
     RemainingWork,
@@ -231,6 +235,15 @@ impl TaskCol {
             Successors => ColumnDef::new(ct("col.successors"), 96.0).read_only(),
             Resources => ColumnDef::new(ct("col.resources"), 160.0),
             PercentComplete => ColumnDef::new(ct("col.percent"), 62.0).right(),
+            Status => {
+                let names = TaskStatus::ALL.map(crate::lang::status_name);
+                ColumnDef::new(ct("col.status"), 96.0).choice(&names)
+            }
+            RowMark => {
+                let mut names = vec![crate::lang::text("common.none")];
+                names.extend(plancraft_core::model::RowMark::ALL.map(crate::lang::mark_name));
+                ColumnDef::new(ct("col.row_mark"), 86.0).choice(&names)
+            }
             Work => ColumnDef::new(ct("col.work"), 70.0).right(),
             ActualWork => ColumnDef::new(ct("col.actual_work"), 72.0).right().read_only(),
             RemainingWork => ColumnDef::new(ct("col.remaining_work"), 72.0).right().read_only(),
@@ -409,6 +422,29 @@ pub fn cell(col: TaskCol, p: &Project, idx: usize, ctx: &CellCtx) -> Cell {
         ),
         Resources => Cell::text(p.format_resource_names(t.id)),
         PercentComplete => Cell::text(format::percent(s.percent_complete)),
+        Status => {
+            // A group's status rolls up from its subtasks, like its percent.
+            let status = if summary {
+                if s.percent_complete >= 100.0 {
+                    TaskStatus::Done
+                } else if s.percent_complete <= 0.0 {
+                    TaskStatus::NotStarted
+                } else {
+                    TaskStatus::Busy
+                }
+            } else {
+                t.status
+            };
+            Cell::text(crate::lang::status_name(status))
+        }
+        RowMark => match t.row_mark {
+            None => Cell::default(),
+            Some(m) => Cell {
+                text: crate::lang::mark_name(m).into(),
+                icons: vec![(Glyph::Dot, theme::row_mark_color(m), crate::lang::mark_name(m).into())],
+                ..Default::default()
+            },
+        },
         Work => Cell::text(format_work(s.work)),
         ActualWork => Cell::text(format_work(s.actual_work)),
         RemainingWork => Cell::text(format_work((s.work - s.actual_work).max(0))),
@@ -594,6 +630,26 @@ pub fn commit(col: TaskCol, p: &mut Project, id: TaskId, text: &str) -> Result<(
             p.set_show_on_board(&[id], show).map_err(err)?;
         }
         Resources => p.apply_resource_names(id, text).map_err(err)?,
+        Status => {
+            let status = TaskStatus::ALL
+                .into_iter()
+                .find(|s| crate::lang::status_name(*s) == text || s.label() == text)
+                .ok_or_else(|| format!("'{text}' is not a status"))?;
+            p.set_task_status(id, status).map_err(err)?;
+        }
+        RowMark => {
+            let mark = if text.trim().is_empty() || text == crate::lang::text("common.none") || text == "None" {
+                None
+            } else {
+                Some(
+                    plancraft_core::model::RowMark::ALL
+                        .into_iter()
+                        .find(|m| crate::lang::mark_name(*m) == text)
+                        .ok_or_else(|| format!("'{text}' is not a row mark"))?,
+                )
+            };
+            task_mut(p, id)?.row_mark = mark;
+        }
         PercentComplete => {
             let v: f64 = text.trim().trim_end_matches('%').trim().parse().map_err(|_| format!("'{text}' is not a percentage"))?;
             p.set_percent_complete(id, v.clamp(0.0, 100.0).round() as u8).map_err(err)?;
@@ -750,6 +806,44 @@ pub(crate) fn set_actual_finish(p: &mut Project, id: TaskId, d: Option<DateTime>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The main table renders every date `dd-mm-yyyy`, like the pane and the date pickers
+    /// (it used to say `Thu 10/15/26`).
+    #[test]
+    fn table_dates_render_dd_mm_yyyy() {
+        let p = plancraft_core::sample::demo_project(plancraft_core::dates::ymd(2026, 10, 15).unwrap());
+        let none = |_: TaskId| false;
+        let ctx = CellCtx { overallocated: &none, others_on: None };
+        let idx = p.tasks.iter().position(|t| t.sched.start.is_some()).unwrap();
+        let start = p.tasks[idx].sched.start.unwrap();
+        for col in [TaskCol::Start, TaskCol::Finish] {
+            let text = cell(col, &p, idx, &ctx).text;
+            let b = text.as_bytes();
+            assert_eq!((text.len(), b[2], b[5]), (10, b'-', b'-'), "{col:?} is not dd-mm-yyyy: {text}");
+        }
+        assert_eq!(cell(TaskCol::Start, &p, idx, &ctx).text, plancraft_core::dates::dmy(start.date()));
+    }
+
+    /// The Status and Row Mark columns (for the column chooser) show and edit their fields.
+    #[test]
+    fn status_and_row_mark_columns_show_and_edit() {
+        use plancraft_core::model::RowMark as Mark;
+        let mut p = Project::new("S", plancraft_core::dates::ymd(2026, 10, 19).unwrap());
+        let id = p.add_task("Task", None);
+        let idx = p.task_index(id).unwrap();
+        let none = |_: TaskId| false;
+        let ctx = CellCtx { overallocated: &none, others_on: None };
+        commit(TaskCol::Status, &mut p, id, crate::lang::status_name(TaskStatus::Done)).unwrap();
+        assert_eq!(p.task(id).unwrap().percent_complete, 100, "done sets the percent too");
+        plancraft_core::schedule::recalculate(&mut p);
+        assert_eq!(cell(TaskCol::Status, &p, idx, &ctx).text, crate::lang::status_name(TaskStatus::Done));
+        commit(TaskCol::RowMark, &mut p, id, crate::lang::mark_name(Mark::Blue)).unwrap();
+        assert_eq!(p.task(id).unwrap().row_mark, Some(Mark::Blue));
+        assert_eq!(cell(TaskCol::RowMark, &p, idx, &ctx).text, crate::lang::mark_name(Mark::Blue));
+        commit(TaskCol::RowMark, &mut p, id, "").unwrap();
+        assert_eq!(p.task(id).unwrap().row_mark, None);
+        assert!(commit(TaskCol::Status, &mut p, id, "nonsense").is_err());
+    }
 
     /// Regression: the Notes cell shows only the first line, and committing it used to replace
     /// the whole note with that line.

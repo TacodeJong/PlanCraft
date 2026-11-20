@@ -112,7 +112,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState) {
 
     let mut defs = vec![ColumnDef::new("Resource", 150.0).read_only(), ColumnDef::new("Task", 230.0).read_only()];
     for d in &days {
-        defs.push(ColumnDef::new(d.format("%a %-m/%-d").to_string(), 74.0).right());
+        defs.push(ColumnDef::new(crate::format::weekday_day(*d), 74.0).right());
     }
     defs.push(ColumnDef::new("Week Total", 84.0).right().read_only());
     defs.push(ColumnDef::new("Actual / Planned", 140.0).right().read_only());

@@ -23,9 +23,9 @@ enum Row<'a> {
 
 pub fn period_label(g: Granularity, d: Date) -> String {
     match g {
-        Granularity::Day => d.format("%a %-m/%-d").to_string(),
-        Granularity::Week => format!("Wk {}", d.format("%-m/%-d")),
-        Granularity::Month => d.format("%b %Y").to_string(),
+        Granularity::Day => crate::format::weekday_day(d),
+        Granularity::Week => format!("Wk {}", crate::format::day_month(d)),
+        Granularity::Month => crate::format::month_short_year(d),
     }
 }
 

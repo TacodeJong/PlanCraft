@@ -165,6 +165,67 @@ pub fn today() -> Date {
     now().date()
 }
 
+/// `d` as the interface shows every date: `15-10-2026`. Both interface languages use this
+/// order (see the app's `format` module); only day and month *names* differ per language.
+pub fn dmy(d: Date) -> String {
+    format!("{:02}-{:02}-{:04}", d.day(), d.month(), d.year())
+}
+
+/// Day and month names for an interface language. Dates themselves stay `dd-mm-yyyy` in both
+/// languages; these names appear only in labels that spell a day or month out (timescale
+/// headers, calendars, the timeline).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DateNames {
+    /// Short weekday names, Monday first.
+    pub weekdays: [&'static str; 7],
+    /// Full month names, January first.
+    pub months: [&'static str; 12],
+    /// Short month names, January first.
+    pub months_short: [&'static str; 12],
+    /// The words before a week header ("Week of" / "Week van").
+    pub week_of: &'static str,
+}
+
+/// English day and month names.
+pub const NAMES_EN: DateNames = DateNames {
+    weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+    months: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+    months_short: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+    week_of: "Week of",
+};
+
+/// Dutch day and month names (lower case, as Dutch writes them).
+pub const NAMES_NL: DateNames = DateNames {
+    weekdays: ["ma", "di", "wo", "do", "vr", "za", "zo"],
+    months: ["januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"],
+    months_short: ["jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "okt", "nov", "dec"],
+    week_of: "Week van",
+};
+
+impl DateNames {
+    /// The short weekday name of `d` ("do" / "Thu").
+    pub fn weekday(&self, d: Date) -> &'static str {
+        self.weekdays.get(d.weekday().num_days_from_monday() as usize).copied().unwrap_or("")
+    }
+
+    /// The full month name of `d` ("oktober" / "October").
+    pub fn month(&self, d: Date) -> &'static str {
+        self.months.get(d.month0() as usize).copied().unwrap_or("")
+    }
+
+    /// The short month name of `d` ("okt" / "Oct").
+    pub fn month_short(&self, d: Date) -> &'static str {
+        self.months_short.get(d.month0() as usize).copied().unwrap_or("")
+    }
+}
+
+/// Default to English, like [`crate::print::LegendWords`]: the app passes its language.
+impl Default for DateNames {
+    fn default() -> Self {
+        NAMES_EN
+    }
+}
+
 /// `value` written with a `strftime`-style `pattern` (`%Y-%m-%d %H:%M`, `%a %b %-d`, …). An
 /// unknown directive gives an empty string rather than a panic.
 pub fn format(pattern: &str, value: impl Into<jiff::fmt::strtime::BrokenDownTime>) -> String {

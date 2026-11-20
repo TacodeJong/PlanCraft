@@ -59,7 +59,7 @@ pub fn task_table(
     path: Option<&HashMap<TaskId, PathRole>>,
     out: &mut Vec<Command>,
 ) -> grid::GridOutput {
-    let fields: Vec<Field> = fields::table_fields(&doc.project, st.table);
+    let fields: Vec<Field> = fields::visible_fields(&doc.project, st.table, st.columns.get(st.table.label()));
     let sort = st.sort.clone();
     let defs: Vec<grid::ColumnDef> = fields
         .iter()
@@ -481,7 +481,7 @@ pub fn column_menu_popup(ctx: &egui::Context, p: &Project, st: &UiState, out: &m
     let Some((pos, col)) = ctx.data(|d| d.get_temp::<(egui::Pos2, usize)>(id)) else {
         return;
     };
-    let shown = fields::table_fields(p, st.table);
+    let shown = fields::visible_fields(p, st.table, st.columns.get(st.table.label()));
     let Some(field) = shown.get(col).copied() else {
         ctx.data_mut(|d| d.remove::<(egui::Pos2, usize)>(id));
         return;

@@ -37,13 +37,13 @@ pub fn dock(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState) -> Re
 fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState) {
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
     egui::ScrollArea::vertical().show(&mut child, |ui| {
-        ui.heading("Properties");
+        ui.heading(st.t("tb.properties"));
         ui.add_space(6.0);
         if resource_view(st.view) {
             match st.sel.single_resource().or_else(|| (st.view == ViewKind::Timesheet).then_some(st.timesheet_resource).flatten()) {
                 Some(id) => resource_pane(ui, doc, st, id),
                 None if st.sel.resources.len() > 1 => {
-                    ui.label(RichText::new("Several resources are selected.").color(theme::pal().TEXT_WEAK));
+                    ui.label(RichText::new(st.t("prop.several_resources")).color(theme::pal().TEXT_WEAK));
                 }
                 None if !st.sel.tasks.is_empty() => task_pane(ui, doc, st),
                 None => empty(ui),
@@ -57,7 +57,13 @@ fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState) {
 }
 
 fn empty(ui: &mut Ui) {
-    ui.label(RichText::new("No selection. Select an activity or a resource.").color(theme::pal().TEXT_WEAK));
+    ui.label(RichText::new(crate::lang::text("prop.no_selection")).color(theme::pal().TEXT_WEAK));
+}
+
+/// A greyed, uneditable field showing a derived value (kept visible rather than hidden).
+fn derived_line(ui: &mut Ui, value: &str, hover: &str) {
+    let mut text = value.to_string();
+    ui.add_enabled(false, egui::TextEdit::singleline(&mut text).desired_width(ui.available_width())).on_disabled_hover_text(hover);
 }
 
 fn resource_view(view: ViewKind) -> bool {
@@ -75,7 +81,7 @@ fn resource_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState, id: Resource
     let email = resource.email.clone();
     let group = resource.group.clone();
     let units = format::units(resource.max_units);
-    label(ui, "Name");
+    label(ui, st.t("prop.name"));
     if let Some(text) = line(ui, ("res_name", id), &name, "") {
         edit(doc, st, "Resource name", move |p| {
             if text.trim().is_empty() {
@@ -87,7 +93,7 @@ fn resource_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState, id: Resource
             Ok(())
         });
     }
-    label(ui, "Kind");
+    label(ui, st.t("prop.kind"));
     egui::ComboBox::from_id_salt(("res_kind", id)).selected_text(crate::lang::category_name(category)).show_ui(ui, |ui| {
         for choice in ResourceCategory::ALL {
             if ui.selectable_label(category == choice, crate::lang::category_name(choice)).clicked() && category != choice {
@@ -100,7 +106,7 @@ fn resource_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState, id: Resource
             }
         }
     });
-    label(ui, "Type");
+    label(ui, st.t("prop.type"));
     egui::ComboBox::from_id_salt(("res_type", id)).selected_text(type_label(kind)).show_ui(ui, |ui| {
         for choice in [ResourceType::Work, ResourceType::Material, ResourceType::Cost] {
             if ui.selectable_label(kind == choice, type_label(choice)).clicked() && kind != choice {
@@ -113,7 +119,7 @@ fn resource_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState, id: Resource
             }
         }
     });
-    label(ui, "Email");
+    label(ui, st.t("prop.email"));
     if let Some(text) = line(ui, ("res_email", id), &email, "") {
         edit(doc, st, "Resource email", move |p| {
             if let Some(r) = p.resource_mut(id) {
@@ -122,7 +128,7 @@ fn resource_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState, id: Resource
             Ok(())
         });
     }
-    label(ui, "Group");
+    label(ui, st.t("prop.group"));
     if let Some(text) = line(ui, ("res_group", id), &group, "") {
         edit(doc, st, "Resource group", move |p| {
             if let Some(r) = p.resource_mut(id) {
@@ -131,7 +137,7 @@ fn resource_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState, id: Resource
             Ok(())
         });
     }
-    label(ui, "Max units");
+    label(ui, st.t("prop.max_units"));
     if let Some(text) = line(ui, ("res_units", id), &units, "100%") {
         edit(doc, st, "Max units", move |p| {
             let units = format::parse_units(&text).ok_or_else(|| format!("'{text}' is not a valid amount of units"))?;
@@ -151,11 +157,16 @@ fn task_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState) {
     };
     let multi = ids.len() > 1;
     if multi {
-        ui.label(RichText::new(format!("{} activities", ids.len())).color(theme::pal().TEXT_WEAK));
+        ui.label(RichText::new(format!("{} {}", ids.len(), st.t("prop.activities"))).color(theme::pal().TEXT_WEAK));
     }
     let snap = snapshot(&doc.project, &ids);
     let share = doc.project.settings.rules.enabled() && ids.iter().all(|id| can_share(&doc.project, *id));
     let any_summary = ids.iter().any(|id| doc.project.task_index(*id).is_some_and(|i| doc.project.has_children(i)));
+    // Only milestones selected: one moment instead of separate start and finish fields.
+    let milestone_only = !any_summary && snap.milestone == Some(true);
+    // What the group's subtasks add up to, for the read-only derived displays on summary rows.
+    let derived_duration = common(ids.iter().filter_map(|id| doc.project.task(*id)).map(|t| doc.project.format_task_duration(t)));
+    let derived_percent = common(ids.iter().filter_map(|id| doc.project.task(*id)).map(|t| format::percent(t.sched.percent_complete)));
 
     ui.horizontal(|ui| {
         if !multi && snap.milestone == Some(true) {
@@ -184,78 +195,101 @@ fn task_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState) {
         });
     }
     if !multi && let Some(idx) = doc.project.task_index(first) {
-        label(ui, "Outline");
-        ui.label(format!("{}   level {}", doc.project.wbs(idx), doc.project.tasks.get(idx).map(|t| t.outline_level).unwrap_or(1)));
+        label(ui, st.t("prop.outline"));
+        ui.label(format!(
+            "{}   {} {}",
+            doc.project.wbs(idx),
+            st.t("prop.level"),
+            doc.project.tasks.get(idx).map(|t| t.outline_level).unwrap_or(1)
+        ));
         if doc.project.has_children(idx) {
             group_color(ui, doc, st, first);
         }
     }
-    if !any_summary {
-        if snap.milestone.is_none() {
-            ui.label(RichText::new("Milestone differs between the selection.").size(11.0).color(theme::pal().TEXT_WEAK));
-        }
-        let mut flag = snap.milestone.unwrap_or(false);
-        if ui.checkbox(&mut flag, "Mark as milestone").changed() {
+    if snap.milestone.is_none() {
+        ui.label(RichText::new(st.t("prop.milestone_differs")).size(11.0).color(theme::pal().TEXT_WEAK));
+    }
+    let mut flag = snap.milestone.unwrap_or(false);
+    // A group cannot be a milestone: the box stays visible but greyed (GUI.md).
+    if ui.add_enabled(!any_summary, egui::Checkbox::new(&mut flag, st.t("prop.milestone"))).changed() {
+        let ids = ids.clone();
+        edit(doc, st, "Milestone", move |p| {
+            for id in &ids {
+                if let Some(t) = p.task_mut(*id) {
+                    t.kind = if flag { TaskKind::Milestone } else { TaskKind::Task };
+                    if flag {
+                        t.duration = 0;
+                    }
+                }
+            }
+            Ok(())
+        });
+    }
+    label(ui, st.t("prop.duration"));
+    if any_summary {
+        // A group's span comes from its subtasks: visible but not editable.
+        derived_line(ui, derived_duration.as_deref().unwrap_or_else(|| st.t("common.multiple_lc")), st.t("prop.from_children"));
+    } else if milestone_only {
+        // A milestone is always 0: greyed rather than hidden.
+        derived_line(ui, snap.duration.as_deref().unwrap_or(""), st.t("prop.milestone_duration"));
+    } else if let Some(text) = line(ui, ("task_dur", first, multi), snap.duration.as_deref().unwrap_or(""), "") {
+        let ids = ids.clone();
+        edit(doc, st, "Duration", move |p| {
+            let (minutes, estimated) = p.parse_duration(&text).ok_or_else(|| format!("'{text}' is not a valid duration"))?;
+            for id in &ids {
+                p.set_duration(*id, minutes, estimated).map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        });
+    }
+    let start_minute = doc.project.settings.time.default_start_time;
+    let finish_minute = doc.project.settings.time.default_finish_time;
+    if milestone_only {
+        // A milestone is one moment, not a span.
+        label(ui, st.t("prop.moment"));
+        if let Some(Some(date)) = show_date(ui, &format!("task_start{first}"), snap.start, false, true, start_minute) {
             let ids = ids.clone();
-            edit(doc, st, "Milestone", move |p| {
+            edit(doc, st, "Start", move |p| set_picked_date(p, &ids, date, false));
+        }
+    } else {
+        // Summary dates are derived from the subtasks: shown greyed, not editable.
+        label(ui, st.t("prop.start"));
+        if let Some(Some(date)) = show_date(ui, &format!("task_start{first}"), snap.start, false, !any_summary, start_minute) {
+            let ids = ids.clone();
+            edit(doc, st, "Start", move |p| set_picked_date(p, &ids, date, false));
+        }
+        label(ui, st.t("prop.finish"));
+        if let Some(Some(date)) = show_date(ui, &format!("task_finish{first}"), snap.finish, false, !any_summary, finish_minute) {
+            let ids = ids.clone();
+            edit(doc, st, "Finish", move |p| set_picked_date(p, &ids, date, true));
+        }
+    }
+    date_bound(ui, doc, st, &ids, first, snap.start_earliest, Bound::StartEarliest, start_minute);
+    date_bound(ui, doc, st, &ids, first, snap.start_latest, Bound::StartLatest, start_minute);
+    fixed_box(ui, doc, st, &ids, st.t("prop.start_fixed"), snap.start_fixed, true, matches!(snap.start_latest, Some(Some(_))));
+    date_bound(ui, doc, st, &ids, first, snap.finish_earliest, Bound::FinishEarliest, finish_minute);
+    date_bound(ui, doc, st, &ids, first, snap.finish_latest, Bound::FinishLatest, finish_minute);
+    fixed_box(ui, doc, st, &ids, st.t("prop.finish_fixed"), snap.finish_fixed, false, matches!(snap.finish_latest, Some(Some(_))));
+    if share {
+        // Stretch and percent-of-group both size a share: setting one clears the other.
+        let mut stretch = snap.stretch.unwrap_or(false);
+        if ui.checkbox(&mut stretch, st.t("prop.stretch")).changed() {
+            let ids = ids.clone();
+            edit(doc, st, "Stretch", move |p| {
                 for id in &ids {
                     if let Some(t) = p.task_mut(*id) {
-                        t.kind = if flag { TaskKind::Milestone } else { TaskKind::Task };
-                        if flag {
-                            t.duration = 0;
+                        t.fills_group = stretch;
+                        if stretch {
+                            t.duration_percent = None;
                         }
                     }
                 }
                 Ok(())
             });
         }
-    }
-    if !any_summary {
-        label(ui, st.t("prop.duration"));
-        if let Some(text) = line(ui, ("task_dur", first, multi), snap.duration.as_deref().unwrap_or(""), "") {
-            let ids = ids.clone();
-            edit(doc, st, "Duration", move |p| {
-                let (minutes, estimated) = p.parse_duration(&text).ok_or_else(|| format!("'{text}' is not a valid duration"))?;
-                for id in &ids {
-                    p.set_duration(*id, minutes, estimated).map_err(|e| e.to_string())?;
-                }
-                Ok(())
-            });
-        }
-    }
-    let start_minute = doc.project.settings.time.default_start_time;
-    let finish_minute = doc.project.settings.time.default_finish_time;
-    label(ui, st.t("prop.start"));
-    if let Some(Some(date)) = show_date(ui, &format!("task_start{first}"), snap.start, false, start_minute) {
-        let ids = ids.clone();
-        edit(doc, st, "Start", move |p| set_picked_date(p, &ids, date, false));
-    }
-    label(ui, st.t("prop.finish"));
-    if let Some(Some(date)) = show_date(ui, &format!("task_finish{first}"), snap.finish, false, finish_minute) {
-        let ids = ids.clone();
-        edit(doc, st, "Finish", move |p| set_picked_date(p, &ids, date, true));
-    }
-    date_bound(ui, doc, st, &ids, first, snap.start_earliest, Bound::StartEarliest, start_minute);
-    date_bound(ui, doc, st, &ids, first, snap.start_latest, Bound::StartLatest, start_minute);
-    fixed_box(ui, doc, st, &ids, "Start no later than moves the plan", snap.start_fixed, true);
-    date_bound(ui, doc, st, &ids, first, snap.finish_earliest, Bound::FinishEarliest, finish_minute);
-    date_bound(ui, doc, st, &ids, first, snap.finish_latest, Bound::FinishLatest, finish_minute);
-    fixed_box(ui, doc, st, &ids, "Finish no later than moves the plan", snap.finish_fixed, false);
-    if share {
-        let mut stretch = snap.stretch.unwrap_or(false);
-        if ui.checkbox(&mut stretch, "Stretch to fill the group").changed() {
-            let ids = ids.clone();
-            edit(doc, st, "Stretch", move |p| {
-                for id in &ids {
-                    if let Some(t) = p.task_mut(*id) {
-                        t.fills_group = stretch;
-                    }
-                }
-                Ok(())
-            });
-        }
-        label(ui, "Percent of group");
-        if let Some(text) = line(ui, ("task_pct_group", first, multi), snap.percent_group.as_deref().unwrap_or(""), "none") {
+        label(ui, st.t("prop.percent_group"));
+        if let Some(text) = line(ui, ("task_pct_group", first, multi), snap.percent_group.as_deref().unwrap_or(""), st.t("common.none_lc"))
+        {
             let ids = ids.clone();
             edit(doc, st, "Percent of group", move |p| {
                 let pct = if text.trim().is_empty() {
@@ -266,6 +300,9 @@ fn task_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState) {
                 for id in &ids {
                     if let Some(t) = p.task_mut(*id) {
                         t.duration_percent = pct;
+                        if pct.is_some() {
+                            t.fills_group = false;
+                        }
                     }
                 }
                 Ok(())
@@ -277,32 +314,52 @@ fn task_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState) {
     label(ui, st.t("prop.resources"));
     if any_summary {
         let text = match snap.resources.as_deref() {
-            None => "meerdere",
-            Some(s) if s.trim().is_empty() => "geen",
+            None => st.t("common.multiple_lc"),
+            Some(s) if s.trim().is_empty() => st.t("common.none_lc"),
             Some(s) => s,
         };
-        ui.label(text).on_hover_text("A group's resources are the resources of its tasks");
+        ui.label(text).on_hover_text(st.t("prop.group_resources"));
     } else {
         resources(ui, doc, st, &ids, snap.resources.as_deref());
     }
     label(ui, st.t("prop.status"));
-    let status_label =
-        snap.status.map(crate::lang::status_name).unwrap_or(if multi { st.t("common.multiple") } else { st.t("status.not_started") });
-    egui::ComboBox::from_id_salt(("task_status", first, multi)).selected_text(status_label).show_ui(ui, |ui| {
-        for status in TaskStatus::ALL {
-            if ui.selectable_label(snap.status == Some(status), crate::lang::status_name(status)).clicked() && snap.status != Some(status) {
-                let ids = ids.clone();
-                edit(doc, st, "Status", move |p| {
-                    for id in &ids {
-                        p.set_task_status(*id, status).map_err(|e| e.to_string())?;
-                    }
-                    Ok(())
-                });
+    if any_summary {
+        // A group's status rolls up from its subtasks (SPECS.md): shown, not edited here.
+        let derived_status = common(ids.iter().filter_map(|id| doc.project.task(*id)).map(|t| {
+            let pct = t.sched.percent_complete;
+            crate::lang::status_name(if pct >= 100.0 {
+                TaskStatus::Done
+            } else if pct <= 0.0 {
+                TaskStatus::NotStarted
+            } else {
+                TaskStatus::Busy
+            })
+            .to_string()
+        }));
+        ui.label(derived_status.unwrap_or_else(|| st.t("common.multiple_lc").to_string())).on_hover_text(st.t("prop.from_children"));
+    } else {
+        let status_label =
+            snap.status.map(crate::lang::status_name).unwrap_or(if multi { st.t("common.multiple") } else { st.t("status.not_started") });
+        egui::ComboBox::from_id_salt(("task_status", first, multi)).selected_text(status_label).show_ui(ui, |ui| {
+            for status in TaskStatus::ALL {
+                if ui.selectable_label(snap.status == Some(status), crate::lang::status_name(status)).clicked()
+                    && snap.status != Some(status)
+                {
+                    let ids = ids.clone();
+                    edit(doc, st, "Status", move |p| {
+                        for id in &ids {
+                            p.set_task_status(*id, status).map_err(|e| e.to_string())?;
+                        }
+                        Ok(())
+                    });
+                }
             }
-        }
-    });
+        });
+    }
     label(ui, st.t("prop.percent"));
-    if let Some(text) = line(ui, ("task_pc", first, multi), snap.percent.as_deref().unwrap_or(""), "0") {
+    if any_summary {
+        derived_line(ui, derived_percent.as_deref().unwrap_or_else(|| st.t("common.multiple_lc")), st.t("prop.from_children"));
+    } else if let Some(text) = line(ui, ("task_pc", first, multi), snap.percent.as_deref().unwrap_or(""), "0") {
         let ids = ids.clone();
         edit(doc, st, "Percent complete", move |p| {
             let pct =
@@ -458,16 +515,20 @@ fn set_picked_date(p: &mut Project, ids: &[TaskId], date: DateTime, finish: bool
     Ok(())
 }
 
-fn show_date(ui: &mut Ui, salt: &str, value: Option<Option<DateTime>>, clearable: bool, minute: u32) -> Option<Option<DateTime>> {
+fn show_date(
+    ui: &mut Ui,
+    salt: &str,
+    value: Option<Option<DateTime>>,
+    clearable: bool,
+    enabled: bool,
+    minute: u32,
+) -> Option<Option<DateTime>> {
     let (current, empty) = match value {
-        None => (None, "meerdere"),
-        Some(None) => (None, "geen"),
-        Some(Some(dt)) => (Some(dt), "geen"),
+        None => (None, crate::lang::text("common.multiple_lc")),
+        Some(None) => (None, crate::lang::text("common.none_lc")),
+        Some(Some(dt)) => (Some(dt), crate::lang::text("common.none_lc")),
     };
-    crate::widgets::date_picker::button(
-        ui,
-        crate::widgets::date_picker::DateField { salt, current, clearable, enabled: true, minute, empty },
-    )
+    crate::widgets::date_picker::button(ui, crate::widgets::date_picker::DateField { salt, current, clearable, enabled, minute, empty })
 }
 
 fn date_bound(
@@ -481,7 +542,7 @@ fn date_bound(
     minute: u32,
 ) {
     label(ui, bound.label());
-    let Some(next) = show_date(ui, &format!("{}{first}", bound.label()), current, true, minute) else { return };
+    let Some(next) = show_date(ui, &format!("{}{first}", bound.label()), current, true, true, minute) else { return };
     let ids = ids.to_vec();
     let title = bound.label();
     edit(doc, st, title, move |p| {
@@ -499,9 +560,26 @@ fn date_bound(
     });
 }
 
-fn fixed_box(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], title: &str, current: Option<bool>, start: bool) {
+/// The "moves the plan" tick under its "no later than" date. It only means something once that
+/// date is set, so it is greyed (not hidden) without one, and indented to sit with its date.
+fn fixed_box(
+    ui: &mut Ui,
+    doc: &mut Document,
+    st: &mut UiState,
+    ids: &[TaskId],
+    title: &str,
+    current: Option<bool>,
+    start: bool,
+    has_date: bool,
+) {
     let mut on = current.unwrap_or(false);
-    if ui.checkbox(&mut on, title).changed() {
+    let changed = ui
+        .horizontal(|ui| {
+            ui.add_space(12.0);
+            ui.add_enabled(has_date, egui::Checkbox::new(&mut on, title)).changed()
+        })
+        .inner;
+    if changed {
         let ids = ids.to_vec();
         edit(doc, st, title, move |p| {
             for id in &ids {
@@ -517,7 +595,7 @@ fn fixed_box(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], 
         });
     }
     if current.is_none() {
-        ui.label(RichText::new("Differs between the selection. Ticking sets them all.").size(11.0).color(theme::pal().TEXT_WEAK));
+        ui.label(RichText::new(st.t("prop.differs")).size(11.0).color(theme::pal().TEXT_WEAK));
     }
 }
 
@@ -596,7 +674,7 @@ fn predecessors(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId
                         Ok(())
                     });
                 }
-                if ui.button("×").on_hover_text("Remove this predecessor").clicked() {
+                if ui.button("×").on_hover_text(crate::lang::text("prop.remove_predecessor")).clicked() {
                     edit(doc, st, "Remove predecessor", move |p| {
                         p.unlink(pred, first).map_err(|e| e.to_string())?;
                         Ok(())
@@ -605,7 +683,7 @@ fn predecessors(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId
             });
         }
     } else {
-        ui.label(RichText::new("Adds a finish-to-start link on each selected activity.").size(11.0).color(theme::pal().TEXT_WEAK));
+        ui.label(RichText::new(crate::lang::text("prop.add_fs")).size(11.0).color(theme::pal().TEXT_WEAK));
     }
     let choices: Vec<(TaskId, String)> = doc
         .project
@@ -615,7 +693,7 @@ fn predecessors(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId
         .filter(|(_, t)| ids.iter().all(|id| can_link(&doc.project, *id, t.id) && (multi || !already(&doc.project, *id, t.id))))
         .map(|(i, t)| (t.id, format!("{}  {}", i.saturating_add(1), t.name)))
         .collect();
-    egui::ComboBox::from_id_salt(("pred_add", first)).selected_text("Add predecessor").show_ui(ui, |ui| {
+    egui::ComboBox::from_id_salt(("pred_add", first)).selected_text(crate::lang::text("prop.add_predecessor")).show_ui(ui, |ui| {
         for (pred, title) in &choices {
             if ui.selectable_label(false, title).clicked() {
                 let pred = *pred;
@@ -636,12 +714,12 @@ fn predecessors(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId
 fn resources(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], summary: Option<&str>) {
     let Some(&first) = ids.first() else { return };
     let label = match summary {
-        None => "meerdere",
-        Some(text) if text.trim().is_empty() => "geen",
+        None => crate::lang::text("common.multiple_lc"),
+        Some(text) if text.trim().is_empty() => crate::lang::text("common.none_lc"),
         Some(text) => text,
     };
     let listed: Vec<(ResourceId, String)> = doc.project.resources.iter().map(|r| (r.id, r.name.clone())).collect();
-    let button = ui.button(label).on_hover_text("Assigned resources");
+    let button = ui.button(label).on_hover_text(crate::lang::text("prop.assigned"));
     egui::Popup::from_toggle_button_response(&button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_min_width(200.0);
         egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
@@ -657,7 +735,7 @@ fn resources(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], 
         });
         let typed_id = ui.id().with(("new_res", first));
         let mut typed = ui.ctx().data(|d| d.get_temp::<String>(typed_id)).unwrap_or_default();
-        let resp = ui.add(egui::TextEdit::singleline(&mut typed).hint_text("New resource"));
+        let resp = ui.add(egui::TextEdit::singleline(&mut typed).hint_text(crate::lang::text("prop.new_resource")));
         if resp.lost_focus() && !typed.trim().is_empty() {
             let name = typed.trim().to_string();
             ui.ctx().data_mut(|d| d.insert_temp(typed_id, String::new()));
@@ -673,7 +751,7 @@ fn resources(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], 
 }
 
 fn group_color(ui: &mut Ui, doc: &mut Document, st: &mut UiState, id: TaskId) {
-    label(ui, "Group color");
+    label(ui, st.t("prop.group_color"));
     let current = doc.project.task(id).and_then(|t| t.bar_color);
     ui.horizontal(|ui| {
         for rgb in theme::GROUP_SWATCHES {
@@ -692,7 +770,7 @@ fn group_color(ui: &mut Ui, doc: &mut Document, st: &mut UiState, id: TaskId) {
                 });
             }
         }
-        if ui.button("Clear").clicked() {
+        if ui.button(st.t("common.clear")).clicked() {
             edit(doc, st, "Group color", move |p| {
                 if let Some(t) = p.task_mut(id) {
                     t.bar_color = None;

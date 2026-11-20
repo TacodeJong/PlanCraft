@@ -281,6 +281,8 @@ pub struct PrintJob<'a> {
     pub printed: DateTime,
     pub palette: Palette,
     pub legend: LegendWords,
+    /// Day and month names in the interface language (dates themselves stay `dd-mm-yyyy`).
+    pub names: crate::dates::DateNames,
 }
 
 /// One vertical slice of the printout: some table columns and/or a stretch of the timescale.
@@ -354,14 +356,14 @@ fn date_range(job: &PrintJob) -> (DateTime, DateTime) {
 
 /// Replaces header and footer codes.
 pub(crate) fn fill_codes(s: &str, p: &Project, view: &str, printed: DateTime, page: usize, pages: usize) -> String {
-    let day = |d: Option<DateTime>| d.map(|d| d.format("%a %m/%d/%y").to_string()).unwrap_or_default();
+    let day = |d: Option<DateTime>| d.map(|d| crate::dates::dmy(d.date())).unwrap_or_default();
     let value = |code: &str| -> Option<String> {
         Some(match code {
             "Project" => p.name.clone(),
             "Manager" => p.manager.clone(),
             "Company" => p.company.clone(),
             "View" => view.to_string(),
-            "Date" => printed.format("%b %-d, %Y").to_string(),
+            "Date" => crate::dates::dmy(printed.date()),
             "Pages" => pages.to_string(),
             "Page" => page.to_string(),
             "Start" => day(p.sched.start.or(Some(p.start))),
@@ -481,7 +483,7 @@ impl Chart<'_> {
                 }
                 let (x0, x1) = (self.x(r.x, off, t), self.x(r.x, off, n));
                 vline(out, x0, y0, y1, Stroke::new(0.5, pal.grid_strong));
-                let label = unit.label(t, x1 - x0);
+                let label = unit.label(t, x1 - x0, &self.job.names);
                 // Labels of units cut by the page edge are kept to the visible part.
                 let vis = Rect::new(x0.max(r.x), y0, (x1.min(r.right()) - x0.max(r.x)).max(0.0), y1 - y0);
                 boxed_text(out, vis, &label, SMALL, pal.text, false, Align::Center);
@@ -840,7 +842,7 @@ fn legend(out: &mut Vec<Item>, job: &PrintJob, opts: &ChartOptions, r: Rect) {
     boxed_text(
         out,
         Rect::new(r.x, r.y + 20.0, left_w, 14.0),
-        &format!("{}: {}", job.legend.date, job.printed.format("%a %m/%d/%y")),
+        &format!("{}: {}", job.legend.date, crate::dates::dmy(job.printed.date())),
         TEXT,
         pal.text,
         false,
@@ -1232,7 +1234,7 @@ impl Frame {
 
 /// The default printed task table: what agents print with `export_pdf`.
 pub fn task_sheet(p: &Project, with_chart: bool) -> Sheet {
-    let day = |d: Option<DateTime>| d.map(|d| d.format("%a %m/%d/%y").to_string()).unwrap_or_else(|| "NA".into());
+    let day = |d: Option<DateTime>| d.map(|d| crate::dates::dmy(d.date())).unwrap_or_else(|| "NA".into());
     let mut columns = vec![
         PrintColumn { title: "ID".into(), width: 24.0, align: Align::Right },
         PrintColumn { title: "Task Name".into(), width: if with_chart { 180.0 } else { 220.0 }, align: Align::Left },
@@ -1287,6 +1289,7 @@ mod tests {
             printed: crate::dates::ymd(2026, 11, 12).unwrap().and_hms_opt(9, 0, 0).unwrap(),
             palette: Palette::default(),
             legend: LegendWords::english(),
+            names: crate::dates::NAMES_EN,
         }
     }
 

@@ -100,7 +100,7 @@ fn time_label(t: Timestamp, with_time: bool) -> String {
     } else if today.signed_duration_since(d).num_days() == 1 {
         format!("Yesterday{time}")
     } else {
-        format!("{}{time}", dt.format("%b %-d, %Y"))
+        format!("{}{time}", plancraft_core::dates::dmy(d))
     }
 }
 

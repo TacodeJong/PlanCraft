@@ -419,7 +419,13 @@ impl PlanCraftApp {
         // Find fonts for other scripts (Chinese, Hebrew, ...) while the window opens.
         plancraft_core::print::fallback::warm_up();
         let has_doc = !lock(&ws).docs.is_empty();
-        let st = UiState { table_width: settings.table_width, start_page: !has_doc, lang: settings.lang, ..UiState::default() };
+        let st = UiState {
+            table_width: settings.table_width,
+            start_page: !has_doc,
+            lang: settings.lang,
+            columns: settings.columns.clone(),
+            ..UiState::default()
+        };
         crate::lang::set_current(settings.lang);
         let mut app = Self {
             ws,
@@ -1257,8 +1263,9 @@ impl PlanCraftApp {
                 } else if let Some(r) = doc.project.task_index(id) {
                     let rows = views::visible_rows(&doc.project, st);
                     if let Some(row) = views::row_of_task(&rows, r) {
-                        // The plan's own columns: Name may have been moved, or columns inserted.
-                        let name_col = crate::fields::table_fields(&doc.project, st.table)
+                        // The columns as rendered: Name may have been moved, columns inserted,
+                        // or some switched off in the Columns menu.
+                        let name_col = crate::fields::visible_fields(&doc.project, st.table, st.columns.get(st.table.label()))
                             .iter()
                             .position(|f| *f == crate::fields::Field::Builtin(crate::columns::TaskCol::Name))
                             .unwrap_or(0);
@@ -1644,30 +1651,71 @@ impl PlanCraftApp {
             }
             Command::ExpandAll => st.collapsed.clear(),
             Command::ToggleHighlightPaths => st.gantt.show_paths = !st.gantt.show_paths,
+            Command::ToggleColumn(key) => {
+                // This user's column choice (the Columns menu): saved with the app settings,
+                // like the theme and language; the plan's shared layout is untouched.
+                let table = self.st.table;
+                let choice = self.st.columns.entry(table.label().to_string()).or_default();
+                crate::fields::toggle_column(&doc.project, table, choice, &key);
+                if choice.is_empty() {
+                    self.st.columns.remove(table.label());
+                }
+                self.settings.columns = self.st.columns.clone();
+                self.settings.save();
+            }
             Command::InsertColumn { .. } | Command::HideColumn(_) | Command::MoveColumn { .. } | Command::ResetColumns => {
-                let table = st.table;
+                let table = self.st.table;
                 let before = crate::fields::table_fields(&doc.project, table);
+                // The commands carry positions in the table as rendered, which the Columns menu
+                // may have thinned out: map them back to the layout through the field itself.
+                let rendered = crate::fields::visible_fields(&doc.project, table, self.st.columns.get(table.label()));
                 let mut cols = before.clone();
+                let mut unhide = None;
                 match &cmd {
                     Command::InsertColumn { at, key } => {
                         let Some(field) = crate::fields::Field::from_key(&doc.project, key) else {
-                            return st.toast(ToastKind::Warning, "that field no longer exists");
+                            return self.st.toast(ToastKind::Warning, "that field no longer exists");
                         };
+                        let anchor = rendered.get(*at).copied();
                         cols.retain(|f| *f != field);
-                        cols.insert((*at).min(cols.len()), field);
+                        let pos = anchor.and_then(|a| cols.iter().position(|f| *f == a)).unwrap_or(cols.len());
+                        cols.insert(pos, field);
+                        // Inserting a column this user had switched off switches it back on.
+                        unhide = Some(key.clone());
                     }
-                    Command::HideColumn(at) if cols.len() > 1 && *at < cols.len() => {
-                        cols.remove(*at);
-                    }
+                    Command::HideColumn(at) if rendered.len() > 1 => match rendered.get(*at) {
+                        Some(f) if before.contains(f) && cols.len() > 1 => cols.retain(|c| c != f),
+                        Some(f) => {
+                            // Not in the plan's layout: it was switched on in the Columns menu,
+                            // so hiding it switches it off there instead of editing the plan.
+                            let key = f.key();
+                            let choice = self.st.columns.entry(table.label().to_string()).or_default();
+                            crate::fields::toggle_column(&doc.project, table, choice, &key);
+                            if choice.is_empty() {
+                                self.st.columns.remove(table.label());
+                            }
+                            self.settings.columns = self.st.columns.clone();
+                            self.settings.save();
+                            return;
+                        }
+                        None => {}
+                    },
                     Command::MoveColumn { at, right } => {
                         let to = if *right { at.saturating_add(1) } else { at.saturating_sub(1) };
-                        if *at < cols.len() && to < cols.len() {
-                            cols.swap(*at, to);
+                        if let (Some(a), Some(b)) = (rendered.get(*at), rendered.get(to))
+                            && let (Some(ia), Some(ib)) = (cols.iter().position(|f| f == a), cols.iter().position(|f| f == b))
+                        {
+                            cols.swap(ia, ib);
                         }
                     }
                     _ => {}
                 }
                 let reset = cmd == Command::ResetColumns;
+                // Reset also clears this user's on/off choice (it needs no plan edit).
+                if reset && self.st.columns.remove(table.label()).is_some() {
+                    self.settings.columns = self.st.columns.clone();
+                    self.settings.save();
+                }
                 // Nothing to change: no undo step, and the plan stays unmodified.
                 if (reset && doc.project.table_layout(table.label()).is_none()) || (!reset && cols == before) {
                     return;
@@ -1679,8 +1727,22 @@ impl PlanCraftApp {
                         crate::fields::save_columns(p, table, &cols)
                     }
                 });
-                if let Err(e) = r {
-                    st.toast(ToastKind::Warning, e);
+                match r {
+                    Err(e) => self.st.toast(ToastKind::Warning, e),
+                    Ok(()) => {
+                        // An inserted column becomes visible for this user again.
+                        if let (Some(key), Some(choice)) = (unhide, self.st.columns.get_mut(table.label())) {
+                            let n = choice.hidden.len();
+                            choice.hidden.retain(|k| k != &key);
+                            if choice.hidden.len() != n {
+                                if choice.is_empty() {
+                                    self.st.columns.remove(table.label());
+                                }
+                                self.settings.columns = self.st.columns.clone();
+                                self.settings.save();
+                            }
+                        }
+                    }
                 }
             }
             Command::CustomFields => {
@@ -1712,6 +1774,9 @@ impl PlanCraftApp {
                     .collect()
             })
             .unwrap_or_default();
+        let columns = doc
+            .map(|d| crate::fields::column_choices(&d.project, self.st.table, self.st.columns.get(self.st.table.label())))
+            .unwrap_or_default();
         MenuInfo {
             has_doc: doc.is_some(),
             title: doc.map(|d| d.title()).unwrap_or_default(),
@@ -1724,6 +1789,7 @@ impl PlanCraftApp {
             mcp_url: self.mcp.url(),
             history_open: self.dialogs.history,
             fields,
+            columns,
         }
     }
 
@@ -3585,6 +3651,57 @@ mod ui_tests {
         h.run_steps(2);
         let ws = h.state().ws.lock().unwrap();
         assert_eq!(table_fields(&ws.active_doc().unwrap().project, crate::columns::TaskTable::Entry), before);
+    }
+
+    /// The Columns menu: switching a column off removes it from the rendered table, never the
+    /// name, and the choice goes to the app settings (not the plan) and survives a round trip.
+    #[test]
+    fn column_chooser_hides_a_column_and_survives_a_settings_round_trip() {
+        let mut h = harness();
+        h.run_steps(2);
+        let ctx = h.ctx.clone();
+        let visible = |h: &Harness<'static, PlanCraftApp>| -> Vec<String> {
+            let ws = h.state().ws.lock().unwrap();
+            let p = &ws.active_doc().unwrap().project;
+            let st = &h.state().st;
+            crate::fields::visible_fields(p, st.table, st.columns.get(st.table.label())).iter().map(crate::fields::Field::key).collect()
+        };
+        let before = visible(&h);
+        assert!(before.contains(&"duration".to_string()));
+
+        h.state_mut().exec(&ctx, Command::ToggleColumn("duration".into()));
+        h.run_steps(2);
+        let after = visible(&h);
+        assert!(!after.contains(&"duration".to_string()), "{after:?}");
+        assert_eq!(h.state().st.task_grid.widths.len(), after.len(), "the table rendered without the hidden column");
+        assert!(!h.state().ws.lock().unwrap().active_doc().unwrap().dirty, "a personal choice does not change the plan");
+
+        // The extras: a column the layout does not have (the new Status column) can be added.
+        h.state_mut().exec(&ctx, Command::ToggleColumn("status".into()));
+        h.run_steps(2);
+        assert_eq!(visible(&h).last().map(String::as_str), Some("status"));
+
+        // The name column cannot be switched off.
+        h.state_mut().exec(&ctx, Command::ToggleColumn("name".into()));
+        assert!(visible(&h).contains(&"name".to_string()));
+
+        // The choice is saved with the app settings and survives a round trip of the file.
+        let settings = &h.state().settings;
+        let choice = settings.columns.get(crate::columns::TaskTable::Entry.label()).unwrap();
+        assert_eq!(
+            (choice.hidden.as_slice(), choice.extra.as_slice()),
+            (["duration".to_string()].as_slice(), ["status".to_string()].as_slice())
+        );
+        let text = serde_json::to_string(settings).unwrap();
+        let back: crate::settings::AppSettings = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.columns, settings.columns);
+
+        // Toggling back restores the defaults and empties the stored choice.
+        h.state_mut().exec(&ctx, Command::ToggleColumn("duration".into()));
+        h.state_mut().exec(&ctx, Command::ToggleColumn("status".into()));
+        h.run_steps(2);
+        assert_eq!(visible(&h), before);
+        assert!(h.state().settings.columns.is_empty());
     }
 
     #[test]
