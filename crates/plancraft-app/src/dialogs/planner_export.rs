@@ -1,4 +1,8 @@
 //! Export the open plan to Microsoft Planner (Plan 1+ PSS or basic Graph board).
+//!
+//! Tenant / client / Dataverse URL are pasted once on this computer and stored only in local
+//! settings (never in the project or git). Refresh tokens and optional client secrets use the
+//! OS keyring.
 
 use std::sync::mpsc::Receiver;
 use std::thread;
@@ -19,6 +23,9 @@ enum Job {
     Export(Receiver<Result<ExportOutcome, String>>),
 }
 
+const DELEGATED_PERMISSIONS: &str =
+    "Microsoft Graph (delegated): Tasks.ReadWrite, Group.ReadWrite.All, User.Read\nDataverse / Dynamics CRM (delegated): user_impersonation";
+
 pub struct PlannerExport {
     target: ExportTarget,
     group_id: String,
@@ -30,6 +37,7 @@ pub struct PlannerExport {
     result: Option<String>,
     warnings: Vec<String>,
     signed_in: bool,
+    copied_hint: Option<&'static str>,
     job: Job,
 }
 
@@ -46,6 +54,7 @@ impl Default for PlannerExport {
             result: None,
             warnings: Vec::new(),
             signed_in: planner_export::signed_in(),
+            copied_hint: None,
             job: Job::Idle,
         }
     }
@@ -55,71 +64,155 @@ impl PlannerExport {
     pub fn show(&mut self, ctx: &Context, doc: &Document, settings: &mut AppSettings, toasts: &mut Vec<String>) -> bool {
         self.poll(ctx, settings, toasts);
         let mut open = true;
+        let connection_ready = connection_ready(settings);
         egui::Window::new(t("planner.title"))
             .id(egui::Id::new("planner_export"))
             .title_bar(false)
-            .default_width(520.0)
+            .default_width(540.0)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.set_min_width(480.0);
+                ui.set_min_width(500.0);
                 if !crate::widgets::craft::dialog_header(ui, t("planner.title")) {
                     open = false;
                 }
                 ui.label(t("planner.explain"));
                 ui.add_space(6.0);
 
+                // Sign-in first: the user should not feel they must register Entra here.
                 ui.horizontal(|ui| {
-                    ui.label(t("planner.tenant"));
-                    if ui.add(egui::TextEdit::singleline(&mut settings.planner.tenant_id).desired_width(280.0)).changed() {
-                        settings.save();
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label(t("planner.client"));
-                    if ui.add(egui::TextEdit::singleline(&mut settings.planner.client_id).desired_width(280.0)).changed() {
-                        settings.save();
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label(t("planner.org"));
-                    if ui
-                        .add(
-                            egui::TextEdit::singleline(&mut settings.planner.dataverse_org_url)
-                                .hint_text("https://org.crm4.dynamics.com")
-                                .desired_width(280.0),
-                        )
-                        .changed()
-                    {
-                        settings.save();
-                    }
-                });
-                ui.label(RichText::new(t("planner.org_hint")).small().color(theme::pal().TEXT_WEAK));
-
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.label(t("planner.secret"));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.secret_paste)
-                            .password(true)
-                            .hint_text(t("planner.secret_hint"))
-                            .desired_width(200.0),
-                    );
-                    if ui.button(t("distill.save")).clicked() && !self.secret_paste.trim().is_empty() {
-                        match planner_export::store_client_secret(&self.secret_paste) {
-                            Ok(()) => {
-                                self.secret_paste.clear();
-                                self.status = Some(t("planner.secret_saved").into());
-                                self.error = None;
-                            }
-                            Err(e) => self.error = Some(e),
+                    if self.signed_in {
+                        ui.label(RichText::new(t("planner.signed_in")).color(theme::pal().OK));
+                        if ui.add_enabled(!self.busy(), egui::Button::new(t("planner.sign_out"))).clicked() {
+                            let _ = planner_export::sign_out();
+                            self.signed_in = false;
+                            self.device = None;
+                        }
+                    } else {
+                        let sign_in = ui.add_enabled(!self.busy() && connection_ready, egui::Button::new(t("planner.sign_in")));
+                        if sign_in.clicked() {
+                            self.start_sign_in(settings);
+                        }
+                        if !connection_ready {
+                            ui.label(RichText::new(t("planner.need_connection")).small().color(theme::pal().TEXT_WEAK));
                         }
                     }
-                    if ui.button(t("distill.remove")).clicked() {
-                        let _ = planner_export::delete_client_secret();
-                        self.secret_paste.clear();
+                    if ui
+                        .add_enabled(self.signed_in && !self.busy() && self.can_export(settings), egui::Button::new(t("planner.export")))
+                        .clicked()
+                    {
+                        self.start_export(doc, settings);
+                    }
+                    if self.busy() {
+                        ui.spinner();
+                        if let Some(status) = &self.status {
+                            ui.label(status);
+                        }
                     }
                 });
-                ui.label(RichText::new(t("planner.key_where")).small().color(theme::pal().TEXT_WEAK));
+
+                if let Some(device) = &self.device {
+                    ui.separator();
+                    ui.label(RichText::new(&device.message).strong());
+                    ui.label(format!("{}: {}", t("planner.user_code"), device.user_code));
+                    ui.hyperlink_to(&device.verification_uri, &device.verification_uri);
+                    if ui.button(t("planner.open_login")).clicked() {
+                        open_url(&device.verification_uri);
+                    }
+                }
+
+                ui.add_space(8.0);
+                egui::CollapsingHeader::new(t("planner.connection"))
+                    .default_open(!connection_ready)
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(t("planner.connection.intro")).small().color(theme::pal().TEXT_WEAK));
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.label(t("planner.tenant"));
+                            if ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut settings.planner.tenant_id)
+                                        .hint_text(t("planner.tenant_hint"))
+                                        .desired_width(280.0),
+                                )
+                                .changed()
+                            {
+                                settings.save();
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(t("planner.client"));
+                            if ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut settings.planner.client_id)
+                                        .hint_text(t("planner.client_hint"))
+                                        .desired_width(280.0),
+                                )
+                                .changed()
+                            {
+                                settings.save();
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(t("planner.org"));
+                            if ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut settings.planner.dataverse_org_url)
+                                        .hint_text("https://org.crm4.dynamics.com")
+                                        .desired_width(280.0),
+                                )
+                                .changed()
+                            {
+                                settings.save();
+                            }
+                        });
+                        ui.label(RichText::new(t("planner.org_hint")).small().color(theme::pal().TEXT_WEAK));
+
+                        ui.add_space(4.0);
+                        egui::CollapsingHeader::new(t("planner.advanced")).default_open(false).show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(t("planner.secret"));
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.secret_paste)
+                                        .password(true)
+                                        .hint_text(t("planner.secret_hint"))
+                                        .desired_width(200.0),
+                                );
+                                if ui.button(t("distill.save")).clicked() && !self.secret_paste.trim().is_empty() {
+                                    match planner_export::store_client_secret(&self.secret_paste) {
+                                        Ok(()) => {
+                                            self.secret_paste.clear();
+                                            self.status = Some(t("planner.secret_saved").into());
+                                            self.error = None;
+                                        }
+                                        Err(e) => self.error = Some(e),
+                                    }
+                                }
+                                if ui.button(t("distill.remove")).clicked() {
+                                    let _ = planner_export::delete_client_secret();
+                                    self.secret_paste.clear();
+                                }
+                            });
+                            ui.label(RichText::new(t("planner.key_where")).small().color(theme::pal().TEXT_WEAK));
+                        });
+                    });
+
+                ui.add_space(4.0);
+                egui::CollapsingHeader::new(t("planner.setup")).default_open(false).show(ui, |ui| {
+                    ui.label(t("planner.setup.intro"));
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(t("planner.setup.steps")).small());
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(t("planner.setup.blocked")).small().color(theme::pal().WARN));
+                    ui.horizontal(|ui| {
+                        if ui.button(t("planner.setup.copy_perms")).clicked() {
+                            ui.ctx().copy_text(DELEGATED_PERMISSIONS.to_string());
+                            self.copied_hint = Some(t("planner.setup.copied"));
+                        }
+                        if let Some(hint) = self.copied_hint {
+                            ui.label(RichText::new(hint).small().color(theme::pal().OK));
+                        }
+                    });
+                });
 
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -165,7 +258,7 @@ impl PlannerExport {
                     });
                 }
 
-                ui.add_space(8.0);
+                ui.add_space(6.0);
                 let preview = planner_export::build_export(&doc.project, self.target);
                 ui.label(RichText::new(format!(
                     "{} · {} tasks · {} deps · {} people",
@@ -174,42 +267,6 @@ impl PlannerExport {
                     preview.dependencies.len(),
                     preview.people.len()
                 )));
-
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    if self.signed_in {
-                        ui.label(RichText::new(t("planner.signed_in")).color(theme::pal().OK));
-                        if ui.add_enabled(!self.busy(), egui::Button::new(t("planner.sign_out"))).clicked() {
-                            let _ = planner_export::sign_out();
-                            self.signed_in = false;
-                            self.device = None;
-                        }
-                    } else if ui.add_enabled(!self.busy(), egui::Button::new(t("planner.sign_in"))).clicked() {
-                        self.start_sign_in(settings);
-                    }
-                    if ui
-                        .add_enabled(self.signed_in && !self.busy() && self.can_export(settings), egui::Button::new(t("planner.export")))
-                        .clicked()
-                    {
-                        self.start_export(doc, settings);
-                    }
-                    if self.busy() {
-                        ui.spinner();
-                        if let Some(status) = &self.status {
-                            ui.label(status);
-                        }
-                    }
-                });
-
-                if let Some(device) = &self.device {
-                    ui.separator();
-                    ui.label(RichText::new(&device.message).strong());
-                    ui.label(format!("{}: {}", t("planner.user_code"), device.user_code));
-                    ui.hyperlink_to(&device.verification_uri, &device.verification_uri);
-                    if ui.button(t("planner.open_login")).clicked() {
-                        open_url(&device.verification_uri);
-                    }
-                }
 
                 if let Some(err) = &self.error {
                     ui.label(RichText::new(err).color(theme::pal().ERROR));
@@ -237,7 +294,7 @@ impl PlannerExport {
     }
 
     fn can_export(&self, settings: &AppSettings) -> bool {
-        if settings.planner.tenant_id.trim().is_empty() || settings.planner.client_id.trim().is_empty() {
+        if !connection_ready(settings) {
             return false;
         }
         match self.target {
@@ -360,6 +417,10 @@ impl PlannerExport {
         self.status = None;
         self.error = Some(err);
     }
+}
+
+fn connection_ready(settings: &AppSettings) -> bool {
+    !settings.planner.tenant_id.trim().is_empty() && !settings.planner.client_id.trim().is_empty()
 }
 
 fn t(key: &'static str) -> &'static str {

@@ -2,7 +2,7 @@
 
 Sanitized integration notes for PlanCraft → Microsoft Planner. Derived from a tenant probe (2026-11-20). **No credentials, client secrets, refresh tokens, or private keys belong in this file or in git.**
 
-Status: MVP implemented in `plancraft-app` (`planner_export` module, File → Export to Microsoft Planner). Auth uses device code + keyring; no secrets in git.
+Status: MVP implemented in `plancraft-app` (`planner_export` module, File → Export to Microsoft Planner). Auth uses device code + local settings / keyring. **No tenant id, client id, secret, or token in git.**
 
 ---
 
@@ -87,15 +87,60 @@ Basic board-only (non-MVP): group membership → plan → buckets → tasks/assi
 
 ---
 
-## Entra delegated auth flow
+## Sign in on this computer (end-user path)
 
-1. **App registration** in the customer Entra tenant (public client preferred for a desktop app; confidential client only if a secret is required).
-2. **Delegated** permissions (basic Graph): at least `Tasks.ReadWrite` and `Group.ReadWrite.All`. Application permission `Tasks.ReadWrite.All` can create basic tasks but **cannot** call the premium schedule API.
-3. User signs in (authorization code + PKCE, or device code). Caller must be a work/school member of the tenant, hold **Planner Plan 1+**, and be a member of the target M365 group (creating a group does not add the creator).
-4. Use the Graph access token for Graph calls. For premium PSS, acquire a **separate** token for the Dataverse org audience.
-5. Refresh as needed; never log raw tokens.
+PlanCraft uses the **device-code** flow. **No tenant id, client id, org URL, secret, or token belongs in git or in the project file.** PlanCraft does **not** ship a baked-in Entra client id.
 
-Microsoft schedule-API rules exclude application users, system users, and integration users for the premium path.
+On the machine where Microsoft login works in a browser:
+
+1. **File → Export to Microsoft Planner**
+2. Open **Connection on this computer** and paste (once) the **Directory (tenant) id** and **Application (client) id** you got from IT (or an existing public client). Optionally set the Dataverse org URL for Plan 1+.
+3. Click **Sign in with Microsoft…** → open the device-login page → enter the code → finish with your work account.
+4. Choose target (Plan 1+ or basic board) → **Export**.
+
+Connection ids are written only to this computer’s PlanCraft `settings.json` (app config directory). Refresh tokens and optional client secrets go to the OS keyring.
+
+Tenant field accepts a Directory (tenant) GUID, or the special host segment `organizations` when IT gave you a multi-tenant public client.
+
+### Run on another machine
+
+If this Mac cannot complete Microsoft login, build (or copy) PlanCraft where login works:
+
+```bash
+cd plancraft
+cargo build --release -p plancraft-app
+# binary: target/release/plancraft  (links only to system frameworks on macOS)
+```
+
+Copy `target/release/plancraft` to the other Mac (same architecture / recent macOS), or clone and `cargo build --release` there. Paste connection ids and **Sign in with Microsoft…** only on that machine. Do not copy `settings.json` or keychain items into the repo.
+
+### What IT must provide (once per organisation)
+
+End users should not register Entra apps from PlanCraft. An admin (or someone with Application Developer) creates **one** public client and sends the two identifiers:
+
+Portal: [Entra → App registrations](https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade)
+
+1. **New registration** — single-tenant is enough for one company; leave **Redirect URI blank** (device code).
+2. **Authentication** → **Allow public client flows** = **Yes**.
+3. **API permissions** (all **Delegated**):
+
+   | API | Permission | Why |
+   | --- | --- | --- |
+   | Microsoft Graph | `Tasks.ReadWrite` | Planner tasks (basic board) |
+   | Microsoft Graph | `Group.ReadWrite.All` | Plans owned by an M365 group |
+   | Microsoft Graph | `User.Read` | Usually already present |
+   | Dynamics CRM / Dataverse | `user_impersonation` | Plan 1+ / PSS (dependencies) |
+
+4. **Grant admin consent** (`Group.ReadWrite.All` almost always needs it).
+5. Send the user the **Directory (tenant) ID** and **Application (client) ID**. No client secret for a public client.
+
+Reuse an existing public client with those permissions if one already exists. Application permission `Tasks.ReadWrite.All` cannot drive Plan 1+ PSS.
+
+### Runtime notes
+
+1. Caller should be a work/school member, hold **Planner Plan 1+** for dependencies, and be a member of the target M365 group.
+2. Graph uses the Graph token; premium PSS uses a **separate** token for the Dataverse org audience (`{orgUrl}/.default`).
+3. Never log raw tokens. Schedule APIs exclude application / system / integration users.
 
 ---
 
@@ -103,21 +148,18 @@ Microsoft schedule-API rules exclude application users, system users, and integr
 
 | Value | Classification | Storage |
 | --- | --- | --- |
-| Tenant id | Non-secret config (identifier) | User/settings or env — **not** a credential |
-| Application (client) id | Public | Config / settings |
-| Redirect URI, scopes, Graph/Dataverse hosts | Public | Source or config OK |
-| Client **secret** (confidential client only) | **Secret** | OS keyring via `keyring` crate — **never** source, docs, or BACKLOG |
-| Refresh token / access token | **Secret** | Keyring (same pattern as Distill Plan API keys) |
-| Dataverse org URL | Non-secret config | Settings after discovery |
-| User password / private keys | **Secret** | Never stored by the app; interactive auth only |
+| Tenant id | Identifier | **Local** `settings.json` only — **never git** |
+| Application (client) id | Public identifier | **Local** `settings.json` only — **never git** (not shipped as a PlanCraft default) |
+| Dataverse org URL | Non-secret | Local settings |
+| Redirect URI, scopes, Graph/Dataverse **host patterns** | Public | Docs / source OK (no org-specific ids) |
+| Client **secret** (confidential client only) | **Secret** | OS keyring — **never** source, docs, or BACKLOG |
+| Refresh token / access token | **Secret** | Keyring |
+| User password / private keys | **Secret** | Never stored; interactive auth only |
 
 ### Keyring pattern (match Distill Plan)
 
-Distill Plan already stores provider API keys with the `keyring` crate (`service` + `account`, load/store/delete, scrub secrets from error strings). Planner export should reuse that approach:
-
-- Service name under the PlanCraft keyring service family (e.g. account keys for `planner.refresh_token`, optional `planner.client_secret`).
-- Nothing written to `settings.json`, project files, or git.
-- UI may show “configured” or a short tail; never the full secret.
+- Service name under the PlanCraft keyring family (`planner.refresh_token`, optional `planner.client_secret`).
+- Tokens/secrets never in `settings.json`, project files, or git.
 - Scrub secrets from logs and error messages before display.
 
 ---

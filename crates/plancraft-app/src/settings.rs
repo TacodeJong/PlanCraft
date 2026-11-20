@@ -119,14 +119,17 @@ impl Default for AiSettings {
     }
 }
 
-/// Microsoft Planner export. Tenant / client / org URLs are identifiers, not secrets.
-/// Refresh tokens and optional client secrets live in the OS keyring only.
+/// Microsoft Planner export connection (local machine only).
+///
+/// Tenant / client / org URLs are identifiers stored in this computer's `settings.json`
+/// (app config dir) — never in the project file or in git. Refresh tokens and optional
+/// client secrets live in the OS keyring only. PlanCraft does not ship tenant or client ids.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PlannerSettings {
-    /// Entra tenant id (GUID).
+    /// Entra tenant id (GUID) or special host segment such as `organizations`. Local only.
     pub tenant_id: String,
-    /// App registration (public client) application id.
+    /// App registration (public client) application id. Pasted once; local only.
     pub client_id: String,
     /// Dataverse organisation URL for Plan 1+ / PSS, e.g. `https://org.crm4.dynamics.com`.
     pub dataverse_org_url: String,
