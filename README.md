@@ -14,20 +14,20 @@
   <img alt="100% Rust" src="https://img.shields.io/badge/100%25-Rust-b7410e?style=flat-square&logo=rust">
   <img alt="Windows · macOS · Linux" src="https://img.shields.io/badge/Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-native-1B3A8C?style=flat-square">
   <img alt="License: CC0 1.0" src="https://img.shields.io/badge/license-CC0%201.0-3a3a3a?style=flat-square">
-  <img alt="Status: early preview" src="https://img.shields.io/badge/status-early%20preview-F2B11C?style=flat-square">
+  <img alt="Version 0.8.0" src="https://img.shields.io/badge/version-0.8.0-1B3A8C?style=flat-square">
+  <img alt="Fork of PlanCraft 0.7.0" src="https://img.shields.io/badge/fork%20of-PlanCraft%200.7.0-3a3a3a?style=flat-square">
 </p>
 
 <p align="center">
-  <a href="#download"><b>Download</b></a> ·
+  <a href="#this-fork"><b>This fork</b></a> ·
+  <a href="#download">Download</a> ·
   <a href="#features">Features</a> ·
   <a href="#getting-started">Get started</a> ·
   <a href="#planning-with-an-ai-assistant">AI assistants</a> ·
   <a href="#your-plans-are-safe">Your plans are safe</a>
 </p>
 
-<p align="center">
-  <a href="https://github.com/rallegretti/PlanCraft/releases/latest"><b>⬇ Download PlanCraft for Windows, macOS or Linux</b></a>
-</p>
+> **Fork notice.** This is **TacodeJong/PlanCraft** v0.8.0 — a Project Planner–oriented fork of [rallegretti/PlanCraft](https://github.com/rallegretti/PlanCraft) v0.7.0. See [docs/FORK.md](docs/FORK.md) for what changed and how to track upstream.
 
 <br>
 
@@ -56,9 +56,15 @@
 
 <br>
 
+## This fork
+
+Built for opening Project Planner documents in PlanCraft, scheduling them with Merlin-style stretch/span rules and dual date bounds, and carrying over UI and reporting work that stock 0.7.0 did not have: properties pane, Overview, Deliveries, EN/NL UI, ArtCraft chrome, native macOS menus, Excel/Task Usage exports, Distill Plan, and more. Details: [docs/FORK.md](docs/FORK.md).
+
+Upstream PlanCraft remains the original project: [rallegretti/PlanCraft](https://github.com/rallegretti/PlanCraft).
+
 ## Download
 
-PlanCraft is free. Get the latest version from the **[Releases page](https://github.com/rallegretti/PlanCraft/releases/latest)**: scroll down to **Assets** and pick the file for your computer.
+This fork does not yet ship pre-built installers. Build from source (below), or use upstream’s **[Releases](https://github.com/rallegretti/PlanCraft/releases/latest)** for stock PlanCraft 0.7.0 packages (without the fork changes).
 
 | Your computer | File to download | What you get |
 |---|---|---|
@@ -122,10 +128,10 @@ Download the new version and replace the old one the same way: extract the new z
 
 ### Building it yourself
 
-If you have [Rust](https://rustup.rs) installed, you can build and run PlanCraft from source:
+If you have [Rust](https://rustup.rs) installed, you can build and run this fork from source:
 
 ```bash
-git clone https://github.com/rallegretti/PlanCraft.git
+git clone https://github.com/TacodeJong/PlanCraft.git
 ```
 
 ```bash
@@ -137,6 +143,13 @@ cargo run --release -p plancraft-app
 ```
 
 ## Features
+
+### Fork additions
+
+- Import **Project Planner JSON**; Merlin **stretch / span** scheduling and dual date bounds; explicit date modes (Unrestricted / On / No earlier / No later / Between).
+- **Properties pane**, Overview, Deliveries / agenda, Report view; EN and NL UI; dd-mm-yyyy dates.
+- ArtCraft restyle, Lucide icons, native **macOS menus**; Quick Entry; Distill Plan; Excel report / Gantt / Task Usage export and print.
+- Status ↔ Task Board sync, column chooser, Q/M/D timescale, subtree filter, scheduling warnings in the UI and over MCP.
 
 ### Plan your project
 
@@ -309,8 +322,8 @@ To bring in a task list from a spreadsheet, open the `.xlsx` or `.csv` file with
 
 ## License
 
-PlanCraft is free and open source, dedicated to the public domain under [CC0 1.0 Universal](LICENSE).
+PlanCraft is free and open source, dedicated to the public domain under [CC0 1.0 Universal](LICENSE). This fork keeps that license. Upstream: [rallegretti/PlanCraft](https://github.com/rallegretti/PlanCraft).
 
 ---
 
-<sub>Developers: see [docs/BUILDING.md](docs/BUILDING.md) for building release packages and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how PlanCraft is put together.</sub>
+<sub>Developers: see [docs/FORK.md](docs/FORK.md) for this fork, [docs/BUILDING.md](docs/BUILDING.md) for packaging, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how PlanCraft is put together.</sub>

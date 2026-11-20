@@ -1,5 +1,7 @@
 # Roadmap
 
+This file tracks upstream PlanCraft history. Fork-specific changes and the v0.8.0 publish are summarized in [FORK.md](FORK.md).
+
 ## Done (v0.1)
 
 - **Core model:** tasks, summaries, milestones with deliverables and member tasks, resources (work, material and cost; people, teams, partners, vendors, …) and assignments
