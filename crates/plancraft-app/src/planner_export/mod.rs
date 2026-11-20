@@ -1,9 +1,10 @@
 //! Export a PlanCraft project to Microsoft Planner (Plan 1+ / basic board).
 //!
-//! Credentials (refresh token, optional client secret) live in the OS keyring.
-//! Tenant / client defaults live in `defaults`; local settings can override.
+//! Prefer **Sign in with Microsoft** via Azure CLI device login (no PlanCraft app id).
+//! Optional: device-code with a public client under Advanced. Tokens stay in the keyring / `az`.
 
 mod auth;
+mod az_cli;
 mod defaults;
 mod graph;
 mod http;
@@ -18,6 +19,8 @@ pub use keys::{delete_client_secret, store_client_secret};
 pub use map::{ExportTarget, build_export};
 pub use pss::{PssExportResult, PssOptions, export_premium};
 
+use std::sync::mpsc::Receiver;
+
 use plancraft_core::prelude::Project;
 
 use crate::settings::PlannerSettings;
@@ -25,7 +28,28 @@ use crate::settings::PlannerSettings;
 use http::UreqTransport;
 
 fn auth_config(settings: &PlannerSettings) -> Result<AuthConfig, String> {
+    if az_cli::using_az() {
+        // Client/tenant unused when tokens come from `az`; placeholders satisfy callers.
+        return Ok(AuthConfig {
+            tenant_id: effective_tenant(&settings.tenant_id),
+            client_id: effective_client(&settings.client_id).if_empty_placeholder(),
+        });
+    }
     AuthConfig::from_settings(&effective_tenant(&settings.tenant_id), &effective_client(&settings.client_id))
+}
+
+trait IfEmptyPlaceholder {
+    fn if_empty_placeholder(self) -> String;
+}
+
+impl IfEmptyPlaceholder for String {
+    fn if_empty_placeholder(self) -> String {
+        if self.trim().is_empty() {
+            "az-cli".into()
+        } else {
+            self
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -80,25 +104,68 @@ pub fn export_project(
     }
 }
 
-/// Device-code sign-in for Graph (stores refresh token in the keyring).
-pub fn sign_in(settings: &PlannerSettings) -> Result<DeviceCode, String> {
-    let cfg = auth_config(settings)?;
-    let mut http = UreqTransport::default();
-    begin_device_code(&mut http, &cfg, "https://graph.microsoft.com/.default offline_access openid profile")
+/// Result of starting Sign in (Azure CLI device login, or Entra device-code).
+pub enum SignInStart {
+    /// Already have a usable `az` session.
+    AzReady,
+    /// Show device code; when `az_wait` is set, completion waits on Azure CLI instead of Entra poll.
+    DeviceCode { pending: DeviceCode, az_wait: Option<Receiver<Result<(), String>>> },
+}
+
+/// Sign in with Microsoft: prefer Azure CLI (no PlanCraft app registration). Fallback: public client device-code.
+pub fn sign_in(settings: &PlannerSettings) -> Result<SignInStart, String> {
+    if az_cli::graph_token().is_ok() {
+        az_cli::mark_az_signed_in()?;
+        return Ok(SignInStart::AzReady);
+    }
+    // Azure CLI device login — uses Microsoft's az client; no tenant/client paste.
+    match az_cli::begin_device_login() {
+        Ok((pending, done)) => Ok(SignInStart::DeviceCode { pending, az_wait: Some(done) }),
+        Err(az_err) => {
+            // Optional fallback when a public client id is configured (Advanced / build default).
+            if !effective_client(&settings.client_id).is_empty() {
+                let cfg = AuthConfig::from_settings(&effective_tenant(&settings.tenant_id), &effective_client(&settings.client_id))?;
+                let mut http = UreqTransport::default();
+                let pending =
+                    begin_device_code(&mut http, &cfg, "https://graph.microsoft.com/.default offline_access openid profile")?;
+                return Ok(SignInStart::DeviceCode { pending, az_wait: None });
+            }
+            Err(az_err)
+        }
+    }
 }
 
 pub fn complete_sign_in(settings: &PlannerSettings, pending: &DeviceCode) -> Result<(), String> {
     let cfg = auth_config(settings)?;
     let mut http = UreqTransport::default();
     let _ = poll_device_code(&mut http, &cfg, pending)?;
+    let _ = az_cli::clear_az();
     Ok(())
 }
 
+pub fn complete_az_sign_in(done: &Receiver<Result<(), String>>) -> Result<(), String> {
+    match done.recv_timeout(std::time::Duration::from_secs(900)) {
+        Ok(Ok(())) => {
+            // Confirm token works, then mark mode.
+            let _ = az_cli::graph_token()?;
+            az_cli::mark_az_signed_in()?;
+            let _ = keys::delete_refresh_token();
+            Ok(())
+        }
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(crate::lang::text("planner.auth_timeout").into()),
+    }
+}
+
 pub fn signed_in() -> bool {
+    if az_cli::using_az() {
+        return az_cli::graph_token().is_ok();
+    }
     keys::load_refresh_token().ok().flatten().is_some()
 }
 
 pub fn sign_out() -> Result<(), String> {
+    let _ = az_cli::clear_az();
     keys::delete_refresh_token()
 }
 
@@ -109,7 +176,3 @@ pub fn load_groups(settings: &PlannerSettings) -> Result<Vec<(String, String)>, 
     list_member_groups(&mut http, &tokens)
 }
 
-/// True when Sign in can start (shipped default client and/or local override).
-pub fn can_sign_in(settings: &PlannerSettings) -> bool {
-    !effective_client(&settings.client_id).is_empty() && !effective_tenant(&settings.tenant_id).is_empty()
-}

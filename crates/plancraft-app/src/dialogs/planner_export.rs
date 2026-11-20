@@ -1,7 +1,7 @@
 //! Export the open plan to Microsoft Planner (Plan 1+ PSS or basic Graph board).
 //!
-//! Sign in uses the shipped multi-tenant public client (or a local Advanced override).
-//! Refresh tokens / optional client secrets stay in the OS keyring — never in the project or git.
+//! Primary path: Sign in with Microsoft via Azure CLI device login (no app id to paste).
+//! Optional Advanced: public client device-code. Nothing lands in the project or git.
 
 use std::sync::mpsc::Receiver;
 use std::thread;
@@ -10,13 +10,13 @@ use egui::{Context, RichText};
 
 use plancraft_core::workspace::Document;
 
-use crate::planner_export::{self, DeviceCode, ExportOutcome, ExportTarget};
+use crate::planner_export::{self, DeviceCode, ExportOutcome, ExportTarget, SignInStart};
 use crate::settings::{AppSettings, PlannerSettings};
 use crate::theme;
 
 enum Job {
     Idle,
-    SignIn(Receiver<Result<DeviceCode, String>>),
+    SignIn(Receiver<Result<SignInStart, String>>),
     CompleteSignIn(Receiver<Result<(), String>>),
     Groups(Receiver<Result<Vec<(String, String)>, String>>),
     Export(Receiver<Result<ExportOutcome, String>>),
@@ -63,7 +63,6 @@ impl PlannerExport {
     pub fn show(&mut self, ctx: &Context, doc: &Document, settings: &mut AppSettings, toasts: &mut Vec<String>) -> bool {
         self.poll(ctx, settings, toasts);
         let mut open = true;
-        let can_sign_in = planner_export::can_sign_in(&settings.planner);
         let has_shipped_client = planner_export::has_default_client();
         egui::Window::new(t("planner.title"))
             .id(egui::Id::new("planner_export"))
@@ -87,12 +86,9 @@ impl PlannerExport {
                             self.device = None;
                         }
                     } else {
-                        let sign_in = ui.add_enabled(!self.busy() && can_sign_in, egui::Button::new(t("planner.sign_in")));
+                        let sign_in = ui.add_enabled(!self.busy(), egui::Button::new(t("planner.sign_in")));
                         if sign_in.clicked() {
                             self.start_sign_in(settings);
-                        }
-                        if !can_sign_in {
-                            ui.label(RichText::new(t("planner.need_client_default")).small().color(theme::pal().WARN));
                         }
                     }
                     if ui
@@ -192,7 +188,7 @@ impl PlannerExport {
 
                 ui.add_space(8.0);
                 egui::CollapsingHeader::new(t("planner.advanced"))
-                    .default_open(!has_shipped_client && !can_sign_in)
+                    .default_open(false)
                     .show(ui, |ui| {
                         ui.label(RichText::new(t("planner.advanced.intro")).small().color(theme::pal().TEXT_WEAK));
                         ui.add_space(4.0);
@@ -304,9 +300,6 @@ impl PlannerExport {
     }
 
     fn can_export(&self, settings: &AppSettings) -> bool {
-        if !planner_export::can_sign_in(&settings.planner) {
-            return false;
-        }
         match self.target {
             ExportTarget::PremiumPss => !settings.planner.dataverse_org_url.trim().is_empty(),
             ExportTarget::BasicBoard => !self.group_id.trim().is_empty(),
@@ -324,12 +317,21 @@ impl PlannerExport {
         self.job = Job::SignIn(rx);
     }
 
-    fn start_complete(&mut self, settings: &AppSettings, pending: DeviceCode) {
+    fn start_complete_device(&mut self, settings: &AppSettings, pending: DeviceCode) {
         self.status = Some(t("planner.working_wait").into());
         let planner = settings.planner.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         thread::spawn(move || {
             let _ = tx.send(planner_export::complete_sign_in(&planner, &pending));
+        });
+        self.job = Job::CompleteSignIn(rx);
+    }
+
+    fn start_complete_az(&mut self, done: Receiver<Result<(), String>>) {
+        self.status = Some(t("planner.working_wait").into());
+        let (tx, rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let _ = tx.send(planner_export::complete_az_sign_in(&done));
         });
         self.job = Job::CompleteSignIn(rx);
     }
@@ -366,10 +368,20 @@ impl PlannerExport {
         match job {
             Job::Idle => {}
             Job::SignIn(rx) => match rx.try_recv() {
-                Ok(Ok(device)) => {
-                    self.device = Some(device.clone());
+                Ok(Ok(SignInStart::AzReady)) => {
+                    self.signed_in = true;
+                    self.device = None;
                     self.status = None;
-                    self.start_complete(settings, device);
+                    toasts.push(t("planner.signed_in").into());
+                }
+                Ok(Ok(SignInStart::DeviceCode { pending, az_wait })) => {
+                    self.device = Some(pending.clone());
+                    self.status = None;
+                    if let Some(done) = az_wait {
+                        self.start_complete_az(done);
+                    } else {
+                        self.start_complete_device(settings, pending);
+                    }
                 }
                 Ok(Err(err)) => self.fail(err),
                 Err(std::sync::mpsc::TryRecvError::Empty) => {

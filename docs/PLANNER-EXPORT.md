@@ -89,30 +89,20 @@ Basic board-only (non-MVP): group membership → plan → buckets → tasks/assi
 
 ## Sign in (end-user path)
 
-PlanCraft uses the **device-code** flow with a **public multi-tenant client**. Secrets and tokens never go in git or the project file. A public client id **may** ship in `DEFAULT_CLIENT_ID` (`planner_export/defaults.rs`).
+**No tenant id or PlanCraft app id to paste.** Sign in uses **Azure CLI** device login (`az login --use-device-code`) on the machine where Microsoft login works in a browser. PlanCraft then calls `az account get-access-token` for Graph / Dataverse. Secrets and tokens never go in git or the project file.
 
-1. **File → Export to Microsoft Planner…**
-2. **Sign in with Microsoft…** → open the device-login page → enter the code → finish with your work account.
+1. Install [Azure CLI](https://aka.ms/installazurecli) on that computer.
+2. **File → Export to Microsoft Planner…** → **Sign in with Microsoft…** → open the page → enter the code.
 3. For Plan 1+: set the Dataverse org URL → **Export**. (Basic board: pick an M365 group.)
 
-Default tenant authority is `organizations`. Override tenant/client under **Advanced connection** only if needed.
+**Advanced (optional):** a dedicated public Entra client device-code path if `DEFAULT_CLIENT_ID` / Advanced client id is set. Normal users skip this.
 
-If `DEFAULT_CLIENT_ID` is still empty, open Advanced once and paste the public client id from your admin (or set the constant / `PLANCRAFT_ENTRA_CLIENT_ID` at build time). You still do **not** register an Entra app from this dialog.
-
-### One-time: create the public client (maintainer / admin)
-
-Portal: [Entra → App registrations](https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade)
-
-1. **New registration** — *Accounts in any organizational directory* (multi-tenant); **Redirect URI blank**.
-2. **Authentication** → **Allow public client flows** = **Yes**.
-3. **API permissions** (all **Delegated**): Graph `Tasks.ReadWrite`, `Group.ReadWrite.All`, `User.Read`; Dataverse `user_impersonation` for Plan 1+.
-4. **Grant admin consent** in the home tenant.
-5. Put the **Application (client) ID** into `DEFAULT_CLIENT_ID` (safe to commit — it is public) or Advanced. Helper: `scripts/register-entra-public-client.sh` after `az login`.
+Do **not** run interactive `az login` on machines where Microsoft login is blocked; build/run PlanCraft where browser login works.
 
 ### Runtime notes
 
 1. Caller should be a work/school member, hold **Planner Plan 1+** for dependencies, and be a member of the target M365 group.
-2. Graph uses the Graph token; premium PSS uses a **separate** token for the Dataverse org audience (`{orgUrl}/.default`).
+2. Graph uses the Graph token; premium PSS uses a **separate** token for the Dataverse org audience (`{orgUrl}/.default`) — both via `az` when that was the sign-in path.
 3. Never log raw tokens.
 
 ---

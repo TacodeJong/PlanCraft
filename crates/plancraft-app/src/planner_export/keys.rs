@@ -7,6 +7,7 @@ use crate::distill::scrub;
 const SERVICE: &str = "plancraft";
 const REFRESH: &str = "planner.refresh_token";
 const CLIENT_SECRET: &str = "planner.client_secret";
+const AUTH_MODE: &str = "planner.auth_mode";
 
 fn entry(account: &str) -> Result<Entry, String> {
     Entry::new(SERVICE, account).map_err(|e| e.to_string())
@@ -61,6 +62,18 @@ pub fn store_client_secret(secret: &str) -> Result<(), String> {
 
 pub fn delete_client_secret() -> Result<(), String> {
     delete(CLIENT_SECRET)
+}
+
+pub fn load_auth_mode() -> Result<Option<String>, String> {
+    load(AUTH_MODE)
+}
+
+pub fn store_auth_mode(mode: &str) -> Result<(), String> {
+    store(AUTH_MODE, mode, 32)
+}
+
+pub fn delete_auth_mode() -> Result<(), String> {
+    delete(AUTH_MODE)
 }
 
 pub fn scrub_secrets(message: &str, secrets: &[&str]) -> String {

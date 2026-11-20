@@ -128,8 +128,11 @@ pub fn poll_device_code(http: &mut dyn Transport, cfg: &AuthConfig, pending: &De
     }
 }
 
-/// Uses a stored refresh token when present; otherwise returns an error asking for sign-in.
+/// Uses Azure CLI when that was the sign-in path; otherwise a stored refresh token.
 pub fn graph_token(http: &mut dyn Transport, cfg: &AuthConfig) -> Result<TokenSet, String> {
+    if super::az_cli::using_az() {
+        return super::az_cli::graph_token();
+    }
     refresh_for_scope(http, cfg, GRAPH_SCOPE)
 }
 
@@ -137,6 +140,9 @@ pub fn dataverse_token(http: &mut dyn Transport, cfg: &AuthConfig, org_url: &str
     let org = org_url.trim().trim_end_matches('/');
     if org.is_empty() || !org.starts_with("https://") {
         return Err(crate::lang::text("planner.need_org").into());
+    }
+    if super::az_cli::using_az() {
+        return super::az_cli::dataverse_token(org);
     }
     let scope = format!("{org}/.default offline_access");
     refresh_for_scope(http, cfg, &scope)
