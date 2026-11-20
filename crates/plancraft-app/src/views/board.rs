@@ -75,7 +75,8 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
             .into_iter()
             .map(|(c, rows)| Col {
                 id: c.id,
-                name: c.name.clone(),
+                // A status-linked column shows the localized status name (Niet gestart, …).
+                name: c.status.map(|s| crate::lang::status_name(s).to_string()).unwrap_or_else(|| c.name.clone()),
                 percent: c.percent_complete,
                 rows: rows.into_iter().filter(|&i| p.tasks.get(i).is_some_and(|t| super::task_matches(p, st, t))).collect(),
             })
@@ -457,13 +458,18 @@ fn column_window(ctx: &egui::Context, doc: &mut Document, st: &mut UiState) {
         .id(egui::Id::new("board_column"))
         .pivot(Align2::CENTER_TOP)
         .default_pos(ctx.content_rect().center_top() + vec2(0.0, 160.0))
-        .open(&mut open)
-        .collapsible(false)
+        .title_bar(false)
         .resizable(false)
         .show(ctx, |ui| {
+            open = crate::widgets::craft::dialog_header(ui, title);
             egui::Grid::new("bc").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                 ui.label("Name:");
-                ui.add(egui::TextEdit::singleline(&mut edit.name).desired_width(180.0));
+                if let Some(status) = edit.status {
+                    // A status column's name IS the status: localized, not editable.
+                    ui.label(crate::lang::status_name(status)).on_hover_text("This column mirrors the task status; its name follows it.");
+                } else {
+                    ui.add(egui::TextEdit::singleline(&mut edit.name).desired_width(180.0));
+                }
                 ui.end_row();
                 ui.label("Set % Complete:");
                 ui.add(egui::TextEdit::singleline(&mut edit.percent).desired_width(50.0).hint_text("none"));
@@ -498,10 +504,12 @@ fn column_window(ctx: &egui::Context, doc: &mut Document, st: &mut UiState) {
                 .map(Some)
                 .ok_or_else(|| "% complete must be a whole number from 0 to 100".to_string())
         };
-        let (id, name) = (edit.id, edit.name.clone());
+        let (id, name, linked) = (edit.id, edit.name.clone(), edit.status.is_some());
         let r = percent.and_then(|percent| {
             doc.edit_msg(if id.is_some() { "Change Column" } else { "Add Column" }, |p| {
                 match id {
+                    // A status column keeps its stored name; only the % complete is editable.
+                    Some(id) if linked => p.set_board_column_percent(id, percent),
                     Some(id) => p.rename_board_column(id, &name).and_then(|()| p.set_board_column_percent(id, percent)),
                     None => p.add_board_column(&name, None, percent).map(|_| ()),
                 }

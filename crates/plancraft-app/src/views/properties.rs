@@ -6,7 +6,7 @@ use plancraft_core::workspace::Document;
 
 use crate::edit::EditExt;
 use crate::format;
-use crate::state::{ToastKind, UiState, ViewKind};
+use crate::state::{PropTab, ToastKind, UiState, ViewKind};
 use crate::theme;
 
 const MIN_W: f32 = 280.0;
@@ -159,15 +159,52 @@ fn task_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState) {
     if multi {
         ui.label(RichText::new(format!("{} {}", ids.len(), st.t("prop.activities"))).color(theme::pal().TEXT_WEAK));
     }
+    // Scheduling warnings of the selection stay above the tabs, visible whichever tab is open.
+    let warned: Vec<String> = ids.iter().filter_map(|id| doc.project.task(*id)).flat_map(|t| t.sched.warnings.iter().cloned()).collect();
+    if !warned.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.add(crate::icons::image("triangle-alert", 13.0, theme::pal().ERROR));
+            ui.label(RichText::new(warned.join("\n")).color(theme::pal().ERROR));
+        });
+        if let Some(hint) = crate::columns::warning_hint(&warned) {
+            ui.label(RichText::new(hint).small().color(theme::pal().TEXT_WEAK));
+        }
+        ui.add_space(4.0);
+    }
     let snap = snapshot(&doc.project, &ids);
     let share = doc.project.settings.rules.enabled() && ids.iter().all(|id| can_share(&doc.project, *id));
     let any_summary = ids.iter().any(|id| doc.project.task_index(*id).is_some_and(|i| doc.project.has_children(i)));
     // Only milestones selected: one moment instead of separate start and finish fields.
     let milestone_only = !any_summary && snap.milestone == Some(true);
-    // What the group's subtasks add up to, for the read-only derived displays on summary rows.
-    let derived_duration = common(ids.iter().filter_map(|id| doc.project.task(*id)).map(|t| doc.project.format_task_duration(t)));
-    let derived_percent = common(ids.iter().filter_map(|id| doc.project.task(*id)).map(|t| format::percent(t.sched.percent_complete)));
 
+    // The pane's tabs, so it does not become one long scroll.
+    ui.horizontal_wrapped(|ui| {
+        for tab in PropTab::ALL {
+            ui.selectable_value(&mut st.properties_tab, tab, tab.title());
+        }
+    });
+    ui.separator();
+    match st.properties_tab {
+        PropTab::General => general_tab(ui, doc, st, &ids, &snap, first, multi, any_summary, milestone_only, share),
+        PropTab::Planning => planning_tab(ui, doc, st, &ids, &snap, first, multi),
+        PropTab::Resources => resources_tab(ui, doc, st, &ids, &snap, first, multi, any_summary),
+        PropTab::Progress => progress_tab(ui, doc, st, &ids, &snap, first, multi, any_summary, milestone_only),
+        PropTab::Notes => notes_block(ui, doc, st, &ids, &snap, first, multi),
+    }
+}
+
+fn general_tab(
+    ui: &mut Ui,
+    doc: &mut Document,
+    st: &mut UiState,
+    ids: &[TaskId],
+    snap: &Snap,
+    first: TaskId,
+    multi: bool,
+    any_summary: bool,
+    milestone_only: bool,
+    share: bool,
+) {
     ui.horizontal(|ui| {
         if !multi && snap.milestone == Some(true) {
             let (rect, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
@@ -181,7 +218,7 @@ fn task_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState) {
         label(ui, st.t("prop.name"));
     });
     if let Some(text) = line(ui, ("task_name", first, multi), snap.name.as_deref().unwrap_or(""), if multi { "Multiple" } else { "" }) {
-        let ids = ids.clone();
+        let ids = ids.to_vec();
         edit(doc, st, "Name", move |p| {
             if text.trim().is_empty() {
                 return Err("The task name cannot be empty.".into());
@@ -212,7 +249,7 @@ fn task_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState) {
     let mut flag = snap.milestone.unwrap_or(false);
     // A group cannot be a milestone: the box stays visible but greyed (GUI.md).
     if ui.add_enabled(!any_summary, egui::Checkbox::new(&mut flag, st.t("prop.milestone"))).changed() {
-        let ids = ids.clone();
+        let ids = ids.to_vec();
         edit(doc, st, "Milestone", move |p| {
             for id in &ids {
                 if let Some(t) = p.task_mut(*id) {
@@ -225,6 +262,149 @@ fn task_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState) {
             Ok(())
         });
     }
+    label(ui, st.t("prop.mark"));
+    let mark_label = snap.mark.map(|m| m.map(crate::lang::mark_name).unwrap_or(st.t("common.none"))).unwrap_or(st.t("common.multiple"));
+    if let Some(Some(mark)) = snap.mark {
+        ui.add(crate::icons::image("flag", 14.0, theme::row_mark_color(mark))).on_hover_text(crate::lang::mark_name(mark));
+    }
+    egui::ComboBox::from_id_salt(("task_mark", first, multi)).selected_text(mark_label).show_ui(ui, |ui| {
+        let choices = [None].into_iter().chain(RowMark::ALL.into_iter().map(Some));
+        for choice in choices {
+            let text = choice.map(crate::lang::mark_name).unwrap_or(st.t("common.none"));
+            if ui.selectable_label(snap.mark == Some(choice), text).clicked() && snap.mark != Some(choice) {
+                let ids = ids.to_vec();
+                edit(doc, st, "Row mark", move |p| {
+                    for id in &ids {
+                        if let Some(t) = p.task_mut(*id) {
+                            t.row_mark = choice;
+                        }
+                    }
+                    Ok(())
+                });
+            }
+        }
+    });
+    // The everyday fields, like the Swift inspector: no tab-hopping for normal work.
+    schedule_fields(ui, doc, st, ids, snap, first, multi, any_summary, milestone_only, share);
+    label(ui, st.t("prop.predecessors"));
+    predecessors(ui, doc, st, ids, multi);
+    resources_tab(ui, doc, st, ids, snap, first, multi, any_summary);
+    status_block(ui, doc, st, ids, snap, first, multi, any_summary);
+    percent_block(ui, doc, st, ids, snap, first, multi, any_summary);
+    if milestone_only {
+        label(ui, st.t("prop.deliverable"));
+        if let Some(text) = line(ui, ("task_deliverable", first, multi), snap.deliverable.as_deref().unwrap_or(""), "") {
+            let ids = ids.to_vec();
+            edit(doc, st, "Deliverable", move |p| {
+                for id in &ids {
+                    if let Some(t) = p.task_mut(*id) {
+                        t.deliverable = text.clone();
+                    }
+                }
+                Ok(())
+            });
+        }
+    }
+    notes_block(ui, doc, st, ids, snap, first, multi);
+}
+
+fn notes_block(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], snap: &Snap, first: TaskId, multi: bool) {
+    label(ui, st.t("prop.notes"));
+    if let Some(text) = notes(ui, ("task_notes", first, multi), snap.notes.as_deref().unwrap_or("")) {
+        let ids = ids.to_vec();
+        edit(doc, st, "Notes", move |p| {
+            for id in &ids {
+                if let Some(t) = p.task_mut(*id) {
+                    t.notes = text.clone();
+                }
+            }
+            Ok(())
+        });
+    }
+}
+
+/// The project's custom fields, edited with the same parse-and-set path as the dialog and the
+/// table (`parse_custom_value` + `set_custom_value`).
+fn custom_fields(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], first: TaskId, multi: bool) {
+    let fields: Vec<(CustomFieldId, String, plancraft_core::custom::CustomFieldKind, Vec<String>)> =
+        doc.project.custom_fields.iter().map(|f| (f.id, f.name.clone(), f.kind, f.choices.clone())).collect();
+    if fields.is_empty() {
+        return;
+    }
+    use plancraft_core::custom::CustomFieldKind;
+    label(ui, st.t("prop.custom_fields"));
+    for (fid, name, kind, choices) in fields {
+        label(ui, &name);
+        let value = |t: &Task| match t.custom.get(&fid) {
+            None => String::new(),
+            Some(CustomValue::Date(d)) => format::iso_date(Some(*d)),
+            Some(CustomValue::Number(n)) => format!("{n}"),
+            Some(other) => doc.project.custom_value_text(fid, other),
+        };
+        let current = common(ids.iter().filter_map(|id| doc.project.task(*id)).map(&value));
+        let apply = |doc: &mut Document, st: &mut UiState, text: String| {
+            let ids = ids.to_vec();
+            edit(doc, st, "Custom field", move |p| {
+                let listed = p.custom_field(fid).is_some_and(|f| f.choices.iter().any(|c| c == crate::fields::NO_VALUE));
+                let text = if text == crate::fields::NO_VALUE && !listed { "" } else { text.as_str() };
+                let value = p.parse_custom_value(fid, text).map_err(|e| e.to_string())?;
+                for id in &ids {
+                    p.set_custom_value(*id, fid, value.clone()).map_err(|e| e.to_string())?;
+                }
+                Ok(())
+            });
+        };
+        let options: Vec<String> = match kind {
+            CustomFieldKind::Flag => vec!["Yes".into(), "No".into(), crate::fields::NO_VALUE.into()],
+            CustomFieldKind::Text if !choices.is_empty() => {
+                choices.iter().cloned().chain(std::iter::once(crate::fields::NO_VALUE.to_string())).collect()
+            }
+            _ => Vec::new(),
+        };
+        if options.is_empty() {
+            let hint = match kind {
+                CustomFieldKind::Date => "YYYY-MM-DD",
+                CustomFieldKind::Duration => "e.g. 3d",
+                CustomFieldKind::Number | CustomFieldKind::Cost => "number",
+                _ => "",
+            };
+            if let Some(text) = line(ui, ("task_custom", fid.0, first, multi), current.as_deref().unwrap_or(""), hint) {
+                apply(doc, st, text);
+            }
+        } else {
+            let shown = match current.as_deref() {
+                Some("") | None => crate::fields::NO_VALUE.to_string(),
+                Some(v) => v.to_string(),
+            };
+            let mut pick = None;
+            egui::ComboBox::from_id_salt(("task_custom", fid.0, first, multi)).selected_text(shown).show_ui(ui, |ui| {
+                for o in &options {
+                    if ui.selectable_label(current.as_deref() == Some(o), o).clicked() {
+                        pick = Some(if o == crate::fields::NO_VALUE { String::new() } else { o.clone() });
+                    }
+                }
+            });
+            if let Some(text) = pick {
+                apply(doc, st, text);
+            }
+        }
+    }
+}
+
+/// Duration, dates, bounds and group-share fields: the scheduling heart of the General tab.
+fn schedule_fields(
+    ui: &mut Ui,
+    doc: &mut Document,
+    st: &mut UiState,
+    ids: &[TaskId],
+    snap: &Snap,
+    first: TaskId,
+    multi: bool,
+    any_summary: bool,
+    milestone_only: bool,
+    share: bool,
+) {
+    let derived_duration = common(ids.iter().filter_map(|id| doc.project.task(*id)).map(|t| doc.project.format_task_duration(t)));
     label(ui, st.t("prop.duration"));
     if any_summary {
         // A group's span comes from its subtasks: visible but not editable.
@@ -233,7 +413,7 @@ fn task_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState) {
         // A milestone is always 0: greyed rather than hidden.
         derived_line(ui, snap.duration.as_deref().unwrap_or(""), st.t("prop.milestone_duration"));
     } else if let Some(text) = line(ui, ("task_dur", first, multi), snap.duration.as_deref().unwrap_or(""), "") {
-        let ids = ids.clone();
+        let ids = ids.to_vec();
         edit(doc, st, "Duration", move |p| {
             let (minutes, estimated) = p.parse_duration(&text).ok_or_else(|| format!("'{text}' is not a valid duration"))?;
             for id in &ids {
@@ -245,36 +425,45 @@ fn task_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState) {
     let start_minute = doc.project.settings.time.default_start_time;
     let finish_minute = doc.project.settings.time.default_finish_time;
     if milestone_only {
-        // A milestone is one moment, not a span.
-        label(ui, st.t("prop.moment"));
-        if let Some(Some(date)) = show_date(ui, &format!("task_start{first}"), snap.start, false, true, start_minute) {
-            let ids = ids.clone();
-            edit(doc, st, "Start", move |p| set_picked_date(p, &ids, date, false));
-        }
+        // A milestone is one moment, not a span: one rule, on the finish side (the Swift
+        // app's canonical point for a leaf milestone).
+        let side = DateSide {
+            finish: true,
+            minute: start_minute,
+            scheduled: snap.start,
+            mode: snap.finish_mode,
+            min: snap.finish_earliest,
+            max: snap.finish_latest,
+            fixed: snap.finish_fixed,
+        };
+        date_mode_side(ui, doc, st, ids, first, multi, st.t("prop.moment"), side);
     } else {
-        // Summary dates are derived from the subtasks: shown greyed, not editable.
-        label(ui, st.t("prop.start"));
-        if let Some(Some(date)) = show_date(ui, &format!("task_start{first}"), snap.start, false, !any_summary, start_minute) {
-            let ids = ids.clone();
-            edit(doc, st, "Start", move |p| set_picked_date(p, &ids, date, false));
-        }
-        label(ui, st.t("prop.finish"));
-        if let Some(Some(date)) = show_date(ui, &format!("task_finish{first}"), snap.finish, false, !any_summary, finish_minute) {
-            let ids = ids.clone();
-            edit(doc, st, "Finish", move |p| set_picked_date(p, &ids, date, true));
-        }
+        let side = DateSide {
+            finish: false,
+            minute: start_minute,
+            scheduled: snap.start,
+            mode: snap.start_mode,
+            min: snap.start_earliest,
+            max: snap.start_latest,
+            fixed: snap.start_fixed,
+        };
+        date_mode_side(ui, doc, st, ids, first, multi, st.t("prop.start"), side);
+        let side = DateSide {
+            finish: true,
+            minute: finish_minute,
+            scheduled: snap.finish,
+            mode: snap.finish_mode,
+            min: snap.finish_earliest,
+            max: snap.finish_latest,
+            fixed: snap.finish_fixed,
+        };
+        date_mode_side(ui, doc, st, ids, first, multi, st.t("prop.finish"), side);
     }
-    date_bound(ui, doc, st, &ids, first, snap.start_earliest, Bound::StartEarliest, start_minute);
-    date_bound(ui, doc, st, &ids, first, snap.start_latest, Bound::StartLatest, start_minute);
-    fixed_box(ui, doc, st, &ids, st.t("prop.start_fixed"), snap.start_fixed, true, matches!(snap.start_latest, Some(Some(_))));
-    date_bound(ui, doc, st, &ids, first, snap.finish_earliest, Bound::FinishEarliest, finish_minute);
-    date_bound(ui, doc, st, &ids, first, snap.finish_latest, Bound::FinishLatest, finish_minute);
-    fixed_box(ui, doc, st, &ids, st.t("prop.finish_fixed"), snap.finish_fixed, false, matches!(snap.finish_latest, Some(Some(_))));
     if share {
         // Stretch and percent-of-group both size a share: setting one clears the other.
         let mut stretch = snap.stretch.unwrap_or(false);
         if ui.checkbox(&mut stretch, st.t("prop.stretch")).changed() {
-            let ids = ids.clone();
+            let ids = ids.to_vec();
             edit(doc, st, "Stretch", move |p| {
                 for id in &ids {
                     if let Some(t) = p.task_mut(*id) {
@@ -290,7 +479,7 @@ fn task_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState) {
         label(ui, st.t("prop.percent_group"));
         if let Some(text) = line(ui, ("task_pct_group", first, multi), snap.percent_group.as_deref().unwrap_or(""), st.t("common.none_lc"))
         {
-            let ids = ids.clone();
+            let ids = ids.to_vec();
             edit(doc, st, "Percent of group", move |p| {
                 let pct = if text.trim().is_empty() {
                     None
@@ -309,8 +498,251 @@ fn task_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState) {
             });
         }
     }
-    label(ui, st.t("prop.predecessors"));
-    predecessors(ui, doc, st, &ids, multi);
+}
+
+/// Advanced fields, in parity with Task Information's Advanced tab.
+fn planning_tab(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], snap: &Snap, first: TaskId, multi: bool) {
+    let mut active = snap.active.unwrap_or(true);
+    if ui.checkbox(&mut active, st.t("prop.active")).changed() {
+        let ids = ids.to_vec();
+        edit(doc, st, "Active", move |p| {
+            for id in &ids {
+                if let Some(t) = p.task_mut(*id) {
+                    t.active = active;
+                }
+            }
+            Ok(())
+        });
+    }
+    let mut on_tl = snap.on_timeline.unwrap_or(false);
+    if ui.checkbox(&mut on_tl, st.t("prop.on_timeline")).changed() {
+        let ids = ids.to_vec();
+        edit(doc, st, "Display on Timeline", move |p| {
+            for id in &ids {
+                if let Some(t) = p.task_mut(*id) {
+                    t.show_on_timeline = on_tl;
+                }
+            }
+            Ok(())
+        });
+    }
+    label(ui, st.t("prop.priority"));
+    if let Some(text) = line(ui, ("task_prio", first, multi), snap.priority.as_deref().unwrap_or(""), "500") {
+        let ids = ids.to_vec();
+        edit(doc, st, "Priority", move |p| {
+            let v = text.trim().parse::<u16>().map_err(|_| "Priority must be a number from 0 to 1000")?.min(1000);
+            for id in &ids {
+                if let Some(t) = p.task_mut(*id) {
+                    t.priority = v;
+                }
+            }
+            Ok(())
+        });
+    }
+    label(ui, st.t("prop.mode"));
+    let auto = st.t("prop.mode_auto");
+    let manual = st.t("prop.mode_manual");
+    let mode_label = snap.mode.map(|m| if m == ScheduleMode::Auto { auto } else { manual }).unwrap_or(st.t("common.multiple"));
+    egui::ComboBox::from_id_salt(("task_mode", first, multi)).selected_text(mode_label).show_ui(ui, |ui| {
+        for (mode, text) in [(ScheduleMode::Auto, auto), (ScheduleMode::Manual, manual)] {
+            if ui.selectable_label(snap.mode == Some(mode), text).clicked() && snap.mode != Some(mode) {
+                let ids = ids.to_vec();
+                edit(doc, st, "Schedule mode", move |p| p.set_schedule_mode(&ids, mode).map_err(|e| e.to_string()));
+            }
+        }
+    });
+    label(ui, st.t("prop.deadline"));
+    let deadline_minute = doc.project.settings.time.default_finish_time;
+    if let Some(next) = show_date(ui, &format!("task_deadline{first}"), snap.deadline, true, true, deadline_minute) {
+        let ids = ids.to_vec();
+        edit(doc, st, "Deadline", move |p| {
+            for id in &ids {
+                if let Some(t) = p.task_mut(*id) {
+                    t.deadline = next;
+                }
+            }
+            Ok(())
+        });
+    }
+    label(ui, st.t("prop.constraint"));
+    let kind_label = snap.constraint.map(|k| k.label()).unwrap_or(st.t("common.multiple"));
+    egui::ComboBox::from_id_salt(("task_constraint", first, multi)).selected_text(kind_label).show_ui(ui, |ui| {
+        for kind in ConstraintKind::ALL {
+            if ui.selectable_label(snap.constraint == Some(kind), kind.label()).clicked() && snap.constraint != Some(kind) {
+                let ids = ids.to_vec();
+                edit(doc, st, "Constraint", move |p| {
+                    for id in &ids {
+                        if let Some(t) = p.task_mut(*id) {
+                            t.constraint.kind = kind;
+                            if kind.needs_date() && t.constraint.date.is_none() {
+                                t.constraint.date = if kind.is_start_constraint() { t.sched.start } else { t.sched.finish };
+                            }
+                            if !kind.needs_date() {
+                                t.constraint.date = None;
+                            }
+                        }
+                    }
+                    Ok(())
+                });
+            }
+        }
+    });
+    if snap.constraint.is_some_and(|k| k.needs_date()) {
+        label(ui, st.t("prop.constraint_date"));
+        let start_side = snap.constraint.is_some_and(|k| k.is_start_constraint());
+        let minute = if start_side { doc.project.settings.time.default_start_time } else { doc.project.settings.time.default_finish_time };
+        if let Some(Some(date)) = show_date(ui, &format!("task_cdate{first}"), snap.constraint_date, false, true, minute) {
+            let ids = ids.to_vec();
+            edit(doc, st, "Constraint date", move |p| {
+                for id in &ids {
+                    if let Some(t) = p.task_mut(*id) {
+                        t.constraint.date = Some(date);
+                    }
+                }
+                Ok(())
+            });
+        }
+    }
+    label(ui, st.t("prop.task_type"));
+    let type_name = |t: TaskType| match t {
+        TaskType::FixedUnits => "Fixed Units",
+        TaskType::FixedDuration => "Fixed Duration",
+        TaskType::FixedWork => "Fixed Work",
+    };
+    let tt_label = snap.task_type.map(type_name).unwrap_or(st.t("common.multiple"));
+    egui::ComboBox::from_id_salt(("task_type", first, multi)).selected_text(tt_label).show_ui(ui, |ui| {
+        for tt in [TaskType::FixedUnits, TaskType::FixedDuration, TaskType::FixedWork] {
+            if ui.selectable_label(snap.task_type == Some(tt), type_name(tt)).clicked() && snap.task_type != Some(tt) {
+                let ids = ids.to_vec();
+                edit(doc, st, "Task type", move |p| {
+                    for id in &ids {
+                        if let Some(t) = p.task_mut(*id) {
+                            t.task_type = tt;
+                        }
+                    }
+                    Ok(())
+                });
+            }
+        }
+    });
+    let mut effort = snap.effort.unwrap_or(false);
+    if ui.checkbox(&mut effort, st.t("prop.effort_driven")).changed() {
+        let ids = ids.to_vec();
+        edit(doc, st, "Effort driven", move |p| {
+            for id in &ids {
+                if let Some(t) = p.task_mut(*id) {
+                    t.effort_driven = effort;
+                }
+            }
+            Ok(())
+        });
+    }
+    label(ui, st.t("prop.calendar"));
+    let calendars: Vec<(Option<CalendarId>, String)> = std::iter::once((None, st.t("common.none").to_string()))
+        .chain(doc.project.calendars.iter().map(|c| (Some(c.id), c.name.clone())))
+        .collect();
+    let cal_label = match snap.calendar {
+        None => st.t("common.multiple").to_string(),
+        Some(current) => calendars.iter().find(|(id, _)| *id == current).map(|(_, n)| n.clone()).unwrap_or_default(),
+    };
+    egui::ComboBox::from_id_salt(("task_cal", first, multi)).selected_text(cal_label).show_ui(ui, |ui| {
+        for (cal, name) in &calendars {
+            if ui.selectable_label(snap.calendar == Some(*cal), name).clicked() && snap.calendar != Some(*cal) {
+                let (cal, ids) = (*cal, ids.to_vec());
+                edit(doc, st, "Task calendar", move |p| {
+                    for id in &ids {
+                        if let Some(t) = p.task_mut(*id) {
+                            t.calendar = cal;
+                        }
+                    }
+                    Ok(())
+                });
+            }
+        }
+    });
+    let mut ignore = snap.ignore_res_cal.unwrap_or(false);
+    if ui.checkbox(&mut ignore, st.t("prop.ignore_res_cal")).changed() {
+        let ids = ids.to_vec();
+        edit(doc, st, "Ignore resource calendars", move |p| {
+            for id in &ids {
+                if let Some(t) = p.task_mut(*id) {
+                    t.ignore_resource_calendars = ignore;
+                }
+            }
+            Ok(())
+        });
+    }
+    label(ui, st.t("prop.fixed_cost"));
+    if let Some(text) = line(ui, ("task_fixed_cost", first, multi), snap.fixed_cost.as_deref().unwrap_or(""), "0.00") {
+        let ids = ids.to_vec();
+        edit(doc, st, "Fixed cost", move |p| {
+            let v = format::parse_money(&text).ok_or("invalid amount")?;
+            for id in &ids {
+                if let Some(t) = p.task_mut(*id) {
+                    t.fixed_cost = v;
+                }
+            }
+            Ok(())
+        });
+    }
+    estimate_block(ui, doc, st, first, multi);
+    custom_fields(ui, doc, st, ids, first, multi);
+}
+
+/// The estimate, through the same commit path as the table's Estimate columns.
+fn estimate_block(ui: &mut Ui, doc: &mut Document, st: &mut UiState, first: TaskId, multi: bool) {
+    label(ui, st.t("prop.estimate"));
+    if multi {
+        ui.label(RichText::new(st.t("common.multiple_lc")).color(theme::pal().TEXT_WEAK));
+        return;
+    }
+    use crate::columns::TaskCol;
+    let Some(idx) = doc.project.task_index(first) else { return };
+    let none = |_: TaskId| false;
+    let cctx = crate::columns::CellCtx { overallocated: &none, others_on: None };
+    let kind = crate::columns::cell(TaskCol::EstimateMethod, &doc.project, idx, &cctx).text;
+    egui::ComboBox::from_id_salt(("task_est", first)).selected_text(kind.clone()).show_ui(ui, |ui| {
+        for choice in ["None", "Complexity", "Three-point", "Work"] {
+            if ui.selectable_label(kind == choice, choice).clicked() && kind != choice {
+                edit(doc, st, "Estimate", move |p| crate::columns::commit(TaskCol::EstimateMethod, p, first, choice));
+            }
+        }
+    });
+    let fields: &[(TaskCol, &str)] = match kind.as_str() {
+        "Complexity" => &[(TaskCol::Points, "Points")],
+        "Three-point" => {
+            &[(TaskCol::Optimistic, "Optimistic"), (TaskCol::MostLikely, "Most likely"), (TaskCol::Pessimistic, "Pessimistic")]
+        }
+        "Work" => &[(TaskCol::Work, "Work")],
+        _ => &[],
+    };
+    for (col, name) in fields {
+        label(ui, name);
+        let current = crate::columns::cell(*col, &doc.project, idx, &cctx).text;
+        if let Some(text) = line(ui, ("task_est_field", first, name), &current, "") {
+            let col = *col;
+            edit(doc, st, "Estimate", move |p| crate::columns::commit(col, p, first, &text));
+        }
+    }
+    if kind != "None" {
+        let expected = crate::columns::cell(TaskCol::ExpectedWork, &doc.project, idx, &cctx).text;
+        if !expected.is_empty() {
+            label(ui, "Expected work");
+            derived_line(ui, &expected, "");
+        }
+    }
+}
+
+fn resources_tab(
+    ui: &mut Ui,
+    doc: &mut Document,
+    st: &mut UiState,
+    ids: &[TaskId],
+    snap: &Snap,
+    first: TaskId,
+    multi: bool,
+    any_summary: bool,
+) {
     label(ui, st.t("prop.resources"));
     if any_summary {
         let text = match snap.resources.as_deref() {
@@ -319,9 +751,52 @@ fn task_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState) {
             Some(s) => s,
         };
         ui.label(text).on_hover_text(st.t("prop.group_resources"));
-    } else {
-        resources(ui, doc, st, &ids, snap.resources.as_deref());
+        return;
     }
+    resources(ui, doc, st, ids, snap.resources.as_deref());
+    // One task: its assignments with editable units and work, like the dialog's Resources tab.
+    if !multi {
+        let rows: Vec<(AssignmentId, String, f64, Minutes)> = doc
+            .project
+            .assignments_for_task(first)
+            .map(|a| {
+                let name = doc.project.resource(a.resource).map(|r| r.name.clone()).unwrap_or_default();
+                (a.id, name, a.units, a.work)
+            })
+            .collect();
+        for (aid, name, units, work) in rows {
+            label(ui, &name);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(st.t("prop.units")).size(11.0).color(theme::pal().TEXT_WEAK));
+                if let Some(text) = line(ui, ("asg_units", aid.0), &format::units(units), "100%") {
+                    edit(doc, st, "Assignment units", move |p| {
+                        let u = format::parse_units(&text).ok_or_else(|| format!("'{text}' is not valid units"))?;
+                        p.set_assignment_units(aid, u).map_err(|e| e.to_string())
+                    });
+                }
+                ui.label(RichText::new(st.t("prop.work")).size(11.0).color(theme::pal().TEXT_WEAK));
+                if let Some(text) = line(ui, ("asg_work", aid.0), &format_work(work), "") {
+                    edit(doc, st, "Assignment work", move |p| {
+                        let w = parse_work(&text, &p.settings.time).ok_or_else(|| format!("'{text}' is not valid work"))?;
+                        p.set_assignment_work(aid, w).map_err(|e| e.to_string())
+                    });
+                }
+            });
+        }
+    }
+}
+
+/// The task's status, as a combo on a leaf and read-only roll-up on a group (SPECS.md).
+fn status_block(
+    ui: &mut Ui,
+    doc: &mut Document,
+    st: &mut UiState,
+    ids: &[TaskId],
+    snap: &Snap,
+    first: TaskId,
+    multi: bool,
+    any_summary: bool,
+) {
     label(ui, st.t("prop.status"));
     if any_summary {
         // A group's status rolls up from its subtasks (SPECS.md): shown, not edited here.
@@ -345,7 +820,7 @@ fn task_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState) {
                 if ui.selectable_label(snap.status == Some(status), crate::lang::status_name(status)).clicked()
                     && snap.status != Some(status)
                 {
-                    let ids = ids.clone();
+                    let ids = ids.to_vec();
                     edit(doc, st, "Status", move |p| {
                         for id in &ids {
                             p.set_task_status(*id, status).map_err(|e| e.to_string())?;
@@ -356,11 +831,24 @@ fn task_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState) {
             }
         });
     }
+}
+
+fn percent_block(
+    ui: &mut Ui,
+    doc: &mut Document,
+    st: &mut UiState,
+    ids: &[TaskId],
+    snap: &Snap,
+    first: TaskId,
+    multi: bool,
+    any_summary: bool,
+) {
     label(ui, st.t("prop.percent"));
     if any_summary {
-        derived_line(ui, derived_percent.as_deref().unwrap_or_else(|| st.t("common.multiple_lc")), st.t("prop.from_children"));
+        let derived = common(ids.iter().filter_map(|id| doc.project.task(*id)).map(|t| format::percent(t.sched.percent_complete)));
+        derived_line(ui, derived.as_deref().unwrap_or_else(|| st.t("common.multiple_lc")), st.t("prop.from_children"));
     } else if let Some(text) = line(ui, ("task_pc", first, multi), snap.percent.as_deref().unwrap_or(""), "0") {
-        let ids = ids.clone();
+        let ids = ids.to_vec();
         edit(doc, st, "Percent complete", move |p| {
             let pct =
                 text.trim().trim_end_matches('%').trim().parse::<u8>().map_err(|_| "Percent complete must be a number from 0 to 100")?;
@@ -373,55 +861,91 @@ fn task_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState) {
             Ok(())
         });
     }
-    label(ui, st.t("prop.mark"));
-    let mark_label = snap.mark.map(|m| m.map(crate::lang::mark_name).unwrap_or(st.t("common.none"))).unwrap_or(st.t("common.multiple"));
-    egui::ComboBox::from_id_salt(("task_mark", first, multi)).selected_text(mark_label).show_ui(ui, |ui| {
-        let choices = [None].into_iter().chain(RowMark::ALL.into_iter().map(Some));
-        for choice in choices {
-            let text = choice.map(crate::lang::mark_name).unwrap_or(st.t("common.none"));
-            if ui.selectable_label(snap.mark == Some(choice), text).clicked() && snap.mark != Some(choice) {
-                let ids = ids.clone();
-                edit(doc, st, "Row mark", move |p| {
-                    for id in &ids {
-                        if let Some(t) = p.task_mut(*id) {
-                            t.row_mark = choice;
-                        }
-                    }
-                    Ok(())
-                });
-            }
-        }
-    });
-    label(ui, st.t("prop.notes"));
-    if let Some(text) = notes(ui, ("task_notes", first, multi), snap.notes.as_deref().unwrap_or("")) {
-        let ids = ids.clone();
-        edit(doc, st, "Notes", move |p| {
+}
+
+fn progress_tab(
+    ui: &mut Ui,
+    doc: &mut Document,
+    st: &mut UiState,
+    ids: &[TaskId],
+    snap: &Snap,
+    first: TaskId,
+    multi: bool,
+    any_summary: bool,
+    milestone_only: bool,
+) {
+    status_block(ui, doc, st, ids, snap, first, multi, any_summary);
+    percent_block(ui, doc, st, ids, snap, first, multi, any_summary);
+    // Actual dates with the same rules as the table's columns (progress keeps its start, a
+    // finish completes the task); the pickers' "geen" clears them.
+    let start_minute = doc.project.settings.time.default_start_time;
+    let finish_minute = doc.project.settings.time.default_finish_time;
+    label(ui, st.t("prop.actual_start"));
+    if let Some(next) = show_date(ui, &format!("task_astart{first}"), snap.actual_start, true, !any_summary, start_minute) {
+        let ids = ids.to_vec();
+        edit(doc, st, "Actual start", move |p| {
             for id in &ids {
-                if let Some(t) = p.task_mut(*id) {
-                    t.notes = text.clone();
-                }
+                crate::columns::set_actual_start(p, *id, next)?;
             }
             Ok(())
         });
     }
-}
-
-#[derive(Clone, Copy)]
-enum Bound {
-    StartEarliest,
-    StartLatest,
-    FinishEarliest,
-    FinishLatest,
-}
-
-impl Bound {
-    fn label(self) -> &'static str {
-        crate::lang::text(match self {
-            Bound::StartEarliest => "prop.start_earliest",
-            Bound::StartLatest => "prop.start_latest",
-            Bound::FinishEarliest => "prop.finish_earliest",
-            Bound::FinishLatest => "prop.finish_latest",
-        })
+    label(ui, st.t("prop.actual_finish"));
+    if let Some(next) = show_date(ui, &format!("task_afinish{first}"), snap.actual_finish, true, !any_summary, finish_minute) {
+        let ids = ids.to_vec();
+        edit(doc, st, "Actual finish", move |p| {
+            for id in &ids {
+                crate::columns::set_actual_finish(p, *id, next)?;
+            }
+            Ok(())
+        });
+    }
+    // Work rolls up from the assignments: shown, not edited here.
+    let actual_work = common(ids.iter().filter_map(|id| doc.project.task(*id)).map(|t| format_work(t.sched.actual_work)));
+    label(ui, st.t("prop.actual_work"));
+    derived_line(ui, actual_work.as_deref().unwrap_or_else(|| st.t("common.multiple_lc")), st.t("prop.from_children"));
+    let remaining =
+        common(ids.iter().filter_map(|id| doc.project.task(*id)).map(|t| format_work((t.sched.work - t.sched.actual_work).max(0))));
+    label(ui, st.t("prop.remaining_work"));
+    derived_line(ui, remaining.as_deref().unwrap_or_else(|| st.t("common.multiple_lc")), st.t("prop.from_children"));
+    if !any_summary && !milestone_only {
+        label(ui, st.t("prop.stop"));
+        let stop_text = match snap.stop {
+            None => st.t("common.multiple_lc").to_string(),
+            Some(None) => "NA".to_string(),
+            Some(Some(d)) => crate::widgets::date_picker::format_dutch(d),
+        };
+        derived_line(ui, &stop_text, "End of the work done so far");
+        label(ui, st.t("prop.resume"));
+        let has_stop = matches!(snap.stop, Some(Some(_)));
+        if let Some(next) = show_date(ui, &format!("task_resume{first}"), snap.resume, true, has_stop, start_minute) {
+            let ids = ids.to_vec();
+            edit(doc, st, "Resume", move |p| {
+                for id in &ids {
+                    p.set_resume(*id, next).map_err(|e| e.to_string())?;
+                }
+                Ok(())
+            });
+        }
+    }
+    // Baseline and variance, read-only, when a baseline was saved.
+    if !multi
+        && let Some(t) = doc.project.task(first)
+        && let Some(b) = t.baseline
+    {
+        label(ui, st.t("prop.baseline"));
+        derived_line(ui, &format!("{} – {}", format::date(Some(b.start)), format::date(Some(b.finish))), "");
+        if let Some(f) = t.sched.finish {
+            let wc = plancraft_core::schedule::project_calendar(&doc.project);
+            let v = wc.between(b.finish, f);
+            label(ui, st.t("prop.variance"));
+            let text = if v == 0 {
+                doc.project.format_duration(0, false)
+            } else {
+                format!("{}{}", if v > 0 { "+" } else { "-" }, doc.project.format_duration(v.abs(), false))
+            };
+            derived_line(ui, &text, "");
+        }
     }
 }
 
@@ -431,6 +955,8 @@ struct Snap {
     duration: Option<String>,
     start: Option<Option<DateTime>>,
     finish: Option<Option<DateTime>>,
+    start_mode: Option<DateMode>,
+    finish_mode: Option<DateMode>,
     start_earliest: Option<Option<DateTime>>,
     start_latest: Option<Option<DateTime>>,
     finish_earliest: Option<Option<DateTime>>,
@@ -444,6 +970,23 @@ struct Snap {
     status: Option<TaskStatus>,
     mark: Option<Option<RowMark>>,
     notes: Option<String>,
+    active: Option<bool>,
+    on_timeline: Option<bool>,
+    priority: Option<String>,
+    deliverable: Option<String>,
+    mode: Option<ScheduleMode>,
+    deadline: Option<Option<DateTime>>,
+    constraint: Option<ConstraintKind>,
+    constraint_date: Option<Option<DateTime>>,
+    task_type: Option<TaskType>,
+    effort: Option<bool>,
+    calendar: Option<Option<CalendarId>>,
+    ignore_res_cal: Option<bool>,
+    fixed_cost: Option<String>,
+    actual_start: Option<Option<DateTime>>,
+    actual_finish: Option<Option<DateTime>>,
+    stop: Option<Option<DateTime>>,
+    resume: Option<Option<DateTime>>,
 }
 
 fn snapshot(p: &Project, ids: &[TaskId]) -> Snap {
@@ -455,10 +998,14 @@ fn snapshot(p: &Project, ids: &[TaskId]) -> Snap {
         duration: text(&|t| p.format_task_minutes(t, t.duration, t.estimated)),
         start: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.sched.start.or(t.manual_start))),
         finish: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.sched.finish.or(t.manual_finish))),
-        start_earliest: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.bounds.start_earliest)),
-        start_latest: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.bounds.start_latest)),
-        finish_earliest: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.bounds.finish_earliest)),
-        finish_latest: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.bounds.finish_latest)),
+        start_mode: common_eq(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.start_mode())),
+        finish_mode: common_eq(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.finish_mode())),
+        // The windows, not the raw bounds: a legacy SNET-style pin or a manual date shows
+        // as the side's minimum or maximum until an edit absorbs it into the bounds.
+        start_earliest: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.start_window().0)),
+        start_latest: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.start_window().1)),
+        finish_earliest: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.finish_window().0)),
+        finish_latest: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.finish_window().1)),
         start_fixed: flag(&|t| t.bounds.start_latest_fixed),
         finish_fixed: flag(&|t| t.bounds.finish_latest_fixed),
         stretch: flag(&|t| t.fills_group),
@@ -468,7 +1015,29 @@ fn snapshot(p: &Project, ids: &[TaskId]) -> Snap {
         status: common_status(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.status)),
         mark: common_mark(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.row_mark)),
         notes: text(&|t| t.notes.clone()),
+        active: flag(&|t| t.active),
+        on_timeline: flag(&|t| t.show_on_timeline),
+        priority: text(&|t| t.priority.to_string()),
+        deliverable: text(&|t| t.deliverable.clone()),
+        mode: common_eq(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.mode)),
+        deadline: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.deadline)),
+        constraint: common_eq(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.constraint.kind)),
+        constraint_date: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.constraint.date)),
+        task_type: common_eq(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.task_type)),
+        effort: flag(&|t| t.effort_driven),
+        calendar: common_eq(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.calendar)),
+        ignore_res_cal: flag(&|t| t.ignore_resource_calendars),
+        fixed_cost: text(&|t| if t.fixed_cost == 0.0 { String::new() } else { format!("{:.2}", t.fixed_cost) }),
+        actual_start: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.actual_start)),
+        actual_finish: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.actual_finish)),
+        stop: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.sched.stop)),
+        resume: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.sched.resume)),
     }
+}
+
+fn common_eq<T: PartialEq>(mut values: impl Iterator<Item = T>) -> Option<T> {
+    let first = values.next()?;
+    values.all(|v| v == first).then_some(first)
 }
 
 fn common(mut values: impl Iterator<Item = String>) -> Option<String> {
@@ -502,19 +1071,6 @@ fn can_share(p: &Project, id: TaskId) -> bool {
     p.parent_index(idx).is_some() && !p.has_children(idx) && !task.is_milestone()
 }
 
-fn set_picked_date(p: &mut Project, ids: &[TaskId], date: DateTime, finish: bool) -> Result<(), String> {
-    for id in ids {
-        let Some(idx) = p.task_index(*id) else { continue };
-        let summary = p.has_children(idx);
-        let auto = p.task(*id).is_some_and(|t| t.mode == ScheduleMode::Auto);
-        if auto && !summary {
-            p.set_schedule_mode(&[*id], ScheduleMode::Manual).map_err(|e| e.to_string())?;
-        }
-        p.set_manual_date(*id, date, finish).map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
 fn show_date(
     ui: &mut Ui,
     salt: &str,
@@ -531,33 +1087,110 @@ fn show_date(
     crate::widgets::date_picker::button(ui, crate::widgets::date_picker::DateField { salt, current, clearable, enabled, minute, empty })
 }
 
-fn date_bound(
+/// One side (start or finish) of the date rules: everything [`date_mode_side`] needs.
+struct DateSide {
+    finish: bool,
+    minute: u32,
+    scheduled: Option<Option<DateTime>>,
+    mode: Option<DateMode>,
+    min: Option<Option<DateTime>>,
+    max: Option<Option<DateTime>>,
+    fixed: Option<bool>,
+}
+
+/// One side's date rule, the Project Planner way: a mode picker (Unrestricted, On, no earlier,
+/// no later, Between), only the date editors that mode needs, and the calculated date greyed
+/// when the mode doesn't pin it. An unrestricted side explains itself on hover.
+fn date_mode_side(
     ui: &mut Ui,
     doc: &mut Document,
     st: &mut UiState,
     ids: &[TaskId],
     first: TaskId,
-    current: Option<Option<DateTime>>,
-    bound: Bound,
-    minute: u32,
+    multi: bool,
+    title: &str,
+    side: DateSide,
 ) {
-    label(ui, bound.label());
-    let Some(next) = show_date(ui, &format!("{}{first}", bound.label()), current, true, true, minute) else { return };
-    let ids = ids.to_vec();
-    let title = bound.label();
-    edit(doc, st, title, move |p| {
-        for id in &ids {
-            if let Some(t) = p.task_mut(*id) {
-                match bound {
-                    Bound::StartEarliest => t.bounds.start_earliest = next,
-                    Bound::StartLatest => t.bounds.start_latest = next,
-                    Bound::FinishEarliest => t.bounds.finish_earliest = next,
-                    Bound::FinishLatest => t.bounds.finish_latest = next,
-                }
+    label(ui, title);
+    let DateSide { finish, minute, scheduled, mode, min, max, fixed } = side;
+    // The calculated date: greyed, because the mode's own editors below do the pinning.
+    if mode != Some(DateMode::On) {
+        let resp = ui.scope(|ui| show_date(ui, &format!("sched_{finish}{first}"), scheduled, false, false, minute)).response;
+        if mode == Some(DateMode::Unrestricted) {
+            resp.on_hover_text(st.t("dm.calc_deps"));
+        }
+    }
+    let shown = mode.map(crate::lang::date_mode_name).unwrap_or_else(|| st.t("common.multiple_lc"));
+    let mut pick = None;
+    egui::ComboBox::from_id_salt(("date_mode", finish, first, multi)).width(ui.available_width()).selected_text(shown).show_ui(ui, |ui| {
+        for m in DateMode::ALL {
+            if ui.selectable_label(mode == Some(m), crate::lang::date_mode_name(m)).clicked() {
+                pick = Some(m);
             }
         }
-        Ok(())
     });
+    if let Some(m) = pick
+        && Some(m) != mode
+    {
+        let ids = ids.to_vec();
+        edit(doc, st, if finish { "Finish rule" } else { "Start rule" }, move |p| {
+            for id in &ids {
+                p.set_date_mode(*id, finish, m).map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        });
+        return; // the editors below would show the old mode's fields this frame
+    }
+    let write = |doc: &mut Document, st: &mut UiState, ids: &[TaskId], to_min: bool, date: DateTime| {
+        let ids = ids.to_vec();
+        edit(doc, st, if finish { "Finish rule" } else { "Start rule" }, move |p| {
+            for id in &ids {
+                let Some(t) = p.task(*id) else { continue };
+                let (mn, mx) = if finish { t.finish_window() } else { t.start_window() };
+                let (mn, mx) = if to_min { (Some(date), mx) } else { (mn, Some(date)) };
+                p.set_date_window(*id, finish, mn, mx).map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        });
+    };
+    match mode {
+        Some(DateMode::On) => {
+            // The single pinned date: picking one writes both the minimum and the maximum.
+            if let Some(Some(date)) = show_date(ui, &format!("on_{finish}{first}"), min, false, true, minute) {
+                let ids = ids.to_vec();
+                edit(doc, st, if finish { "Finish rule" } else { "Start rule" }, move |p| {
+                    for id in &ids {
+                        p.set_date_window(*id, finish, Some(date), Some(date)).map_err(|e| e.to_string())?;
+                    }
+                    Ok(())
+                });
+            }
+        }
+        Some(DateMode::NoEarlier) => {
+            if let Some(Some(date)) = show_date(ui, &format!("min_{finish}{first}"), min, false, true, minute) {
+                write(doc, st, ids, true, date);
+            }
+        }
+        Some(DateMode::NoLater) => {
+            if let Some(Some(date)) = show_date(ui, &format!("max_{finish}{first}"), max, false, true, minute) {
+                write(doc, st, ids, false, date);
+            }
+        }
+        Some(DateMode::Between) => {
+            if let Some(Some(date)) = show_date(ui, &format!("min_{finish}{first}"), min, false, true, minute) {
+                write(doc, st, ids, true, date);
+            }
+            if let Some(Some(date)) = show_date(ui, &format!("max_{finish}{first}"), max, false, true, minute) {
+                write(doc, st, ids, false, date);
+            }
+        }
+        Some(DateMode::Unrestricted) | None => {}
+    }
+    // The "moves the plan" tick belongs to the side's maximum, so it hides with it.
+    if matches!(mode, Some(DateMode::On) | Some(DateMode::NoLater) | Some(DateMode::Between)) {
+        let key = if finish { "prop.finish_fixed" } else { "prop.start_fixed" };
+        fixed_box(ui, doc, st, ids, st.t(key), fixed, !finish, true);
+    }
 }
 
 /// The "moves the plan" tick under its "no later than" date. It only means something once that

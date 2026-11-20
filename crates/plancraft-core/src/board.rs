@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{BoardColumnId, IdCounters, TaskId};
 use crate::limits::MAX_NAME_CHARS;
-use crate::model::Project;
+use crate::model::{Project, TaskStatus};
 use crate::ops::{PlanError, PlanResult};
 
 /// Most columns a board can have.
@@ -34,15 +34,48 @@ pub struct BoardColumn {
     /// Set % Complete: a task moved into this column takes this % complete.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub percent_complete: Option<u8>,
+    /// The workflow status this column mirrors. A linked column and the Status field are one:
+    /// a card moved here takes the status (with its percent rules), and a task's card sits in
+    /// its status's column unless an unlinked (custom) column holds it explicitly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<TaskStatus>,
 }
 
-/// The board a new plan starts with: Not Started, Next up, In progress and Done (Done sets
-/// 100% complete).
+/// The four canonical columns and the status each one mirrors, by stored (file) name.
+/// The UI shows the localized status names (Niet gestart, Gestart, Bezig, Gereed).
+pub const CANONICAL: [(&str, TaskStatus); 4] = [
+    ("Not Started", TaskStatus::NotStarted),
+    ("Next up", TaskStatus::Started),
+    ("In progress", TaskStatus::Busy),
+    ("Done", TaskStatus::Done),
+];
+
+/// The board a new plan starts with: the four status columns (Done sets 100% complete).
 pub fn default_columns(ids: &mut IdCounters) -> Vec<BoardColumn> {
-    [("Not Started", None), ("Next up", None), ("In progress", None), ("Done", Some(100))]
+    CANONICAL
         .into_iter()
-        .map(|(name, percent_complete)| BoardColumn { id: ids.next_board_column(), name: name.into(), percent_complete })
+        .map(|(name, status)| BoardColumn {
+            id: ids.next_board_column(),
+            name: name.into(),
+            percent_complete: (status == TaskStatus::Done).then_some(100),
+            status: Some(status),
+        })
         .collect()
+}
+
+/// Migration for plans saved before columns carried a status: the canonical columns (by name,
+/// case ignored) link to their statuses, each status at most once. Renamed or custom columns
+/// are left alone.
+pub fn link_status_columns(p: &mut Project) {
+    for (name, status) in CANONICAL {
+        if p.board_columns.iter().any(|c| c.status == Some(status)) {
+            continue;
+        }
+        let key = name_key(name);
+        if let Some(c) = p.board_columns.iter_mut().find(|c| c.status.is_none() && name_key(&c.name) == key) {
+            c.status = Some(status);
+        }
+    }
 }
 
 fn invalid<T>(msg: impl Into<String>) -> PlanResult<T> {
@@ -95,10 +128,18 @@ impl Project {
         parse_id(key).and_then(|id| self.board_column(id)).map(|c| c.id)
     }
 
-    /// The column a task's card sits in: its Board Status, or the first column.
+    /// The column linked to a status, if any.
+    pub fn status_column(&self, status: TaskStatus) -> Option<BoardColumnId> {
+        self.board_columns.iter().find(|c| c.status == Some(status)).map(|c| c.id)
+    }
+
+    /// The column a task's card sits in. An explicit Board Status naming a custom (unlinked)
+    /// column wins; otherwise the task's workflow status places the card in its linked column,
+    /// so Status and board stay one. Fallback: the first column.
     pub fn board_column_of(&self, idx: usize) -> Option<BoardColumnId> {
         let t = self.tasks.get(idx)?;
-        t.board_status.filter(|s| self.board_column(*s).is_some()).or_else(|| self.board_columns.first().map(|c| c.id))
+        let custom = t.board_status.filter(|s| self.board_column(*s).is_some_and(|c| c.status.is_none()));
+        custom.or_else(|| self.status_column(t.status)).or_else(|| self.board_columns.first().map(|c| c.id))
     }
 
     /// Whether the task at `idx` has a card: shown on the board and not a summary task.
@@ -110,11 +151,11 @@ impl Project {
     pub fn board(&self) -> Vec<(&crate::board::BoardColumn, Vec<usize>)> {
         let mut cols: Vec<(&crate::board::BoardColumn, Vec<usize>)> = self.board_columns.iter().map(|c| (c, Vec::new())).collect();
         let at: std::collections::HashMap<BoardColumnId, usize> = self.board_columns.iter().enumerate().map(|(k, c)| (c.id, k)).collect();
-        for (i, t) in self.tasks.iter().enumerate() {
+        for i in 0..self.tasks.len() {
             if !self.on_board(i) {
                 continue;
             }
-            let k = t.board_status.and_then(|s| at.get(&s).copied()).unwrap_or(0);
+            let k = self.board_column_of(i).and_then(|id| at.get(&id).copied()).unwrap_or(0);
             if let Some((_, rows)) = cols.get_mut(k) {
                 rows.push(i);
             }
@@ -146,7 +187,7 @@ impl Project {
         }
         let id = self.ids.next_board_column();
         let at = at.unwrap_or(self.board_columns.len()).min(self.board_columns.len());
-        self.board_columns.insert(at, BoardColumn { id, name, percent_complete });
+        self.board_columns.insert(at, BoardColumn { id, name, percent_complete, status: None });
         Ok(id)
     }
 
@@ -200,11 +241,13 @@ impl Project {
         Ok(moved)
     }
 
-    /// Moves tasks' cards to a column (their Board Status). A column with a Set % Complete value
+    /// Moves tasks' cards to a column (their Board Status). A status-linked column sets the
+    /// tasks' workflow status, with its percent rules; a column with a Set % Complete value
     /// gives them that % complete. Summary tasks are refused (their subtasks have the cards).
     pub fn set_board_status(&mut self, ids: &[TaskId], column: BoardColumnId) -> PlanResult<()> {
         let k = self.require_column(column)?;
-        let percent = self.board_columns.get(k).and_then(|c| c.percent_complete);
+        let col = self.board_columns.get(k).cloned();
+        let (percent, status) = col.map(|c| (c.percent_complete, c.status)).unwrap_or_default();
         let rows = self.rows_of(ids)?;
         if let Some(&i) = rows.iter().find(|&&i| self.has_children(i)) {
             let name = self.tasks.get(i).map(|t| t.name.clone()).unwrap_or_default();
@@ -212,7 +255,14 @@ impl Project {
         }
         for i in rows {
             if let Some(t) = self.tasks.get_mut(i) {
-                t.board_status = Some(column);
+                // In a linked column the status is the position; the explicit Board Status is
+                // only for custom columns.
+                t.board_status = if status.is_some() { None } else { Some(column) };
+            }
+            if let Some(s) = status
+                && let Some(id) = self.tasks.get(i).map(|t| t.id)
+            {
+                self.set_task_status(id, s)?;
             }
             if let Some(p) = percent {
                 self.set_percent_complete_at(i, p)?;
@@ -311,5 +361,78 @@ mod tests {
         assert_eq!(board[3].1, [1]);
         p.set_show_on_board(&[b], false).unwrap();
         assert!(p.board().iter().all(|(_, rows)| rows.is_empty()));
+    }
+
+    /// Status ↔ board sync: moving a card into a linked column IS a status edit, with the
+    /// status's percent rules.
+    #[test]
+    fn a_card_moved_into_a_linked_column_takes_the_status() {
+        let (mut p, a, _) = plan();
+        let busy = p.status_column(TaskStatus::Busy).unwrap();
+        p.set_board_status(&[a], busy).unwrap();
+        let t = p.task(a).unwrap();
+        assert_eq!(t.status, TaskStatus::Busy);
+        assert_eq!(t.board_status, None, "a linked column needs no explicit Board Status");
+        let done = p.status_column(TaskStatus::Done).unwrap();
+        p.set_board_status(&[a], done).unwrap();
+        let t = p.task(a).unwrap();
+        assert_eq!((t.status, t.percent_complete), (TaskStatus::Done, 100));
+        let not_started = p.status_column(TaskStatus::NotStarted).unwrap();
+        p.set_board_status(&[a], not_started).unwrap();
+        let t = p.task(a).unwrap();
+        assert_eq!((t.status, t.percent_complete), (TaskStatus::NotStarted, 0), "back to not started clears the percent");
+    }
+
+    /// Status ↔ board sync, the other direction: a status edit moves the card.
+    #[test]
+    fn a_status_edit_moves_the_card() {
+        let (mut p, a, b) = plan();
+        p.set_task_status(a, TaskStatus::Busy).unwrap();
+        let board = p.board();
+        assert_eq!(board[2].1, [p.task_index(a).unwrap()], "A's card sits under Busy");
+        assert_eq!(board[0].1, [p.task_index(b).unwrap()], "B never left Not Started");
+        p.set_task_status(a, TaskStatus::Done).unwrap();
+        assert_eq!(p.board()[3].1, [p.task_index(a).unwrap()]);
+    }
+
+    /// A custom (unlinked) column holds its cards explicitly and never touches the status.
+    #[test]
+    fn a_custom_column_keeps_its_card_and_leaves_the_status_alone() {
+        let (mut p, a, _) = plan();
+        p.set_task_status(a, TaskStatus::Busy).unwrap();
+        let review = p.add_board_column("Review", None, None).unwrap();
+        p.set_board_status(&[a], review).unwrap();
+        let t = p.task(a).unwrap();
+        assert_eq!(t.status, TaskStatus::Busy, "a custom column is not a status");
+        assert_eq!(t.board_status, Some(review));
+        assert_eq!(p.board()[4].1, [p.task_index(a).unwrap()]);
+        // Deleting the custom column drops the explicit placement: the status places the card.
+        p.delete_board_column(review).unwrap();
+        assert_eq!(p.board()[2].1, [p.task_index(a).unwrap()], "back under Busy, not the first column");
+    }
+
+    /// Migration: canonical columns from plans saved before columns carried a status link up by
+    /// name, each status once; renamed or custom columns stay unlinked.
+    #[test]
+    fn an_old_files_canonical_columns_link_to_the_statuses() {
+        let (mut p, _, _) = plan();
+        for c in &mut p.board_columns {
+            c.status = None; // as read from an old file
+        }
+        p.add_board_column("Review", None, None).unwrap();
+        crate::board::link_status_columns(&mut p);
+        let statuses: Vec<Option<TaskStatus>> = p.board_columns.iter().map(|c| c.status).collect();
+        assert_eq!(
+            statuses,
+            [Some(TaskStatus::NotStarted), Some(TaskStatus::Started), Some(TaskStatus::Busy), Some(TaskStatus::Done), None]
+        );
+        // A second run changes nothing, and a renamed canonical column stays unlinked.
+        let busy = p.status_column(TaskStatus::Busy).unwrap();
+        p.rename_board_column(busy, "Working").unwrap();
+        if let Some(c) = p.board_columns.iter_mut().find(|c| c.id == busy) {
+            c.status = None;
+        }
+        crate::board::link_status_columns(&mut p);
+        assert_eq!(p.status_column(TaskStatus::Busy), None, "the renamed column is not re-linked");
     }
 }

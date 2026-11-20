@@ -952,7 +952,8 @@ fn agents_work_the_task_board() {
     assert!(up["columns"][1]["percent_complete"].is_null());
     let del = c.call("delete_board_column", json!({ "column": "QA" }));
     assert_eq!(del["cards_moved_to_first_column"], 1);
-    assert_eq!(c.call("get_task", json!({ "task": b }))["board_status"], "Not Started");
+    // The card falls back to the column its status names (it was Busy from In progress).
+    assert_eq!(c.call("get_task", json!({ "task": b }))["board_status"], "In progress");
 
     // Hidden tasks have no card; errors are clear.
     c.call("update_task", json!({ "task": b, "show_on_board": false }));
@@ -979,8 +980,9 @@ fn agents_work_the_task_board() {
     assert_eq!(c.call("get_board", json!({ "column": "3" }))["columns"][0]["name"], "3");
     c.call_err("get_board", json!({ "column": "BB3" }));
     c.call_err("update_board_column", json!({ "column": "3" }));
+    // Polish (Done at 30%) cascaded back to Busy, so Done holds the two finished cards.
     let limited = c.call("get_board", json!({ "column": "Done", "limit": 1 }));
-    assert_eq!((limited["columns"][0]["count"].as_u64(), limited["columns"][0]["truncated"].as_bool()), (Some(3), Some(true)), "{limited}");
+    assert_eq!((limited["columns"][0]["count"].as_u64(), limited["columns"][0]["truncated"].as_bool()), (Some(2), Some(true)), "{limited}");
     c.call("delete_board_column", json!({ "column": "3" }));
     for col in ["Not Started", "Next up", "In progress"] {
         c.call("delete_board_column", json!({ "column": col }));
@@ -995,7 +997,9 @@ fn agents_export_and_import_microsoft_project_xml() {
     c.call("new_project", json!({ "name": "Exchange", "start": "2026-10-19" }));
     let a = c.call("create_task", json!({ "name": "Design", "duration": "5d" }));
     c.call("create_task", json!({ "name": "Build", "duration": "10d", "predecessors": [a["id"]] }));
-    c.call("update_task", json!({ "task": a["id"], "board_status": "In progress" }));
+    // A canonical column rides on the task status, which exports as an extended attribute:
+    // no "left out" note for it. A card hidden from the board is lost, and says so.
+    c.call("update_task", json!({ "task": a["id"], "board_status": "In progress", "show_on_board": false }));
 
     let out = c.call("export_mspdi", json!({ "path": dir.path().join("plan").to_str().unwrap() }));
     assert_eq!(out["tasks"], 2, "{out}");

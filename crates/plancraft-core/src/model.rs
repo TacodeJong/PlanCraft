@@ -159,6 +159,66 @@ impl DateBounds {
     }
 }
 
+/// How one side (start or finish) of a task is restricted, read from its earliest/latest pair.
+/// The mapping mirrors the Project Planner app's `DateMode`: none → unrestricted, equal → on,
+/// minimum only → no earlier than, maximum only → no later than, both → between.
+///
+/// An unrestricted side carries no date of its own: it is placed by predecessors, its group and
+/// any backward pressure from successors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DateMode {
+    Unrestricted,
+    On,
+    NoEarlier,
+    NoLater,
+    Between,
+}
+
+impl DateMode {
+    pub const ALL: [DateMode; 5] = [DateMode::Unrestricted, DateMode::On, DateMode::NoEarlier, DateMode::NoLater, DateMode::Between];
+
+    /// The mode a minimum/maximum pair expresses.
+    pub fn of(min: Option<DateTime>, max: Option<DateTime>) -> DateMode {
+        match (min, max) {
+            (None, None) => DateMode::Unrestricted,
+            (Some(a), Some(b)) if a == b => DateMode::On,
+            (Some(_), Some(_)) => DateMode::Between,
+            (Some(_), None) => DateMode::NoEarlier,
+            (None, Some(_)) => DateMode::NoLater,
+        }
+    }
+
+    /// New minimum and maximum after switching to this mode, keeping existing dates where they
+    /// fit. `anchor` is used when the side has no date yet (normally the scheduled date).
+    /// Between opens a one-day window when there is no later maximum yet.
+    pub fn window(self, min: Option<DateTime>, max: Option<DateTime>, anchor: DateTime) -> (Option<DateTime>, Option<DateTime>) {
+        match self {
+            DateMode::Unrestricted => (None, None),
+            DateMode::On => {
+                let day = min.or(max).unwrap_or(anchor);
+                (Some(day), Some(day))
+            }
+            DateMode::NoEarlier => (Some(min.or(max).unwrap_or(anchor)), None),
+            DateMode::NoLater => (None, Some(max.or(min).unwrap_or(anchor))),
+            DateMode::Between => {
+                let lo = min.or(max).unwrap_or(anchor);
+                let hi = max.filter(|d| *d > lo).or_else(|| lo.checked_add(crate::dates::days(1)).ok()).unwrap_or(lo);
+                (Some(lo), Some(hi))
+            }
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            DateMode::Unrestricted => "Unrestricted",
+            DateMode::On => "On",
+            DateMode::NoEarlier => "No Earlier Than",
+            DateMode::NoLater => "No Later Than",
+            DateMode::Between => "Between",
+        }
+    }
+}
+
 impl ConstraintKind {
     pub const ALL: [ConstraintKind; 8] = [
         ConstraintKind::Asap,
@@ -637,7 +697,73 @@ fn is_zero_f64(v: &f64) -> bool {
     *v == 0.0
 }
 
+/// The earlier of two optional dates, where a date always beats none (unlike `Option`'s own
+/// ordering, which puts `None` first).
+fn opt_min(a: Option<DateTime>, b: Option<DateTime>) -> Option<DateTime> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(x.min(y)),
+        (x, y) => x.or(y),
+    }
+}
+
 impl Task {
+    /// The start side's minimum and maximum, the legacy single constraint included
+    /// (SNET → minimum, SNLT → maximum, MSO → both). A manually scheduled task's typed
+    /// start reads as an On pin.
+    pub fn start_window(&self) -> (Option<DateTime>, Option<DateTime>) {
+        if self.mode == ScheduleMode::Manual
+            && let Some(d) = self.manual_start
+        {
+            return (Some(d), Some(d));
+        }
+        let mut min = self.bounds.start_earliest;
+        let mut max = self.bounds.start_latest;
+        match self.constraint.kind {
+            ConstraintKind::Snet => min = min.max(self.constraint.date),
+            ConstraintKind::Snlt => max = opt_min(max, self.constraint.date),
+            ConstraintKind::Mso => {
+                min = min.or(self.constraint.date);
+                max = max.or(self.constraint.date);
+            }
+            _ => {}
+        }
+        (min, max)
+    }
+
+    /// The finish side's minimum and maximum (FNET → minimum, FNLT → maximum, MFO → both),
+    /// as [`Task::start_window`] for the other side.
+    pub fn finish_window(&self) -> (Option<DateTime>, Option<DateTime>) {
+        if self.mode == ScheduleMode::Manual
+            && let Some(d) = self.manual_finish
+        {
+            return (Some(d), Some(d));
+        }
+        let mut min = self.bounds.finish_earliest;
+        let mut max = self.bounds.finish_latest;
+        match self.constraint.kind {
+            ConstraintKind::Fnet => min = min.max(self.constraint.date),
+            ConstraintKind::Fnlt => max = opt_min(max, self.constraint.date),
+            ConstraintKind::Mfo => {
+                min = min.or(self.constraint.date);
+                max = max.or(self.constraint.date);
+            }
+            _ => {}
+        }
+        (min, max)
+    }
+
+    /// How the start side is restricted (see [`DateMode`]).
+    pub fn start_mode(&self) -> DateMode {
+        let (min, max) = self.start_window();
+        DateMode::of(min, max)
+    }
+
+    /// How the finish side is restricted (see [`DateMode`]).
+    pub fn finish_mode(&self) -> DateMode {
+        let (min, max) = self.finish_window();
+        DateMode::of(min, max)
+    }
+
     pub fn new(id: TaskId, name: impl Into<String>, minutes_per_day: Minutes) -> Self {
         Self {
             id,

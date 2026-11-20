@@ -26,6 +26,7 @@ pub fn period_label(g: Granularity, d: Date) -> String {
         Granularity::Day => crate::format::weekday_day(d),
         Granularity::Week => format!("Wk {}", crate::format::day_month(d)),
         Granularity::Month => crate::format::month_short_year(d),
+        Granularity::Quarter => format!("Q{} {}", d.month0() / 3 + 1, d.year32()),
     }
 }
 
@@ -35,7 +36,9 @@ pub fn period_toolbar(ui: &mut Ui, st: &mut UiState, p: &Project) -> Date {
     let mut from = st.usage_from.unwrap_or(default_from);
     ui.horizontal(|ui| {
         ui.label("Timescale:");
-        for (g, l) in [(Granularity::Day, "Days"), (Granularity::Week, "Weeks"), (Granularity::Month, "Months")] {
+        let choices =
+            [(Granularity::Day, "Days"), (Granularity::Week, "Weeks"), (Granularity::Month, "Months"), (Granularity::Quarter, "Quarters")];
+        for (g, l) in choices {
             if ui.selectable_label(st.granularity == g, l).clicked() {
                 st.granularity = g;
                 from = g.bucket_start(from);
@@ -67,6 +70,10 @@ pub fn step(g: Granularity, d: Date, n: i32) -> Date {
         Granularity::Week => plancraft_core::dates::shift_days(d, 7 * i64::from(n)),
         Granularity::Month => {
             let total = d.year32() * 12 + d.month0() as i32 + n;
+            plancraft_core::dates::ymd(total.div_euclid(12), total.rem_euclid(12) as u32 + 1, 1).unwrap_or(d)
+        }
+        Granularity::Quarter => {
+            let total = d.year32() * 12 + d.month0() as i32 + 3 * n;
             plancraft_core::dates::ymd(total.div_euclid(12), total.rem_euclid(12) as u32 + 1, 1).unwrap_or(d)
         }
     }

@@ -129,10 +129,10 @@ impl SetBaseline {
             .id(egui::Id::new("set_baseline"))
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 140.0))
-            .open(&mut open)
-            .collapsible(false)
+            .title_bar(false)
             .resizable(false)
             .show(ctx, |ui| {
+                open = crate::widgets::craft::dialog_header(ui, "Set Baseline");
                 let p = &doc.project;
                 ui.radio_value(&mut self.interim, false, "Set baseline");
                 ui.add_enabled_ui(!self.interim, |ui| {
@@ -238,10 +238,10 @@ impl ClearBaseline {
             .id(egui::Id::new("clear_baseline"))
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 140.0))
-            .open(&mut open)
-            .collapsible(false)
+            .title_bar(false)
             .resizable(false)
             .show(ctx, |ui| {
+                open = crate::widgets::craft::dialog_header(ui, "Clear Baseline");
                 let p = &doc.project;
                 egui::Grid::new("cb").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                     ui.radio_value(&mut self.interim, false, "Clear baseline plan");

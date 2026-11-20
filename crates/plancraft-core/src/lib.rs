@@ -51,6 +51,7 @@ pub mod workload;
 pub mod workspace;
 pub mod xlsx_gantt;
 pub mod xlsx_out;
+pub mod xlsx_usage;
 
 pub mod prelude {
     pub use crate::baseline::{PlanSlot, Scope};

@@ -399,7 +399,10 @@ struct Engine<'a> {
     /// Edges indexed by predecessor leaf (only `Leaf` sources; summary starts are expanded).
     outgoing: Vec<Vec<usize>>,
     order: Vec<usize>,
-    warnings: Vec<String>,
+    /// Scheduling warnings, each with the task it concerns (`None`: the plan as a whole).
+    /// A task's own warnings end up in its `sched.warnings`, so its row, pane and agents
+    /// see them — not just the Statistics window.
+    warnings: Vec<(Option<usize>, String)>,
     dates: Vec<Dates>,
     /// Working parts of split tasks (by task index).
     segments: HashMap<usize, Vec<(DateTime, DateTime)>>,
@@ -466,7 +469,7 @@ fn apply_date_bounds(
         && es > date
     {
         if warn {
-            warnings.push(format!("'{}' cannot start by its fixed no-later-than date", t.name));
+            warnings.push("Cannot start by its fixed no-later-than date".to_string());
         }
         es = match t.bounds.start_earliest {
             Some(floor) => date.max(floor),
@@ -479,7 +482,7 @@ fn apply_date_bounds(
         let s = if dur > 0 { along(date, false) } else { date };
         if es > s {
             if warn {
-                warnings.push(format!("'{}' cannot finish by its fixed no-later-than date", t.name));
+                warnings.push("Cannot finish by its fixed no-later-than date".to_string());
             }
             es = match t.bounds.start_earliest {
                 Some(floor) => s.max(floor),
@@ -640,7 +643,7 @@ impl<'a> Engine<'a> {
         match r {
             TaskRef::Local(id) => {
                 let Some(&pi) = self.position.get(id) else {
-                    self.warnings.push(format!("'{succ_name}' references missing predecessor {id}"));
+                    self.warnings.push((None, format!("'{succ_name}' references missing predecessor {id}")));
                     return Vec::new();
                 };
                 if self.task(pi).is_none_or(|t| !t.active) {
@@ -664,12 +667,12 @@ impl<'a> Engine<'a> {
                     Some(s) => match (s.start, s.finish) {
                         (Some(start), Some(finish)) => vec![PredSource::Fixed { start, finish, duration: s.duration }],
                         _ => {
-                            self.warnings.push(format!("External predecessor '{}' of '{succ_name}' has no dates", s.name));
+                            self.warnings.push((None, format!("External predecessor '{}' of '{succ_name}' has no dates", s.name)));
                             Vec::new()
                         }
                     },
                     None => {
-                        self.warnings.push(format!("'{succ_name}' references unknown external task {task}"));
+                        self.warnings.push((None, format!("'{succ_name}' references unknown external task {task}")));
                         Vec::new()
                     }
                 }
@@ -694,10 +697,13 @@ impl<'a> Engine<'a> {
                     }
                     TaskRef::External { task, .. } => task.to_string(),
                 };
-                self.warnings.push(format!(
-                    "The {} link from '{from}' to summary task '{}' is ignored: a summary task's finish comes from its subtasks. Link to one of its subtasks instead.",
-                    d.kind.code(),
-                    t.name
+                self.warnings.push((
+                    None,
+                    format!(
+                        "The {} link from '{from}' to summary task '{}' is ignored: a summary task's finish comes from its subtasks. Link to one of its subtasks instead.",
+                        d.kind.code(),
+                        t.name
+                    ),
                 ));
             }
         }
@@ -793,7 +799,7 @@ impl<'a> Engine<'a> {
             };
             let cycle_names: Vec<String> =
                 self.leaves.iter().filter(not_done).take(6).filter_map(|&i| self.task(i)).map(|t| t.name.clone()).collect();
-            self.warnings.push(format!("Circular dependency involving: {}", cycle_names.join(", ")));
+            self.warnings.push((None, format!("Circular dependency involving: {}", cycle_names.join(", "))));
             if let Some(d) = indeg.get_mut(stuck) {
                 *d = 0;
             }
@@ -918,21 +924,21 @@ impl<'a> Engine<'a> {
                     ConstraintKind::Fnet => es = es.max(along(date, false)),
                     ConstraintKind::Mso => {
                         if warn && driven_by_link && place(es).0 > place(date).0 {
-                            warnings.push(format!("'{}': links require a later start than its Must Start On date", t.name));
+                            warnings.push("Links require a later start than its Must Start On date".to_string());
                         }
                         es = date;
                     }
                     ConstraintKind::Mfo => {
                         let s = if dur > 0 { along(date, false) } else { date };
                         if warn && driven_by_link && place(es).0 > place(s).0 {
-                            warnings.push(format!("'{}': links require a later finish than its Must Finish On date", t.name));
+                            warnings.push("Links require a later finish than its Must Finish On date".to_string());
                         }
                         es = s;
                     }
                     ConstraintKind::Snlt => {
                         if place(es).0 > date {
                             if warn {
-                                warnings.push(format!("'{}' cannot start by its Start No Later Than date", t.name));
+                                warnings.push("Cannot start by its Start No Later Than date".to_string());
                             }
                             es = date;
                         }
@@ -940,7 +946,7 @@ impl<'a> Engine<'a> {
                     ConstraintKind::Fnlt => {
                         if finish_of(es) > date {
                             if warn {
-                                warnings.push(format!("'{}' cannot finish by its Finish No Later Than date", t.name));
+                                warnings.push("Cannot finish by its Finish No Later Than date".to_string());
                             }
                             es = if dur > 0 { along(date, false) } else { date };
                         }
@@ -986,7 +992,9 @@ impl<'a> Engine<'a> {
                 }
                 _ => Vec::new(),
             };
-            self.warnings.extend(warnings);
+            // The task's own warnings: a pinned no-later-than or must-on date that its links
+            // cannot meet. They go to the task so its row shows an indicator.
+            self.warnings.extend(warnings.into_iter().map(|w| (Some(i), w)));
             self.set_parts(i, parts);
             if segments.is_empty() {
                 self.segments.remove(&i);
@@ -1179,7 +1187,7 @@ pub(crate) fn has_cycle(p: &Project) -> bool {
         let mut eng = Engine::new(p);
         eng.build_edges();
         eng.topo_sort();
-        eng.warnings.iter().any(|w| w.starts_with("Circular dependency"))
+        eng.warnings.iter().any(|(_, w)| w.starts_with("Circular dependency"))
     })
     .unwrap_or(false)
 }
@@ -1219,7 +1227,7 @@ fn calculate(p: &mut Project) -> ScheduleReport {
 
     let share = if p.settings.rules.enabled() { crate::shares::resolve(p) } else { crate::shares::SharePlan::default() };
 
-    let (dates, order_warn, total_slack, free_slack, mut segments) = {
+    let (dates, eng_warnings, total_slack, free_slack, mut segments) = {
         let mut eng = Engine::new(p);
         eng.resolved.clone_from(&share.durations);
         eng.build_edges();
@@ -1244,7 +1252,16 @@ fn calculate(p: &mut Project) -> ScheduleReport {
         (eng.dates, eng.warnings, total_slack, free_slack, eng.segments)
     };
 
-    let mut report = ScheduleReport { warnings: order_warn, ..Default::default() };
+    // Warnings the engine tied to one task go to that task's own `sched.warnings` (its row
+    // indicator, pane and agents); the rest describe the plan and stay project-level.
+    let mut report = ScheduleReport::default();
+    let mut task_warnings: HashMap<usize, Vec<String>> = HashMap::new();
+    for (idx, w) in eng_warnings {
+        match idx {
+            Some(i) => task_warnings.entry(i).or_default().push(w),
+            None => report.warnings.push(w),
+        }
+    }
     let crit = p.settings.critical_slack;
 
     for (i, t) in p.tasks.iter_mut().enumerate() {
@@ -1253,7 +1270,7 @@ fn calculate(p: &mut Project) -> ScheduleReport {
         }
         let d = dates.get(i).copied().unwrap_or_default();
         let ts = total_slack.get(i).copied().unwrap_or(0);
-        let mut warnings = Vec::new();
+        let mut warnings = task_warnings.remove(&i).unwrap_or_default();
         t.sched.start = d.es;
         t.sched.finish = d.ef;
         t.sched.early_start = d.es;

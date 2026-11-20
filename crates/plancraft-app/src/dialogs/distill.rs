@@ -46,10 +46,14 @@ impl Distill {
         self.take_drops(ctx);
         let mut open = true;
         let mut close = false;
-        egui::Window::new(t("distill.title")).id(egui::Id::new("distill_plan")).open(&mut open).default_width(760.0).min_width(640.0).show(
-            ctx,
-            |ui| {
+        egui::Window::new(t("distill.title"))
+            .id(egui::Id::new("distill_plan"))
+            .title_bar(false)
+            .default_width(760.0)
+            .min_width(640.0)
+            .show(ctx, |ui| {
                 ui.set_min_width(620.0);
+                open = crate::widgets::craft::dialog_header(ui, t("distill.title"));
                 ui.label(t("distill.explain"));
                 if ui.button(t("distill.ai")).clicked() {
                     *open_ai = true;
@@ -137,8 +141,7 @@ impl Distill {
                         }
                     });
                 }
-            },
-        );
+            });
         open && !close
     }
 

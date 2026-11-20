@@ -26,11 +26,14 @@ pub fn show(ctx: &Context, open: &mut bool, state: &mut AiState, settings: &mut 
     let mut stay = *open;
     egui::Window::new(crate::lang::text("menu.ai"))
         .id(egui::Id::new("ai_settings"))
-        .open(&mut stay)
+        .title_bar(false)
         .default_width(460.0)
         .resizable(false)
         .show(ctx, |ui| {
             ui.set_min_width(420.0);
+            if !crate::widgets::craft::dialog_header(ui, crate::lang::text("menu.ai")) {
+                stay = false;
+            }
             let mut provider = settings.ai.provider;
             ui.horizontal(|ui| {
                 ui.label(crate::lang::text("distill.service"));

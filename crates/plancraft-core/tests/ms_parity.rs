@@ -1304,7 +1304,10 @@ fn moving_cards_and_changing_columns() {
     let next = p.find_board_column("Next up").unwrap();
     p.set_board_status(&[a], next).unwrap();
     assert_eq!(column_of(&p, a), "Next up");
-    assert_eq!(p.task(a).unwrap().board_status, Some(next));
+    // Fork divergence from MS: the canonical columns mirror the task status, so the move
+    // set the status itself rather than a separate board field.
+    assert_eq!(p.task(a).unwrap().board_status, None);
+    assert_eq!(p.task(a).unwrap().status, plancraft_core::model::TaskStatus::Started);
     p.rename_board_column(next, "Ready").unwrap();
     assert_eq!(column_of(&p, a), "Ready");
     p.add_board_column("Blocked", None, None).unwrap();

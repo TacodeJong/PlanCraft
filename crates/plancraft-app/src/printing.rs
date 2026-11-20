@@ -32,6 +32,7 @@ pub enum PrintView {
     Tracking,
     Baselines,
     TaskTable,
+    TaskUsage,
     Resources,
     Network,
     Board,
@@ -39,11 +40,12 @@ pub enum PrintView {
 }
 
 impl PrintView {
-    pub const ALL: [PrintView; 8] = [
+    pub const ALL: [PrintView; 9] = [
         PrintView::Gantt,
         PrintView::Tracking,
         PrintView::Baselines,
         PrintView::TaskTable,
+        PrintView::TaskUsage,
         PrintView::Resources,
         PrintView::Network,
         PrintView::Board,
@@ -56,6 +58,7 @@ impl PrintView {
             PrintView::Tracking => "Tracking Gantt",
             PrintView::Baselines => "Multiple Baselines Gantt",
             PrintView::TaskTable => "Task Table",
+            PrintView::TaskUsage => "Task Usage",
             PrintView::Resources => "Resource Sheet",
             PrintView::Network => "Network Diagram",
             PrintView::Board => "Task Board",
@@ -77,6 +80,7 @@ impl PrintView {
             ViewKind::NetworkDiagram => PrintView::Network,
             ViewKind::Board => PrintView::Board,
             ViewKind::Report => PrintView::Report,
+            ViewKind::TaskUsage => PrintView::TaskUsage,
             _ => PrintView::Gantt,
         }
     }
@@ -195,6 +199,7 @@ pub fn sheet(p: &Project, st: &UiState, view: PrintView, all_columns: bool) -> (
         }
         // Without a chart there is no divider: the whole table prints.
         PrintView::TaskTable => (task_sheet(p, st, view.label(), &pal, true), None),
+        PrintView::TaskUsage => (views::task_usage::print_sheet(p, st), None),
         PrintView::Resources => (views::resource_sheet::print_sheet(p, &pal), None),
         PrintView::Report => (views::report::sheet(p, st), None),
         // Drawings are not sheets (see `drawing`); an empty sheet if asked anyway.
@@ -491,6 +496,28 @@ mod tests {
         // And the whole thing lays out and writes.
         let doc = document(&p, &st, PrintView::Gantt, &print::PageSetup::default(), None, None);
         assert!(!doc.pages.is_empty());
+        assert!(print::pdf::write(&doc).starts_with(b"%PDF"));
+    }
+
+    /// Task Usage prints: name and work columns, one column per Q/M/D bucket, and the
+    /// assignment rows under their tasks.
+    #[test]
+    fn task_usage_prints_with_period_columns() {
+        let mut p = plancraft_core::sample::demo_project(plancraft_core::dates::ymd(2026, 11, 2).unwrap());
+        recalculate(&mut p);
+        let st = UiState { granularity: plancraft_core::workload::Granularity::Week, ..UiState::default() };
+        assert_eq!(PrintView::for_view(ViewKind::TaskUsage), PrintView::TaskUsage);
+        let (sheet, chart) = sheet(&p, &st, PrintView::TaskUsage, true);
+        assert!(chart.is_none(), "a table, not a Gantt chart");
+        assert!(sheet.columns.len() > 2, "period columns follow the name and work: {}", sheet.columns.len());
+        assert!(sheet.columns.iter().skip(2).all(|c| c.title.starts_with('W')), "week headers");
+        assert!(sheet.rows.iter().any(|r| matches!(r.kind, RowKind::Other)), "assignment rows under their tasks");
+        assert!(
+            sheet.rows.iter().flat_map(|r| &r.cells).any(|c| c.text.ends_with('h') && c.text.len() <= 6),
+            "time-phased work values print"
+        );
+        let doc = document(&p, &st, PrintView::TaskUsage, &print::PageSetup::default(), None, None);
+        assert!(!doc.pages.is_empty() && !doc.truncated);
         assert!(print::pdf::write(&doc).starts_with(b"%PDF"));
     }
 

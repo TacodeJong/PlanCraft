@@ -42,6 +42,13 @@ pub fn format_day(dt: DateTime) -> String {
     format!("{:02}-{:02}-{:04}", dt.day(), dt.month(), dt.year())
 }
 
+/// One day cell's fixed size: every cell identical, a clean 7-column grid.
+const CELL: f32 = 30.0;
+/// Space between cells.
+const GAP: f32 = 2.0;
+/// The grid's full width: seven cells and the six gaps between them.
+const GRID_W: f32 = 7.0 * CELL + 6.0 * GAP;
+
 fn calendar(ui: &mut Ui, salt: &str, current: Option<DateTime>, clearable: bool, minute: u32) -> Option<Option<DateTime>> {
     let id = Id::new(("date_month", salt));
     let today = plancraft_core::dates::today();
@@ -50,20 +57,25 @@ fn calendar(ui: &mut Ui, salt: &str, current: Option<DateTime>, clearable: bool,
         .data(|d| d.get_temp::<(i32, i8)>(id))
         .unwrap_or_else(|| current.map(|dt| (i32::from(dt.year()), dt.month())).unwrap_or((i32::from(today.year()), today.month())));
     let mut picked = None;
-    ui.set_min_width(230.0);
+    ui.set_min_width(GRID_W);
+    ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
+    // Header: the month arrows at the far edges, the month and year centered between them.
     ui.horizontal(|ui| {
-        if ui.button("‹").clicked() {
+        if crate::icons::button(ui, "chevron-left", 24.0, crate::lang::text("cal.prev_month")).clicked() {
             (year, month) = shift_month(year, month, -1);
         }
-        ui.label(RichText::new(format!("{} {year}", month_name(month))).strong().color(theme::pal().TEXT));
-        if ui.button("›").clicked() {
+        let label = RichText::new(format!("{} {year}", month_name(month))).strong().color(theme::pal().TEXT);
+        ui.add_sized(vec2(GRID_W - 2.0 * (24.0 + GAP), 24.0), egui::Label::new(label));
+        if crate::icons::button(ui, "chevron-right", 24.0, crate::lang::text("cal.next_month")).clicked() {
             (year, month) = shift_month(year, month, 1);
         }
     });
+    ui.painter().hline(ui.min_rect().x_range(), ui.cursor().top() + 1.0, Stroke::new(1.0, theme::pal().LINE));
+    ui.add_space(3.0);
     ui.ctx().data_mut(|d| d.insert_temp(id, (year, month)));
     ui.horizontal(|ui| {
         for col in 0..7 {
-            ui.add_sized(vec2(28.0, 16.0), egui::Label::new(RichText::new(weekday_name(col)).size(11.0).color(theme::pal().TEXT_WEAK)));
+            ui.add_sized(vec2(CELL, 16.0), egui::Label::new(RichText::new(weekday_name(col)).size(11.0).color(theme::pal().TEXT_WEAK)));
         }
     });
     let first = ymd_ok(year, month, 1)?;
@@ -81,16 +93,17 @@ fn calendar(ui: &mut Ui, salt: &str, current: Option<DateTime>, clearable: bool,
                 if is_sel {
                     text = text.color(theme::pal().CHIP_TEXT);
                 } else if other || weekend {
+                    // Adjacent-month and weekend days stay dimmed but keep the same cell size.
                     text = text.color(theme::pal().TEXT_WEAK);
                 }
-                let mut btn = egui::Button::new(text).min_size(vec2(28.0, 24.0));
+                let mut btn = egui::Button::new(text).corner_radius(3.0);
                 if is_sel {
                     btn = btn.fill(theme::pal().ACCENT);
                 }
                 if is_today {
                     btn = btn.stroke(Stroke::new(1.0, theme::pal().ACCENT));
                 }
-                if ui.add(btn).clicked()
+                if ui.add_sized(vec2(CELL, 24.0), btn).clicked()
                     && let Some(dt) = at_minute(day, minute)
                 {
                     picked = Some(Some(dt));
@@ -98,8 +111,11 @@ fn calendar(ui: &mut Ui, salt: &str, current: Option<DateTime>, clearable: bool,
             }
         });
     }
-    if clearable && ui.button("geen").clicked() {
-        picked = Some(None);
+    if clearable {
+        ui.add_space(2.0);
+        if ui.add_sized(vec2(GRID_W, 24.0), egui::Button::new("geen")).clicked() {
+            picked = Some(None);
+        }
     }
     picked
 }
@@ -134,29 +150,127 @@ fn monday_index(day: Date) -> i32 {
 }
 
 fn weekday_name(col: i32) -> &'static str {
+    let en = crate::lang::current() == crate::lang::Lang::En;
     match col {
-        0 => "ma",
-        1 => "di",
-        2 => "wo",
-        3 => "do",
-        4 => "vr",
-        5 => "za",
-        _ => "zo",
+        0 => {
+            if en {
+                "mo"
+            } else {
+                "ma"
+            }
+        }
+        1 => {
+            if en {
+                "tu"
+            } else {
+                "di"
+            }
+        }
+        2 => {
+            if en {
+                "we"
+            } else {
+                "wo"
+            }
+        }
+        3 => {
+            if en {
+                "th"
+            } else {
+                "do"
+            }
+        }
+        4 => {
+            if en {
+                "fr"
+            } else {
+                "vr"
+            }
+        }
+        5 => {
+            if en {
+                "sa"
+            } else {
+                "za"
+            }
+        }
+        _ => {
+            if en {
+                "su"
+            } else {
+                "zo"
+            }
+        }
     }
 }
 
 fn month_name(month: i8) -> &'static str {
+    let en = crate::lang::current() == crate::lang::Lang::En;
     match month {
-        1 => "januari",
-        2 => "februari",
-        3 => "maart",
-        4 => "april",
-        5 => "mei",
-        6 => "juni",
-        7 => "juli",
-        8 => "augustus",
+        1 => {
+            if en {
+                "January"
+            } else {
+                "januari"
+            }
+        }
+        2 => {
+            if en {
+                "February"
+            } else {
+                "februari"
+            }
+        }
+        3 => {
+            if en {
+                "March"
+            } else {
+                "maart"
+            }
+        }
+        4 => {
+            if en {
+                "April"
+            } else {
+                "april"
+            }
+        }
+        5 => {
+            if en {
+                "May"
+            } else {
+                "mei"
+            }
+        }
+        6 => {
+            if en {
+                "June"
+            } else {
+                "juni"
+            }
+        }
+        7 => {
+            if en {
+                "July"
+            } else {
+                "juli"
+            }
+        }
+        8 => {
+            if en {
+                "August"
+            } else {
+                "augustus"
+            }
+        }
         9 => "september",
-        10 => "oktober",
+        10 => {
+            if en {
+                "October"
+            } else {
+                "oktober"
+            }
+        }
         11 => "november",
         _ => "december",
     }

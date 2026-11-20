@@ -1165,3 +1165,65 @@ fn a_late_start_keeps_the_length_of_the_typed_dates() {
     recalculate(&mut p);
     assert_eq!((start(&p, a), finish(&p, a)), (dt(2026, 10, 27, 8), dt(2026, 11, 2, 17)), "five working days from Tuesday");
 }
+
+/// The explicit Unrestricted date mode (Project Planner's `DateMode`): choosing it clears the
+/// side's stored pins — the SNET-style single constraint and both bounds — so the side is
+/// placed by its dependencies again.
+#[test]
+fn an_unrestricted_start_clears_the_pins_and_follows_the_predecessor() {
+    let mut p = project();
+    let a = task(&mut p, "A", 2);
+    let b = task(&mut p, "B", 1);
+    p.link(a.into(), b, LinkType::FS, Lag::None).unwrap();
+    // A stored SNET and a fixed no-later-than window hold B far after its predecessor.
+    p.task_mut(b).unwrap().constraint = Constraint { kind: ConstraintKind::Snet, date: Some(dt(2026, 11, 2, 8)) };
+    p.task_mut(b).unwrap().bounds.start_latest = Some(dt(2026, 11, 9, 8));
+    p.task_mut(b).unwrap().bounds.start_latest_fixed = true;
+    recalculate(&mut p);
+    assert_eq!(p.task(b).unwrap().start_mode(), DateMode::Between, "SNET minimum plus a later maximum");
+    assert_eq!(start(&p, b), dt(2026, 11, 2, 8));
+    p.set_date_mode(b, false, DateMode::Unrestricted).unwrap();
+    recalculate(&mut p);
+    let t = p.task(b).unwrap();
+    assert_eq!(t.constraint.kind, ConstraintKind::Asap, "the SNET pin is gone");
+    assert!(t.bounds.is_empty(), "both start bounds and the fixed flag are gone");
+    assert_eq!(t.start_mode(), DateMode::Unrestricted);
+    assert_eq!(start(&p, b), dt(2026, 10, 21, 8), "B follows its predecessor again");
+}
+
+/// Switching modes keeps dates that fit, like the Swift app's `DateMode.window`.
+#[test]
+fn date_mode_windows_keep_dates_that_fit() {
+    let d1 = dt(2026, 10, 19, 8);
+    let d2 = dt(2026, 10, 26, 8);
+    assert_eq!(DateMode::of(None, None), DateMode::Unrestricted);
+    assert_eq!(DateMode::of(Some(d1), Some(d1)), DateMode::On);
+    assert_eq!(DateMode::of(Some(d1), None), DateMode::NoEarlier);
+    assert_eq!(DateMode::of(None, Some(d2)), DateMode::NoLater);
+    assert_eq!(DateMode::of(Some(d1), Some(d2)), DateMode::Between);
+    // On collapses to the minimum; No later falls back over minimum and anchor.
+    assert_eq!(DateMode::On.window(Some(d1), Some(d2), d2), (Some(d1), Some(d1)));
+    assert_eq!(DateMode::NoLater.window(Some(d1), None, d2), (None, Some(d1)));
+    assert_eq!(DateMode::NoEarlier.window(None, None, d2), (Some(d2), None));
+    // Between keeps a real window and otherwise opens a one-day one.
+    assert_eq!(DateMode::Between.window(Some(d1), Some(d2), d1), (Some(d1), Some(d2)));
+    assert_eq!(DateMode::Between.window(Some(d1), None, d1), (Some(d1), dt(2026, 10, 20, 8).into()));
+    assert_eq!(DateMode::Unrestricted.window(Some(d1), Some(d2), d1), (None, None));
+}
+
+/// A date-mode edit on a manually scheduled task returns it to automatic scheduling; the typed
+/// date on the other side is kept as an On rule rather than silently dropped.
+#[test]
+fn a_date_mode_edit_returns_a_manual_task_to_automatic_keeping_the_other_pin() {
+    let mut p = project();
+    let a = task(&mut p, "A", 1);
+    recalculate(&mut p);
+    p.set_schedule_mode(&[a], ScheduleMode::Manual).unwrap();
+    p.set_manual_date(a, dt(2026, 10, 26, 8), false).unwrap();
+    recalculate(&mut p);
+    p.set_date_mode(a, false, DateMode::Unrestricted).unwrap();
+    let t = p.task(a).unwrap();
+    assert_eq!(t.mode, ScheduleMode::Auto);
+    assert_eq!(t.start_mode(), DateMode::Unrestricted);
+    assert_eq!(t.finish_mode(), DateMode::On, "the typed finish survives as an On rule");
+}

@@ -135,9 +135,9 @@ impl ImportSheet {
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 100.0))
             .default_width((ctx.content_rect().width() - 80.0).clamp(560.0, 1100.0))
-            .open(&mut open)
-            .collapsible(false)
+            .title_bar(false)
             .show(ctx, |ui| {
+                open = crate::widgets::craft::dialog_header(ui, "Import Spreadsheet");
                 ui.label(RichText::new(bidi::display(&file)).strong());
                 if self.sheets.sheets.len() > 1 {
                     let mut sheet = self.sheet;

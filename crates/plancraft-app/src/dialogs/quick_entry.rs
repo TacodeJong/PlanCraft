@@ -20,10 +20,11 @@ impl QuickEntry {
         let mut open = true;
         let mut close = false;
         let time = doc.project.settings.time.clone();
-        egui::Window::new(t("qe.title")).id(egui::Id::new("quick_entry")).open(&mut open).default_width(720.0).min_width(640.0).show(
+        egui::Window::new(t("qe.title")).id(egui::Id::new("quick_entry")).title_bar(false).default_width(720.0).min_width(640.0).show(
             ctx,
             |ui| {
                 ui.set_min_width(600.0);
+                open = crate::widgets::craft::dialog_header(ui, t("qe.title"));
                 ui.label(t("qe.hint"));
                 ui.add(egui::TextEdit::multiline(&mut self.text).desired_rows(8).desired_width(f32::INFINITY).hint_text(t("qe.sample")));
                 let sheet = quick_entry::parse(&self.text, &time);

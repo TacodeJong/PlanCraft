@@ -254,13 +254,13 @@ impl OpenFromServer {
         let mut cancel = false;
         egui::Window::new("Open from Server")
             .id(egui::Id::new("open_from_server"))
-            .collapsible(false)
+            .title_bar(false)
             .resizable(false)
             .default_width(460.0)
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 120.0))
-            .open(&mut open)
             .show(ctx, |ui| {
+                open = crate::widgets::craft::dialog_header(ui, "Open from Server");
                 let busy = self.busy.is_some();
                 match &self.stage {
                     Stage::Form => self.form(ui, ctx, settings, busy),

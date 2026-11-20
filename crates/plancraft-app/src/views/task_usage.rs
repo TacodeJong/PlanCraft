@@ -29,6 +29,54 @@ impl Row<'_> {
     }
 }
 
+/// The visible rows as an Excel workbook: the filter, the Q/M/D buckets of the global
+/// selector, and the whole plan's span rather than the scrolled window.
+pub fn workbook(p: &Project, st: &UiState) -> Result<Vec<u8>, String> {
+    let rows: Vec<usize> = super::visible_rows(p, st).iter().filter_map(super::Row::task).collect();
+    let words = plancraft_core::xlsx_usage::UsageWords { name: st.t("col.name"), work: st.t("col.work") };
+    plancraft_core::xlsx_usage::workbook(p, &rows, st.granularity, &words)
+}
+
+/// The view as a printable sheet: the same rows and Q/M/D buckets, spanning the whole
+/// plan. Wide timescales continue on the pages to the right (the print layout repeats
+/// the leading columns there).
+pub fn print_sheet(p: &Project, st: &UiState) -> plancraft_core::print::Sheet {
+    use plancraft_core::print::{Align, PrintCell, PrintColumn, PrintRow, RowKind, Sheet};
+    let g = st.granularity;
+    let rows_idx: Vec<usize> = super::visible_rows(p, st).iter().filter_map(super::Row::task).collect();
+    let (buckets, per_assignment) = plancraft_core::xlsx_usage::phased(p, &rows_idx, g);
+    let mut columns = vec![
+        PrintColumn { title: st.t("col.name").into(), width: 170.0, align: Align::Left },
+        PrintColumn { title: st.t("col.work").into(), width: 50.0, align: Align::Right },
+    ];
+    for b in &buckets {
+        columns.push(PrintColumn { title: plancraft_core::xlsx_usage::period_label(g, *b), width: 44.0, align: Align::Right });
+    }
+    let value_cell = |mins: f64| {
+        if mins < 0.5 { PrintCell::default() } else { PrintCell::text(format::hours(mins)) }
+    };
+    let mut rows = Vec::new();
+    for idx in rows_idx {
+        let Some(t) = p.tasks.get(idx) else { continue };
+        let indent = (t.outline_level.saturating_sub(1)) as f32 * 10.0;
+        let mut cells = vec![
+            PrintCell { text: t.name.clone(), bold: t.sched.is_summary, indent, ..Default::default() },
+            PrintCell::text(format_work(t.sched.work)),
+        ];
+        cells.extend(plancraft_core::xlsx_usage::task_values(p, idx, buckets.len(), &per_assignment).into_iter().map(value_cell));
+        rows.push(PrintRow { kind: RowKind::Task(t.id), cells });
+        for a in p.assignments_for_task(t.id) {
+            let who = p.resource(a.resource).map(|r| r.name.clone()).unwrap_or_default();
+            let mut cells =
+                vec![PrintCell { text: who, indent: indent + 16.0, ..Default::default() }, PrintCell::text(format_work(a.work))];
+            let values = per_assignment.get(&a.id).cloned().unwrap_or_default();
+            cells.extend(values.into_iter().map(value_cell));
+            rows.push(PrintRow { kind: RowKind::Other, cells });
+        }
+    }
+    Sheet { title: "Task Usage".into(), columns, rows }
+}
+
 pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: &mut Vec<Command>) {
     let mut toolbar =
         ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(rect.min + vec2(8.0, 4.0), vec2(rect.width() - 16.0, 24.0))));

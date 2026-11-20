@@ -116,6 +116,9 @@ pub fn from_json_with_notes(text: &str, path: &Path) -> FileResult<(Project, Vec
         let mut fresh = crate::ids::IdCounters::default();
         p.board_columns = crate::board::default_columns(&mut fresh);
     }
+    // Plans saved before columns carried a status: the canonical columns become the status
+    // columns (shown localized: Niet gestart, Gestart, Bezig, Gereed).
+    crate::board::link_status_columns(&mut p);
     p.ids.board_column = p.ids.board_column.max(p.board_columns.iter().map(|c| c.id.0).max().unwrap_or(0));
     if p.calendars.is_empty() {
         let id = p.ids.next_calendar();

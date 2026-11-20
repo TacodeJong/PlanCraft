@@ -34,6 +34,35 @@ pub fn hud(ui: &mut Ui, text: &str, color: Color32) -> Response {
     resp
 }
 
+/// An ArtCraft dialog header for a window with `.title_bar(false)`: the title left-aligned in
+/// caps mono, extra controls and a Lucide close button at the right edge, a hairline below.
+/// Returns `false` when the close button was clicked. The window stays movable by its background.
+pub fn dialog_header(ui: &mut Ui, title: &str) -> bool {
+    dialog_header_with(ui, title, |_| {})
+}
+
+/// [`dialog_header`] with extra right-side controls (drawn right-to-left, after the close button).
+pub fn dialog_header_with(ui: &mut Ui, title: &str, extra: impl FnOnce(&mut Ui)) -> bool {
+    let mut keep = true;
+    ui.horizontal(|ui| {
+        let color = theme::pal().TEXT;
+        let galley = caps(ui.painter(), title, theme::HUD_SIZE + 1.0, theme::mono_bold(), theme::LABEL_SPACING, color);
+        // No widget_info: the window itself already exposes the title to accesskit.
+        let (rect, _resp) = ui.allocate_exact_size(vec2(galley.size().x, 22.0), Sense::hover());
+        ui.painter().galley(pos2(rect.left(), rect.center().y - galley.size().y / 2.0), galley, color);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if crate::icons::button(ui, "x", 18.0, crate::lang::text("dlg.close")).clicked() {
+                keep = false;
+            }
+            extra(ui);
+        });
+    });
+    let y = ui.cursor().top() + 2.0;
+    ui.painter().hline(ui.max_rect().x_range(), y, egui::Stroke::new(1.0, theme::pal().LINE));
+    ui.add_space(6.0);
+    keep
+}
+
 /// A section heading: 11 px Geist Mono 650, upper case, tracked a little tighter.
 pub fn section_label(ui: &mut Ui, text: &str) -> Response {
     let color = theme::pal().TEXT_WEAK;

@@ -49,8 +49,8 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, _out:
                     if i == 1 {
                         ui.horizontal(|ui| {
                             if let Some(mark) = line.mark {
-                                let (rect, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
-                                ui.painter().circle_filled(rect.center(), 4.0, theme::row_mark_color(mark));
+                                ui.add(crate::icons::image("flag", 13.0, theme::row_mark_color(mark)))
+                                    .on_hover_text(crate::lang::mark_name(mark));
                             }
                             if line.group {
                                 ui.label(RichText::new(text).strong().color(theme::pal().ACCENT));

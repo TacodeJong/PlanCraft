@@ -148,10 +148,10 @@ impl WorkingTime {
             .id(egui::Id::new("working_time"))
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 120.0))
-            .open(&mut open)
-            .collapsible(false)
+            .title_bar(false)
             .default_width(760.0)
             .show(ctx, |ui| {
+                open = crate::widgets::craft::dialog_header(ui, "Change Working Time");
                 ui.horizontal(|ui| {
                     ui.label("For calendar:");
                     egui::ComboBox::from_id_salt("wt_cal").selected_text(&cal.name).width(180.0).show_ui(ui, |ui| {

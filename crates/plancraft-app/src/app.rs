@@ -423,6 +423,7 @@ impl PlanCraftApp {
         let has_doc = !lock(&ws).docs.is_empty();
         let st = UiState {
             table_width: settings.table_width,
+            properties_visible: settings.properties_open,
             start_page: !has_doc,
             lang: settings.lang,
             columns: settings.columns.clone(),
@@ -924,6 +925,32 @@ impl PlanCraftApp {
         }
     }
 
+    fn export_usage(&mut self) {
+        if self.st.view != ViewKind::TaskUsage {
+            return;
+        }
+        let Some((name, bytes)) = self.with_doc(|doc, st| {
+            let bytes = views::task_usage::workbook(&doc.project, st);
+            (doc.project.name.clone(), bytes)
+        }) else {
+            return;
+        };
+        let bytes = match bytes {
+            Ok(bytes) => bytes,
+            Err(e) => return self.st.toast(ToastKind::Error, format!("Could not build the workbook: {e}")),
+        };
+        let file = format!("{}-usage.xlsx", file_stem(&name));
+        let Some(path) = rfd::FileDialog::new().add_filter("Excel", &["xlsx"]).set_file_name(file).save_file() else { return };
+        let path = match export_path(path, "xlsx", "an Excel workbook") {
+            Ok(p) => p,
+            Err(why) => return self.st.toast(ToastKind::Warning, why),
+        };
+        match plancraft_core::io::write_atomic(&path, &bytes, plancraft_core::io::Privacy::KeepExisting) {
+            Ok(()) => self.set_status(format!("Exported {}", path.display())),
+            Err(e) => self.st.toast(ToastKind::Error, format!("Could not save the workbook: {e}")),
+        }
+    }
+
     fn export_report(&mut self) {
         if self.st.view != ViewKind::Report {
             return;
@@ -1053,6 +1080,7 @@ impl PlanCraftApp {
             Command::ExportMspdi => self.export_mspdi(),
             Command::ExportReport => self.export_report(),
             Command::ExportGantt => self.export_gantt(),
+            Command::ExportUsage => self.export_usage(),
             Command::SetChartStyle(style) => {
                 self.st.chart_style = style;
                 theme::set_chart_style(style);
@@ -1130,6 +1158,15 @@ impl PlanCraftApp {
             Command::SetStartup(startup) => {
                 self.settings.startup = startup;
                 self.settings.save();
+            }
+            Command::SetTimescale(ts) => {
+                self.settings.timescale = ts;
+                self.settings.save();
+                self.st.gantt.px_per_day = ts.px_per_day();
+                self.st.granularity = ts.granularity();
+                if let Some(from) = self.st.usage_from {
+                    self.st.usage_from = Some(ts.granularity().bucket_start(from));
+                }
             }
             Command::SetOpenOverview(on) => {
                 self.settings.open_to_overview = on;
@@ -2459,6 +2496,7 @@ impl PlanCraftApp {
         // Screenshot automation may override the theme; keep the user's settings as they were.
         if self.shot.is_none() {
             self.settings.table_width = self.st.table_width;
+            self.settings.properties_open = self.st.properties_visible;
             self.settings.save();
         }
         self.mcp.stop();
@@ -3013,6 +3051,14 @@ impl PlanCraftApp {
                     views::timeline::show(ui, tl, &doc.project, &shown, &mut st.gantt, chart_w);
                     rect = Rect::from_min_max(pos2(rect.left(), tl.bottom()), rect.max);
                 }
+                // A focus naming a deleted task would hide everything: clear it and say so.
+                if let Some(focus) = st.focus
+                    && doc.project.task_index(focus.task).is_none()
+                {
+                    st.focus = None;
+                    let msg = crate::lang::text("filter.focus_gone").to_string();
+                    st.toast(ToastKind::Info, msg);
+                }
                 let rect = views::properties::dock(ui, rect, doc, st);
                 match st.view {
                     ViewKind::Gantt => views::gantt::show(ui, rect, doc, st, views::gantt_chart::ChartKind::Gantt, &mut out),
@@ -3043,6 +3089,20 @@ impl PlanCraftApp {
 
         // Dialogs. Editing dialogs stay bound to the document they were opened for.
         dialogs::show_bound(&mut self.dialogs.task_info, &mut ws, |d, doc| d.show(&ctx, doc));
+        // Previous/Next in the dialog moved to another task: the selection and the grid follow.
+        if let Some(b) = &mut self.dialogs.task_info
+            && let Some(id) = b.dialog.nav.take()
+        {
+            self.st.sel.select_task(id);
+            if let Some(doc) = ws.index_of(b.doc).and_then(|i| ws.docs.get(i)) {
+                let rows = views::visible_rows(&doc.project, &self.st);
+                if let Some(idx) = doc.project.task_index(id)
+                    && let Some(r) = views::row_of_task(&rows, idx)
+                {
+                    self.st.task_grid.scroll_to = Some(r);
+                }
+            }
+        }
         dialogs::show_bound(&mut self.dialogs.resource_info, &mut ws, |d, doc| d.show(&ctx, doc));
         dialogs::show_bound(&mut self.dialogs.project_info, &mut ws, |d, doc| d.show(&ctx, doc));
         dialogs::show_bound(&mut self.dialogs.working_time, &mut ws, |d, doc| d.show(&ctx, doc));
@@ -3111,8 +3171,22 @@ impl PlanCraftApp {
             }
         }
         if let Some(doc) = ws.active_doc_mut() {
-            if self.dialogs.stats {
-                dialogs::misc::statistics(&ctx, doc, &mut self.dialogs.stats);
+            if self.dialogs.stats
+                && let Some(id) = dialogs::misc::statistics(&ctx, doc, &mut self.dialogs.stats)
+            {
+                // A clicked scheduling warning: select the task and bring the gantt to it.
+                self.st.sel.select_task(id);
+                if let Some(t) = doc.project.task(id)
+                    && let Some(s) = t.sched.start
+                {
+                    self.st.gantt.scroll_to(s);
+                }
+                let rows = views::visible_rows(&doc.project, &self.st);
+                if let Some(idx) = doc.project.task_index(id)
+                    && let Some(r) = views::row_of_task(&rows, idx)
+                {
+                    self.st.task_grid.scroll_to = Some(r);
+                }
             }
             if self.dialogs.history {
                 dialogs::misc::history(&ctx, doc, &mut self.dialogs.history);
@@ -3382,6 +3456,39 @@ mod ui_tests {
         h.run_steps(2);
         h.state_mut().exec(&ctx, Command::ToggleHighlightPaths);
         assert!(!h.state().st.gantt.show_paths);
+    }
+
+    /// The Q/M/D chips preset the chart zoom and the usage buckets, remember the choice,
+    /// and sit disabled (with a tooltip) on a view without a time axis.
+    #[test]
+    fn the_qmd_chips_preset_the_timescales() {
+        use crate::state::Timescale;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let mut h = harness();
+        let ctx = h.ctx.clone();
+        h.state_mut().st.menu_tab = crate::state::MenuTab::View;
+        h.run_steps(2);
+        h.get_by_label("Q").click();
+        h.run_steps(2);
+        assert_eq!(h.state().st.gantt.px_per_day, 2.5, "Quarter preset applied to the chart");
+        assert_eq!(
+            plancraft_core::timescale::tiers(h.state().st.gantt.px_per_day),
+            (plancraft_core::timescale::Unit::Quarter, plancraft_core::timescale::Unit::Month),
+            "quarter/month header tiers"
+        );
+        assert_eq!(h.state().settings.timescale, Timescale::Quarter, "the choice is remembered per user");
+        assert_eq!(h.state().st.granularity, plancraft_core::workload::Granularity::Quarter, "usage buckets follow");
+        h.state_mut().exec(&ctx, Command::SetTimescale(Timescale::Month));
+        assert_eq!(h.state().st.gantt.px_per_day, 5.0, "Month preset: month-scale headers");
+        h.state_mut().exec(&ctx, Command::SetTimescale(Timescale::Day));
+        assert_eq!(h.state().st.gantt.px_per_day, 24.0, "Day preset: day columns");
+        // Free zoom stays: zoomed to hours, no preset claims the chip.
+        h.state_mut().st.gantt.px_per_day = 140.0;
+        assert_eq!(Timescale::of_px(140.0), None);
+        // A view without a time axis keeps the chips but disables them.
+        h.state_mut().st.view = ViewKind::Board;
+        h.run_steps(2);
+        assert!(h.get_by_label("Q").accesskit_node().is_disabled(), "no time axis on the Task Board");
     }
 
     #[test]
@@ -4192,16 +4299,16 @@ mod ui_tests {
         h.state_mut().dialogs.task_info = None;
         h.run_steps(2);
 
-        // Right-click a header: rename the column and give it a % complete.
+        // Right-click a header: a status-linked column keeps its (localized) name — only the
+        // % complete is editable.
         let head = views::board::header_centre(body, scroll, 1);
         pointer(&mut h, head, Some((egui::PointerButton::Secondary, true)));
         pointer(&mut h, head, Some((egui::PointerButton::Secondary, false)));
         h.run_steps(2);
         h.get_by_label_contains("Rename / Set % Complete").click();
         h.run_steps(2);
-        assert!(h.state().st.board.edit.as_ref().is_some_and(|e| e.name == "Next up"));
+        assert!(h.state().st.board.edit.as_ref().is_some_and(|e| e.name == "Next up" && e.status == Some(TaskStatus::Started)));
         if let Some(e) = h.state_mut().st.board.edit.as_mut() {
-            e.name = "Ready".into();
             e.percent = "10".into();
         }
         h.run_steps(1);
@@ -4212,7 +4319,7 @@ mod ui_tests {
             let ws = h.state().ws.lock().unwrap();
             let p = &ws.active_doc().unwrap().project;
             let c = &p.board_columns[1];
-            assert_eq!((c.name.as_str(), c.percent_complete), ("Ready", Some(10)));
+            assert_eq!((c.name.as_str(), c.percent_complete, c.status), ("Next up", Some(10), Some(TaskStatus::Started)));
         }
 
         // Regression: dragging a selected card moved the whole selection, summaries and hidden
@@ -4238,8 +4345,11 @@ mod ui_tests {
             let ws = h.state().ws.lock().unwrap();
             let p = &ws.active_doc().unwrap().project;
             let col = p.board_columns[2].id;
-            assert_eq!(p.task(card).unwrap().board_status, Some(col), "the card moved");
-            assert_ne!(p.task(hidden).unwrap().board_status, Some(col), "the hidden task stayed");
+            let i = p.task_index(card).unwrap();
+            assert_eq!(p.board_column_of(i), Some(col), "the card moved");
+            assert_eq!(p.task(card).unwrap().status, TaskStatus::Busy, "the In progress column IS the Busy status");
+            let hi = p.task_index(hidden).unwrap();
+            assert_ne!(p.board_column_of(hi), Some(col), "the hidden task stayed");
         }
 
         // Regression: the column window outlived a switch to another plan and then renamed that
@@ -4252,6 +4362,29 @@ mod ui_tests {
         }
         h.run_steps(2);
         assert!(h.state().st.board.edit.is_none(), "the window closes with its plan");
+    }
+
+    /// Deleting the task a subtree focus pins would hide every row; the focus clears itself
+    /// with a toast instead.
+    #[test]
+    fn deleting_the_focused_task_clears_the_focus_with_a_toast() {
+        let mut h = harness();
+        let id = {
+            let ws = h.state().ws.lock().unwrap();
+            let p = &ws.active_doc().unwrap().project;
+            p.tasks.iter().find(|t| !t.sched.is_summary).map(|t| t.id).unwrap()
+        };
+        h.state_mut().st.focus = Some(crate::state::ActivityFocus { task: id, scope: crate::state::FocusScope::Subtree });
+        h.run_steps(2);
+        {
+            let mut ws = h.state().ws.lock().unwrap();
+            let doc = ws.active_doc_mut().unwrap();
+            doc.edit("Delete", |p| p.delete_tasks(&[id]).map(|_| ())).unwrap().unwrap();
+        }
+        h.run_steps(2);
+        assert_eq!(h.state().st.focus, None, "the focus cleared itself");
+        let note = crate::lang::text("filter.focus_gone");
+        assert!(h.state().st.toasts.iter().any(|t| t.text.contains(note)), "a toast says why");
     }
 
     /// Regression: pasting a task copied from another plan (or from a deleted column) was
@@ -5566,6 +5699,119 @@ mod ui_tests {
         }
         h.state_mut().st.start_page = true;
         h.run_steps(2);
+    }
+
+    /// The properties pane offers its five tabs, and a Progress-tab edit goes through the
+    /// document's normal edit path (it lands on the task and is one undoable step).
+    #[test]
+    fn the_properties_pane_tabs_show_and_a_progress_edit_round_trips() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let mut h = harness();
+        let id = {
+            let ws = h.state().ws.lock().unwrap();
+            let p = &ws.active_doc().unwrap().project;
+            p.tasks
+                .iter()
+                .enumerate()
+                .find(|(i, t)| !p.has_children(*i) && !t.is_milestone() && t.status == TaskStatus::NotStarted && t.percent_complete == 0)
+                .map(|(_, t)| t.id)
+                .unwrap()
+        };
+        h.state_mut().st.properties_visible = true;
+        h.state_mut().st.sel.select_task(id);
+        h.run_steps(2);
+        // All five tabs are offered (role Button; a plain label with the same text may exist too).
+        for tab in crate::state::PropTab::ALL {
+            assert!(
+                h.query_all_by_label(tab.title()).any(|n| n.accesskit_node().role() == egui::accesskit::Role::Button),
+                "no tab button labelled {:?}",
+                tab.title()
+            );
+        }
+        h.get_by_label(crate::state::PropTab::Progress.title()).click_accesskit();
+        h.run_steps(2);
+        assert_eq!(h.state().st.properties_tab, crate::state::PropTab::Progress, "clicking the tab opens it");
+        // Pick a status through the pane's own combo (its selected text is its accesskit value):
+        // Done also completes the task.
+        h.get_by_value(crate::lang::status_name(TaskStatus::NotStarted)).click_accesskit();
+        h.run_steps(1);
+        h.get_by_label(crate::lang::status_name(TaskStatus::Done)).click_accesskit();
+        h.run_steps(2);
+        {
+            let ws = h.state().ws.lock().unwrap();
+            let t = ws.active_doc().unwrap().project.task(id).unwrap();
+            assert_eq!(t.status, TaskStatus::Done);
+            assert_eq!(t.percent_complete, 100, "done sets the percent too");
+        }
+        let ctx = h.ctx.clone();
+        h.state_mut().exec(&ctx, Command::Undo);
+        h.run_steps(1);
+        let ws = h.state().ws.lock().unwrap();
+        let t = ws.active_doc().unwrap().project.task(id).unwrap();
+        assert_eq!(t.status, TaskStatus::NotStarted, "the pane edit is one undoable step");
+        assert_eq!(t.percent_complete, 0);
+    }
+
+    /// The explicit Unrestricted date mode: the pane's mode picker clears a stored SNET pin so
+    /// the side is dependency-driven again, and On pins the date; both through the combo.
+    #[test]
+    fn the_date_mode_picker_round_trips_unrestricted_and_on() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness();
+        let (id, id2, date) = {
+            let mut ws = h.state().ws.lock().unwrap();
+            let doc = ws.active_doc_mut().unwrap();
+            let mut leaves = doc.project.tasks.iter().enumerate().filter(|(i, t)| {
+                !doc.project.has_children(*i)
+                    && !t.is_milestone()
+                    && t.constraint.kind == ConstraintKind::Asap
+                    && t.bounds.is_empty()
+                    && t.mode == ScheduleMode::Auto
+            });
+            let (id, start) = leaves.next().map(|(_, t)| (t.id, t.sched.start)).unwrap();
+            let id2 = leaves.next().map(|(_, t)| t.id).unwrap();
+            let date = start.unwrap();
+            doc.edit("SNET", |p| {
+                for which in [id, id2] {
+                    if let Some(t) = p.task_mut(which) {
+                        t.constraint = Constraint { kind: ConstraintKind::Snet, date: Some(date) };
+                        // A finish rule too, so each side's combo value stays unique in the tree.
+                        t.bounds.finish_latest = Some(date);
+                    }
+                }
+            })
+            .unwrap();
+            (id, id2, date)
+        };
+        h.state_mut().st.properties_visible = true;
+        h.state_mut().st.properties_tab = crate::state::PropTab::General;
+        h.state_mut().st.sel.select_task(id);
+        h.run_steps(2);
+        // The start side's combo shows the mode derived from the legacy pin.
+        h.get_by_value(crate::lang::text("dm.no_earlier")).click_accesskit();
+        h.run_steps(1);
+        h.get_by_label(crate::lang::text("dm.unrestricted")).click_accesskit();
+        h.run_steps(2);
+        {
+            let ws = h.state().ws.lock().unwrap();
+            let t = ws.active_doc().unwrap().project.task(id).unwrap();
+            assert_eq!(t.constraint.kind, ConstraintKind::Asap, "Unrestricted cleared the SNET pin");
+            assert!(t.bounds.start_earliest.is_none() && t.bounds.start_latest.is_none(), "no stored start dates remain");
+        }
+        // On, on the second task's fresh combo: the pin keeps the date that fits (the SNET
+        // minimum) and writes it as both the minimum and the maximum, absorbing the pin.
+        h.state_mut().st.sel.select_task(id2);
+        h.run_steps(2);
+        h.get_by_value(crate::lang::text("dm.no_earlier")).click_accesskit();
+        h.run_steps(1);
+        h.get_by_label(crate::lang::text("dm.on")).click_accesskit();
+        h.run_steps(2);
+        let ws = h.state().ws.lock().unwrap();
+        let t = ws.active_doc().unwrap().project.task(id2).unwrap();
+        assert_eq!(t.start_mode(), DateMode::On);
+        assert_eq!(t.constraint.kind, ConstraintKind::Asap, "the SNET pin is absorbed into the bounds");
+        assert_eq!(t.bounds.start_earliest, Some(date), "On keeps the date that fit");
+        assert_eq!(t.bounds.start_latest, Some(date));
     }
 
     /// Review (P2, app date arithmetic): views scrolled to the first or last representable day draw, scroll and zoom

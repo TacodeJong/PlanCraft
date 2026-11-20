@@ -840,6 +840,64 @@ impl Project {
         Ok(())
     }
 
+    /// Switches one side's date rule (see [`DateMode`]), the Project Planner way: the mode's
+    /// window lands in the task's bounds, keeping dates that fit, and the legacy single
+    /// constraint pin on that side is absorbed into the bounds. Unrestricted leaves the side
+    /// to its predecessors, successors' backward pressure, the group and the calendars: the
+    /// side's dates and fixed flag are cleared. A manually scheduled task first returns to
+    /// automatic scheduling, each typed date kept as an On rule in the bounds.
+    pub fn set_date_mode(&mut self, id: TaskId, finish: bool, mode: DateMode) -> PlanResult<()> {
+        let idx = self.require_task(id)?;
+        let project_start = self.start;
+        let t = self.row(idx)?;
+        let anchor = if finish { t.manual_finish.or(t.sched.finish) } else { t.manual_start.or(t.sched.start) };
+        let anchor = anchor.or(t.sched.start).unwrap_or(project_start);
+        let (min0, max0) = if finish { t.finish_window() } else { t.start_window() };
+        let (min, max) = mode.window(min0, max0, anchor);
+        self.set_date_window(id, finish, min, max)
+    }
+
+    /// Writes one side's window directly: the date pickers behind [`DateMode`]. The legacy
+    /// single-constraint pin on that side is absorbed into the bounds, and a side left without
+    /// a maximum drops its fixed flag. A manually scheduled task first returns to automatic
+    /// scheduling, its typed date on the other side kept as an On rule.
+    pub fn set_date_window(&mut self, id: TaskId, finish: bool, min: Option<DateTime>, max: Option<DateTime>) -> PlanResult<()> {
+        let idx = self.require_task(id)?;
+        let t = self.row_mut(idx)?;
+        // The other side's window is read first: a manual task's typed dates count as On pins.
+        let (other_min, other_max) = if finish { t.start_window() } else { t.finish_window() };
+        if t.mode == ScheduleMode::Manual {
+            t.mode = ScheduleMode::Auto;
+            if finish {
+                t.bounds.start_earliest = other_min;
+                t.bounds.start_latest = other_max;
+            } else {
+                t.bounds.finish_earliest = other_min;
+                t.bounds.finish_latest = other_max;
+            }
+        }
+        if finish {
+            t.bounds.finish_earliest = min;
+            t.bounds.finish_latest = max;
+            if max.is_none() {
+                t.bounds.finish_latest_fixed = false;
+            }
+            if matches!(t.constraint.kind, ConstraintKind::Fnet | ConstraintKind::Fnlt | ConstraintKind::Mfo) {
+                t.constraint = Constraint::default();
+            }
+        } else {
+            t.bounds.start_earliest = min;
+            t.bounds.start_latest = max;
+            if max.is_none() {
+                t.bounds.start_latest_fixed = false;
+            }
+            if matches!(t.constraint.kind, ConstraintKind::Snet | ConstraintKind::Snlt | ConstraintKind::Mso) {
+                t.constraint = Constraint::default();
+            }
+        }
+        Ok(())
+    }
+
     /// Sets a task's duration as typed: working or elapsed time (see [`TypedDuration`]). A
     /// summary task takes working time only.
     pub fn set_typed_duration(&mut self, id: TaskId, typed: TypedDuration) -> PlanResult<()> {
@@ -1919,8 +1977,9 @@ mod status_tests {
     fn a_missing_status_loads_as_not_started() {
         let mut p = Project::new("Old", crate::dates::ymd(2026, 1, 5).unwrap());
         p.add_task("A", None);
+        let task_json = serde_json::to_string(&p.tasks.first().unwrap()).unwrap();
+        assert!(!task_json.contains("\"status\""), "{task_json}");
         let json = serde_json::to_string(&p).unwrap();
-        assert!(!json.contains("\"status\""), "{json}");
         let back: Project = serde_json::from_str(&json).unwrap();
         assert_eq!(back.tasks.first().unwrap().status, TaskStatus::NotStarted);
     }

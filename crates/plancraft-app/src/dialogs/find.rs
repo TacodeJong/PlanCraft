@@ -101,14 +101,15 @@ impl FindReplace {
         if self.field.as_ref().is_some_and(|k| !shown.iter().any(|f| f.key() == *k)) {
             self.field = None;
         }
-        egui::Window::new(if self.replacing { "Replace" } else { "Find" })
+        let title = if self.replacing { "Replace" } else { "Find" };
+        egui::Window::new(title)
             .id(egui::Id::new("find_dialog"))
             .pivot(egui::Align2::RIGHT_TOP)
             .default_pos(ctx.content_rect().right_top() + egui::vec2(-40.0, 140.0))
-            .open(&mut open)
-            .collapsible(false)
+            .title_bar(false)
             .resizable(false)
             .show(ctx, |ui| {
+                open = crate::widgets::craft::dialog_header(ui, title);
                 egui::Grid::new("find_grid").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
                     ui.label("Find what:");
                     let r = ui.add(egui::TextEdit::singleline(&mut self.find).desired_width(240.0));
@@ -300,10 +301,10 @@ impl GoTo {
             .id(egui::Id::new("goto_dialog"))
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 140.0))
-            .open(&mut open)
-            .collapsible(false)
+            .title_bar(false)
             .resizable(false)
             .show(ctx, |ui| {
+                open = crate::widgets::craft::dialog_header(ui, "Go To");
                 egui::Grid::new("goto_grid").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
                     ui.label("ID:");
                     let r = ui.add(egui::TextEdit::singleline(&mut self.id).desired_width(120.0).hint_text("row number"));

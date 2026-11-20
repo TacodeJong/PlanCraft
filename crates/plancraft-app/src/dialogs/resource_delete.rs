@@ -83,9 +83,10 @@ impl ResourceDelete {
             .id(egui::Id::new("resource_delete"))
             .pivot(egui::Align2::CENTER_CENTER)
             .default_pos(ctx.content_rect().center())
-            .open(&mut open)
+            .title_bar(false)
             .default_width(420.0)
             .show(ctx, |ui| {
+                open = crate::widgets::craft::dialog_header(ui, "Delete Resource");
                 ui.label(RichText::new(title).strong());
                 ui.label("Choose a replacement, or remove the assignments.");
                 ui.add_space(6.0);

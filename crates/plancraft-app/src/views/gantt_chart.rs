@@ -230,19 +230,12 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
     let bp = painter.with_clip_rect(body);
     let proj_cal = project_calendar(p);
     if g.px_per_day >= 4.0 {
-        // Non-working day shading.
-        let mut d = g.left.date();
-        let end = g.time_at(chart_left, body.right()).date();
-        while d <= end {
-            if !proj_cal.is_working_day(d) {
-                let t0 = d.and_time(Time::MIN);
-                let x0 = g.x_of(chart_left, t0);
-                let x1 = g.x_of(chart_left, plancraft_core::dates::add_minutes(t0, 1440));
-                bp.rect_filled(Rect::from_x_y_ranges(x0..=x1, body.y_range()), 0.0, theme::pal().NONWORKING);
-            }
-            // Stops at the last representable day instead of overflowing.
-            let Some(next) = plancraft_core::dates::next_day(d) else { break };
-            d = next;
+        // Non-working day shading (weekends and the calendar's holidays).
+        for d in shaded_days(|d| proj_cal.is_working_day(d), g.left.date(), g.time_at(chart_left, body.right()).date()) {
+            let t0 = d.and_time(Time::MIN);
+            let x0 = g.x_of(chart_left, t0);
+            let x1 = g.x_of(chart_left, plancraft_core::dates::add_minutes(t0, 1440));
+            bp.rect_filled(Rect::from_x_y_ranges(x0..=x1, body.y_range()), 0.0, theme::pal().NONWORKING);
         }
     }
     let (_, bottom_unit) = timescale::tiers(g.px_per_day);
@@ -984,6 +977,21 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
     actions
 }
 
+/// The days to shade between `from` and `to`: weekends and the calendar's holidays
+/// (whatever `is_working` says). Stops at the last representable day instead of overflowing.
+pub fn shaded_days(is_working: impl Fn(Date) -> bool, from: Date, to: Date) -> Vec<Date> {
+    let mut out = Vec::new();
+    let mut d = from;
+    while d <= to {
+        if !is_working(d) {
+            out.push(d);
+        }
+        let Some(next) = plancraft_core::dates::next_day(d) else { break };
+        d = next;
+    }
+    out
+}
+
 fn dashed_vline(p: &Painter, x: f32, y0: f32, y1: f32, color: Color32) {
     let mut y = y0;
     while y < y1 {
@@ -1001,4 +1009,27 @@ fn tooltip_at(ui: &Ui, pos: Pos2, text: &str) {
             });
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The chart shades weekends and the calendar's holidays, and nothing else.
+    #[test]
+    fn weekends_and_holidays_shade_and_workdays_do_not() {
+        let mut p = Project::new("Shade", plancraft_core::dates::ymd(2026, 12, 21).unwrap());
+        let christmas = plancraft_core::dates::ymd(2026, 12, 25).unwrap();
+        if let Some(cal) = p.calendars.first_mut() {
+            cal.exceptions.push(plancraft_core::calendar::CalendarException::non_working("Christmas", christmas, christmas));
+        }
+        let cal = project_calendar(&p);
+        let days = shaded_days(
+            |d| cal.is_working_day(d),
+            plancraft_core::dates::ymd(2026, 12, 21).unwrap(),
+            plancraft_core::dates::ymd(2026, 12, 28).unwrap(),
+        );
+        let expect: Vec<_> = [25, 26, 27].into_iter().filter_map(|d| plancraft_core::dates::ymd(2026, 12, d)).collect();
+        assert_eq!(days, expect, "the Friday holiday and the weekend shade; Monday the 28th does not");
+    }
 }

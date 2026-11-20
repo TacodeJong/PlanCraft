@@ -24,6 +24,7 @@ pub enum Granularity {
     Day,
     Week,
     Month,
+    Quarter,
 }
 
 impl Granularity {
@@ -33,6 +34,7 @@ impl Granularity {
             Granularity::Day => d,
             Granularity::Week => d.checked_sub_days(Days::new(u64::from(d.weekday().num_days_from_monday()))).unwrap_or(d),
             Granularity::Month => d.with_day(1).unwrap_or(d),
+            Granularity::Quarter => crate::dates::ymd(d.year32(), (d.month0() / 3) * 3 + 1, 1).unwrap_or(d),
         }
     }
 
@@ -44,6 +46,11 @@ impl Granularity {
             Granularity::Month => {
                 let (y, m) = if start.month32() == 12 { (start.year32() + 1, 1) } else { (start.year32(), start.month32() + 1) };
                 crate::dates::ymd(y, m, 1).unwrap_or(Date::MAX)
+            }
+            Granularity::Quarter => {
+                let m0 = start.month0() + 3;
+                let (y, m0) = if m0 >= 12 { (start.year32() + 1, m0 - 12) } else { (start.year32(), m0) };
+                crate::dates::ymd(y, m0 + 1, 1).unwrap_or(Date::MAX)
             }
         }
     }
@@ -393,4 +400,21 @@ pub fn workload(p: &Project, from: Date, to: Date, granularity: Granularity) -> 
     }
 
     WorkloadReport { granularity, from, to, periods, resources, unassigned }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quarter_buckets_start_on_the_quarter_and_step_three_months() {
+        let d = crate::dates::ymd(2026, 11, 20).unwrap();
+        let q4 = crate::dates::ymd(2026, 10, 1).unwrap();
+        assert_eq!(Granularity::Quarter.bucket_start(d), q4);
+        assert_eq!(Granularity::Quarter.next(q4), crate::dates::ymd(2027, 1, 1).unwrap());
+        let spring = crate::dates::ymd(2027, 4, 1).unwrap();
+        assert_eq!(Granularity::Quarter.next(crate::dates::ymd(2027, 1, 1).unwrap()), spring);
+        let buckets = Granularity::Quarter.buckets(d, crate::dates::ymd(2027, 5, 1).unwrap());
+        assert_eq!(buckets, vec![q4, crate::dates::ymd(2027, 1, 1).unwrap(), spring]);
+    }
 }

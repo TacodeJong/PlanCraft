@@ -234,7 +234,7 @@ fn view_selector(ui: &mut Ui, rect: Rect, st: &UiState, enabled: bool, push: &dy
 // Tabs
 // ---------------------------------------------------------------------------
 
-fn file_menu(ui: &mut Ui, info: &MenuInfo, settings: &AppSettings, report: bool, push: &dyn Fn(Command)) {
+fn file_menu(ui: &mut Ui, info: &MenuInfo, settings: &AppSettings, view: ViewKind, push: &dyn Fn(Command)) {
     let doc = info.has_doc;
     let item = |ui: &mut Ui, label: &str, shortcut: &str, enabled: bool, cmd: Command| {
         let resp = ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(shortcut));
@@ -275,8 +275,9 @@ fn file_menu(ui: &mut Ui, info: &MenuInfo, settings: &AppSettings, report: bool,
         });
     });
     item(ui, crate::lang::text("menu.export_xml"), "", doc, Command::ExportMspdi);
-    item(ui, crate::lang::text("menu.export_report"), "", doc && report, Command::ExportReport);
+    item(ui, crate::lang::text("menu.export_report"), "", doc && view == ViewKind::Report, Command::ExportReport);
     item(ui, crate::lang::text("menu.export_gantt"), "", doc, Command::ExportGantt);
+    item(ui, crate::lang::text("menu.export_usage"), "", doc && view == ViewKind::TaskUsage, Command::ExportUsage);
     ui.separator();
     item(ui, crate::lang::text("menu.project_info"), "", doc, Command::ProjectInfo);
     item(ui, crate::lang::text("menu.start"), "", true, Command::StartPage);
@@ -313,7 +314,7 @@ fn tab_strip(ui: &mut Ui, rect: Rect, st: &mut UiState, info: &MenuInfo, setting
     p.galley(pos2(r.left() + 8.0, r.center().y - g.size().y / 2.0), g, color);
     let c = pos2(r.right() - 10.0, r.center().y);
     p.add(Shape::convex_polygon(vec![c + vec2(-3.5, -1.5), c + vec2(3.5, -1.5), c + vec2(0.0, 2.5)], theme::pal().TEXT_WEAK, Stroke::NONE));
-    egui::Popup::menu(&resp).show(|ui| file_menu(ui, info, settings, st.view == crate::state::ViewKind::Report, push));
+    egui::Popup::menu(&resp).show(|ui| file_menu(ui, info, settings, st.view, push));
     x += w + 4.0;
 
     for tab in MenuTab::ALL {
@@ -354,6 +355,49 @@ fn tab_strip(ui: &mut Ui, rect: Rect, st: &mut UiState, info: &MenuInfo, setting
 // ---------------------------------------------------------------------------
 // Toolbar contents per tab
 // ---------------------------------------------------------------------------
+
+/// The Q / M / D chips: timescale presets for the chart zoom and the usage buckets.
+/// The active chip follows what the current view actually shows (free zoom can sit
+/// between presets); views without a time axis keep the chips, disabled, with a tooltip.
+fn timescale_chips(ui: &mut Ui, st: &UiState, info: &MenuInfo, push: &dyn Fn(Command)) {
+    use crate::state::Timescale;
+    let active = match st.view {
+        ViewKind::Gantt | ViewKind::TrackingGantt | ViewKind::MultipleBaselines | ViewKind::TeamPlanner => {
+            Timescale::of_px(st.gantt.px_per_day)
+        }
+        ViewKind::TaskUsage | ViewKind::ResourceUsage | ViewKind::Workload => Timescale::of_granularity(st.granularity),
+        _ => None,
+    };
+    let time_view = matches!(
+        st.view,
+        ViewKind::Gantt
+            | ViewKind::TrackingGantt
+            | ViewKind::MultipleBaselines
+            | ViewKind::TeamPlanner
+            | ViewKind::TaskUsage
+            | ViewKind::ResourceUsage
+            | ViewKind::Workload
+    );
+    let enabled = info.has_doc && time_view;
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.x = 1.0;
+        for ts in Timescale::ALL {
+            let on = enabled && active == Some(ts);
+            let color = if on { theme::pal().BG } else { theme::pal().TEXT };
+            let mut chip = egui::Button::new(crate::widgets::craft::hud_job(ts.letter(), color)).min_size(vec2(24.0, 22.0));
+            if on {
+                chip = chip.fill(theme::pal().TEXT);
+            }
+            let r = ui
+                .add_enabled(enabled, chip)
+                .on_hover_text(crate::lang::text(ts.name_key()))
+                .on_disabled_hover_text(crate::lang::text("ts.no_axis"));
+            if r.clicked() {
+                push(Command::SetTimescale(ts));
+            }
+        }
+    });
+}
 
 fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSettings, push: &dyn Fn(Command)) {
     let doc = info.has_doc;
@@ -611,6 +655,14 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
                 doc,
                 Command::ExportGantt,
             );
+            b(
+                ui,
+                "table",
+                Some(crate::lang::text("tb.export_usage")),
+                "Tasks, assignments and time-phased work as an Excel sheet (from the Task Usage view)",
+                doc && st.view == ViewKind::TaskUsage,
+                Command::ExportUsage,
+            );
         }
         MenuTab::View => {
             combo_label(ui, crate::lang::text("tb.filter"));
@@ -703,6 +755,7 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
             b(ui, "zoom-out", None, "Zoom out (Ctrl+-)", doc, Command::ZoomOut);
             b(ui, "maximize", Some(crate::lang::text("tb.entire")), "Fit the whole project in the chart", doc, Command::ZoomEntire);
             b(ui, "crosshair", Some(crate::lang::text("tb.selected")), "Fit the selected tasks", sel, Command::ZoomSelected);
+            timescale_chips(ui, st, info, push);
             sep(ui);
             if button(ui, "calendar", Some(crate::lang::text("tb.timeline")), "Show the timeline strip", doc, st.timeline_visible).clicked()
             {

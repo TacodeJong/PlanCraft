@@ -44,8 +44,9 @@ impl CustomFields {
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 100.0))
             .default_width(560.0)
-            .open(&mut open)
+            .title_bar(false)
             .show(ctx, |ui| {
+                open = crate::widgets::craft::dialog_header(ui, "Custom Fields");
                 ui.label(
                     RichText::new("Fields you add here can be shown as columns (right-click a column header, then Insert Column), sorted and grouped by.")
                         .small()

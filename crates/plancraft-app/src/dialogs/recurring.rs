@@ -235,10 +235,10 @@ impl RecurringTask {
             .id(egui::Id::new("recurring_task"))
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 120.0))
-            .open(&mut open)
-            .collapsible(false)
+            .title_bar(false)
             .resizable(false)
             .show(ctx, |ui| {
+                open = crate::widgets::craft::dialog_header(ui, "Recurring Task Information");
                 ui.horizontal(|ui| {
                     ui.label("Task name:");
                     ui.add_sized([220.0, 20.0], egui::TextEdit::singleline(&mut self.name).hint_text("e.g. Team meeting"));

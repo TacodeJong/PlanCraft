@@ -57,6 +57,10 @@ fn overview_on_launch() -> bool {
     true
 }
 
+fn pane_open() -> bool {
+    true
+}
+
 /// Which chat service Distill calls. The API key for each one lives in the system key store.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -147,11 +151,17 @@ pub struct AppSettings {
     /// A launch that opens a project lands on the overview.
     #[serde(default = "overview_on_launch")]
     pub open_to_overview: bool,
+    /// The properties pane: open by default, then as the user left it.
+    #[serde(default = "pane_open")]
+    pub properties_open: bool,
     pub ai: AiSettings,
     /// Servers plans were opened from, last used first (never a password).
     pub servers: Vec<KnownServer>,
     /// Task table columns switched on or off per table, by the table's label.
     pub columns: std::collections::HashMap<String, ColumnChoice>,
+    /// The Q/M/D timescale preset last chosen in the View toolbar.
+    #[serde(default)]
+    pub timescale: crate::state::Timescale,
 }
 
 /// A PlanCraft Server this person opened plans from.
@@ -191,9 +201,11 @@ impl Default for AppSettings {
             lang: crate::lang::Lang::Nl,
             startup: Startup::LastFile,
             open_to_overview: true,
+            properties_open: true,
             ai: AiSettings::default(),
             servers: Vec::new(),
             columns: std::collections::HashMap::new(),
+            timescale: crate::state::Timescale::default(),
         }
     }
 }
@@ -360,6 +372,11 @@ mod tests {
         assert_eq!((back.startup, back.open_to_overview), (Startup::Blank, false));
         let old: AppSettings = serde_json::from_str("{}").unwrap();
         assert_eq!((old.startup, old.open_to_overview), (Startup::LastFile, true));
+        // The properties pane is open for new installs and for settings files from before the
+        // option; a user who closed it stays closed.
+        assert!(old.properties_open, "open by default");
+        let closed: AppSettings = serde_json::from_str(r#"{"properties_open":false}"#).unwrap();
+        assert!(!closed.properties_open);
     }
 
     #[test]

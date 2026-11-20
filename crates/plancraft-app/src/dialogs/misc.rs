@@ -32,7 +32,8 @@ impl AssignResources {
             doc.project.tasks.iter().filter(|t| sel.tasks.contains(&t.id) && !t.sched.is_summary).map(|t| t.id).collect();
         egui::Window::new("Assign Resources").id(egui::Id::new("assign_resources"))
             .pivot(egui::Align2::CENTER_TOP)
-            .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 120.0)).open(&mut open).default_width(480.0).show(ctx, |ui| {
+            .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 120.0)).title_bar(false).default_width(480.0).show(ctx, |ui| {
+            open = crate::widgets::craft::dialog_header(ui, "Assign Resources");
             let label = match tasks.as_slice() {
                 [] => "Select one or more (non-summary) tasks.".to_string(),
                 [one] => format!("Task: {}", doc.project.task(*one).map(|t| t.name.as_str()).unwrap_or("")),
@@ -108,16 +109,23 @@ impl AssignResources {
 // Project Statistics
 // ---------------------------------------------------------------------------
 
-pub fn statistics(ctx: &Context, doc: &Document, open: &mut bool) {
+/// Shows the Project Statistics window. A clicked scheduling warning returns its task, so the
+/// app can select it and scroll the gantt there.
+pub fn statistics(ctx: &Context, doc: &Document, open: &mut bool) -> Option<TaskId> {
+    let mut goto = None;
     let p = &doc.project;
     let s = report::project_stats(p);
-    egui::Window::new(format!("Project Statistics for '{}'", p.name))
+    let title = format!("Project Statistics for '{}'", p.name);
+    egui::Window::new(&title)
         .id(egui::Id::new("stats"))
         .pivot(egui::Align2::CENTER_TOP)
         .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 120.0))
-        .open(open)
+        .title_bar(false)
         .default_width(560.0)
         .show(ctx, |ui| {
+            if !crate::widgets::craft::dialog_header(ui, &title) {
+                *open = false;
+            }
             egui::Grid::new("stats_dates").striped(true).num_columns(3).spacing([24.0, 6.0]).show(ui, |ui| {
                 ui.label("");
                 ui.label(RichText::new("Start").strong());
@@ -208,17 +216,32 @@ pub fn statistics(ctx: &Context, doc: &Document, open: &mut bool) {
                         .color(theme::pal().TEXT_WEAK),
                 );
             }
-            if !s.warnings.is_empty() {
+            // Each task's own warnings first, clickable: a click selects the task in the gantt.
+            // Project-level warnings (cycles, ignored links...) follow, not tied to one row.
+            let task_rows: Vec<(TaskId, String)> =
+                p.tasks.iter().flat_map(|t| t.sched.warnings.iter().map(|w| (t.id, format!("{}: {w}", t.name)))).collect();
+            let named: std::collections::HashSet<&String> = task_rows.iter().map(|(_, text)| text).collect();
+            let rest: Vec<&String> = s.warnings.iter().filter(|w| !named.contains(w)).collect();
+            if !task_rows.is_empty() || !rest.is_empty() {
                 ui.separator();
-                ui.label(RichText::new("Scheduling warnings").strong().color(theme::pal().ERROR));
-                for w in &s.warnings {
+                ui.label(RichText::new(crate::lang::text("warn.title")).strong().color(theme::pal().ERROR));
+                for (id, text) in &task_rows {
                     ui.horizontal(|ui| {
                         ui.add(crate::icons::image("triangle-alert", 13.0, theme::pal().ERROR));
-                        ui.label(RichText::new(w).color(theme::pal().ERROR));
+                        if ui.link(RichText::new(text).color(theme::pal().ERROR)).on_hover_text("Show this task in the chart").clicked() {
+                            goto = Some(*id);
+                        }
+                    });
+                }
+                for w in rest {
+                    ui.horizontal(|ui| {
+                        ui.add(crate::icons::image("triangle-alert", 13.0, theme::pal().ERROR));
+                        ui.label(RichText::new(w.as_str()).color(theme::pal().ERROR));
                     });
                 }
             }
         });
+    goto
 }
 
 // ---------------------------------------------------------------------------
@@ -331,7 +354,8 @@ impl ExternalLinks {
         let mut open = true;
         egui::Window::new("Links Between Projects").id(egui::Id::new("external_links"))
             .pivot(egui::Align2::CENTER_TOP)
-            .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 120.0)).open(&mut open).default_width(640.0).show(ctx, |ui| {
+            .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 120.0)).title_bar(false).default_width(640.0).show(ctx, |ui| {
+            open = crate::widgets::craft::dialog_header(ui, "Links Between Projects");
             ui.label("Tasks and milestones can depend on tasks stored in other PlanCraft files. Linked dates are cached in this file and refreshed when it opens.");
             if doc.path.is_none() {
                 ui.colored_label(theme::pal().WARN, "Save this project first so links can be stored relative to its location.");
@@ -425,11 +449,13 @@ pub fn about(ctx: &Context, open: &mut bool) {
         .id(egui::Id::new("about"))
         .pivot(egui::Align2::CENTER_TOP)
         .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 120.0))
-        .open(open)
-        .collapsible(false)
+        .title_bar(false)
         .resizable(false)
         .default_width(380.0)
         .show(ctx, |ui| {
+            if !crate::widgets::craft::dialog_header(ui, "About PlanCraft") {
+                *open = false;
+            }
             ui.vertical_centered(|ui| {
                 let (r, _) = ui.allocate_exact_size(egui::vec2(72.0, 72.0), egui::Sense::hover());
                 logo::paint(ui.painter(), r);
@@ -448,9 +474,12 @@ pub fn history(ctx: &Context, doc: &mut Document, open: &mut bool) {
         .id(egui::Id::new("history"))
         .pivot(egui::Align2::CENTER_TOP)
         .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 120.0))
-        .open(open)
+        .title_bar(false)
         .default_width(320.0)
         .show(ctx, |ui| {
+            if !crate::widgets::craft::dialog_header(ui, "Undo History") {
+                *open = false;
+            }
             let items = doc.history();
             if items.is_empty() {
                 ui.label(RichText::new("No changes yet").color(theme::pal().TEXT_WEAK));
@@ -541,6 +570,11 @@ mod tests {
         let state = (ws, dialog, sel, Vec::new());
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 800.0)).build_ui_state(
             |ui, (ws, dialog, sel, toasts): &mut (Workspace, AssignResources, Selection, Vec<(ToastKind, String)>)| {
+                // The dialog header needs the bundled fonts; set_fonts lands next pass, so skip the first frame.
+                if ui.ctx().cumulative_pass_nr() == 0 {
+                    crate::theme::install(ui.ctx(), crate::theme::ThemeChoice::Light);
+                    return;
+                }
                 dialog.show(ui.ctx(), &mut ws.docs[0], sel, toasts);
             },
             state,
@@ -563,6 +597,11 @@ mod tests {
         let state = (ws, ExternalLinks::default(), UiState::default());
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 800.0)).build_ui_state(
             |ui, (ws, dialog, st): &mut (Workspace, ExternalLinks, UiState)| {
+                // The dialog header needs the bundled fonts; set_fonts lands next pass, so skip the first frame.
+                if ui.ctx().cumulative_pass_nr() == 0 {
+                    crate::theme::install(ui.ctx(), crate::theme::ThemeChoice::Light);
+                    return;
+                }
                 dialog.show(ui.ctx(), &mut ws.docs[0], st);
             },
             state,
@@ -598,6 +637,11 @@ mod tests {
         st.sel.select_task(target);
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 800.0)).build_ui_state(
             |ui, (ws, dialog, st): &mut (Workspace, ExternalLinks, UiState)| {
+                // The dialog header needs the bundled fonts; set_fonts lands next pass, so skip the first frame.
+                if ui.ctx().cumulative_pass_nr() == 0 {
+                    crate::theme::install(ui.ctx(), crate::theme::ThemeChoice::Light);
+                    return;
+                }
                 dialog.show(ui.ctx(), &mut ws.docs[0], st);
             },
             (ws, dialog, st),

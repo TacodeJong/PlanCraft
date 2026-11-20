@@ -326,7 +326,12 @@ pub fn indicators(
         v.push((Glyph::Icon("check"), theme::pal().OK, "This task was completed".into()));
     }
     if !t.sched.warnings.is_empty() {
-        v.push((Glyph::Icon("triangle-alert"), theme::pal().ERROR, t.sched.warnings.join("\n")));
+        let mut tip = t.sched.warnings.join("\n");
+        if let Some(hint) = warning_hint(&t.sched.warnings) {
+            tip.push('\n');
+            tip.push_str(hint);
+        }
+        v.push((Glyph::Icon("triangle-alert"), theme::pal().ERROR, tip));
     } else if t.deadline.is_some() {
         v.push((Glyph::Icon("flag"), theme::pal().DEADLINE, format!("Deadline: {}", format::date(t.deadline))));
     }
@@ -354,6 +359,11 @@ pub fn indicators(
     if t.recurrence.is_some() {
         let n = p.task_index(t.id).map_or(0, |i| p.descendants_range(i).len());
         v.insert(0, (Glyph::Icon("repeat"), theme::pal().ACCENT_MID, format!("Recurring task with {n} occurrences")));
+    }
+    // The row mark as a clear flag in the mark's color (the name cell keeps its thin accent,
+    // so a mark stays visible when this column is hidden). Warnings and the like come first.
+    if let Some(mark) = t.row_mark {
+        v.push((Glyph::Icon("flag"), theme::row_mark_color(mark), crate::lang::mark_name(mark).into()));
     }
     let _ = p;
     v.truncate(2);
@@ -448,7 +458,7 @@ pub fn cell(col: TaskCol, p: &Project, idx: usize, ctx: &CellCtx) -> Cell {
             None => Cell::default(),
             Some(m) => Cell {
                 text: crate::lang::mark_name(m).into(),
-                icons: vec![(Glyph::Dot, theme::row_mark_color(m), crate::lang::mark_name(m).into())],
+                icons: vec![(Glyph::Icon("flag"), theme::row_mark_color(m), crate::lang::mark_name(m).into())],
                 ..Default::default()
             },
         },
@@ -780,6 +790,15 @@ pub fn is_late(p: &Project, t: &Task) -> bool {
     report::is_late(t, report::status_moment(p), p)
 }
 
+/// The localized hint shown with constraint-pin warnings: the real culprits are the
+/// predecessors that now carry negative slack, visible in the Slack columns.
+pub fn warning_hint(warnings: &[String]) -> Option<&'static str> {
+    let pinned = warnings
+        .iter()
+        .any(|w| w.contains("no-later-than") || w.contains("No Later Than") || w.contains("Must Start On") || w.contains("Must Finish On"));
+    pinned.then(|| crate::lang::text("warn.pinned_hint"))
+}
+
 /// Sets (or with `None` clears) a task's Actual Start. A task that shows progress has started,
 /// so its actual start can only be cleared once its % complete is 0 and it has no actual finish
 /// (clearing it then would leave "half done, never started").
@@ -847,6 +866,16 @@ mod tests {
         commit(TaskCol::RowMark, &mut p, id, crate::lang::mark_name(Mark::Blue)).unwrap();
         assert_eq!(p.task(id).unwrap().row_mark, Some(Mark::Blue));
         assert_eq!(cell(TaskCol::RowMark, &p, idx, &ctx).text, crate::lang::mark_name(Mark::Blue));
+        // The mark is a clear Lucide flag in the mark's color: in its own column, and in the
+        // indicator column so a marked row stands out.
+        assert!(matches!(cell(TaskCol::RowMark, &p, idx, &ctx).icons.first(), Some((Glyph::Icon("flag"), _, _))));
+        plancraft_core::schedule::recalculate(&mut p);
+        let none = |_: TaskId| false;
+        let marked = indicators(&p, p.task(id).unwrap(), &none, None);
+        assert!(
+            marked.iter().any(|(g, _, tip)| matches!(g, Glyph::Icon("flag")) && tip == crate::lang::mark_name(Mark::Blue)),
+            "{marked:?}"
+        );
         commit(TaskCol::RowMark, &mut p, id, "").unwrap();
         assert_eq!(p.task(id).unwrap().row_mark, None);
         assert!(commit(TaskCol::Status, &mut p, id, "nonsense").is_err());

@@ -6,6 +6,7 @@ use std::time::Instant;
 use plancraft_core::dates::prelude::*;
 use plancraft_core::prelude::*;
 use plancraft_core::workload::Granularity;
+use serde::{Deserialize, Serialize};
 
 use crate::columns::TaskTable;
 use crate::widgets::grid::GridState;
@@ -223,16 +224,24 @@ pub struct ColumnEdit {
     pub id: Option<plancraft_core::ids::BoardColumnId>,
     pub name: String,
     pub percent: String,
+    /// The status a linked column mirrors: its name is the localized status name, not editable.
+    pub status: Option<plancraft_core::model::TaskStatus>,
     pub error: Option<String>,
 }
 
 impl ColumnEdit {
     pub fn new_column() -> Self {
-        Self { id: None, name: String::new(), percent: String::new(), error: None }
+        Self { id: None, name: String::new(), percent: String::new(), status: None, error: None }
     }
 
     pub fn existing(c: &plancraft_core::board::BoardColumn) -> Self {
-        Self { id: Some(c.id), name: c.name.clone(), percent: c.percent_complete.map(|v| v.to_string()).unwrap_or_default(), error: None }
+        Self {
+            id: Some(c.id),
+            name: c.name.clone(),
+            percent: c.percent_complete.map(|v| v.to_string()).unwrap_or_default(),
+            status: c.status,
+            error: None,
+        }
     }
 }
 
@@ -468,6 +477,31 @@ pub struct ViewOrder {
     pub notes_open: HashSet<TaskId>,
 }
 
+/// The properties pane's tabs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PropTab {
+    #[default]
+    General,
+    Planning,
+    Resources,
+    Progress,
+    Notes,
+}
+
+impl PropTab {
+    pub const ALL: [PropTab; 5] = [PropTab::General, PropTab::Planning, PropTab::Resources, PropTab::Progress, PropTab::Notes];
+
+    pub fn title(self) -> &'static str {
+        crate::lang::text(match self {
+            PropTab::General => "prop.tab.general",
+            PropTab::Planning => "prop.tab.planning",
+            PropTab::Resources => "prop.tab.resources",
+            PropTab::Progress => "prop.tab.progress",
+            PropTab::Notes => "prop.tab.notes",
+        })
+    }
+}
+
 pub struct UiState {
     pub view: ViewKind,
     /// Interface language. Dutch unless the user picks English.
@@ -520,6 +554,8 @@ pub struct UiState {
     pub properties_visible: bool,
     /// Width of the properties pane, in points.
     pub properties_width: f32,
+    /// The pane's open tab (General, Planning, Resources, Progress, Notes).
+    pub properties_tab: PropTab,
     /// Design style for this session. Copied from the plan when that plan becomes active.
     pub chart_style: plancraft_core::model::ChartStyle,
     /// The document handle `chart_style` was last taken from.
@@ -582,8 +618,9 @@ impl Default for UiState {
             board: BoardState::default(),
             table_width: 720.0,
             timeline_visible: true,
-            properties_visible: false,
+            properties_visible: true,
             properties_width: 340.0,
+            properties_tab: PropTab::default(),
             chart_style: plancraft_core::model::ChartStyle::Blue,
             style_doc: None,
             page_group: PageGroup::None,
@@ -598,6 +635,77 @@ impl Default for UiState {
             toasts: Vec::new(),
             clipboard: Vec::new(),
             others_on: Default::default(),
+        }
+    }
+}
+
+/// The Q / M / D timescale presets in the View toolbar. Presets, not a replacement:
+/// free zoom keeps working, and the active chip follows the tier actually shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Timescale {
+    Quarter,
+    Month,
+    #[default]
+    Day,
+}
+
+impl Timescale {
+    pub const ALL: [Timescale; 3] = [Timescale::Quarter, Timescale::Month, Timescale::Day];
+
+    /// The chip letter, as the user asked for it: Q / M / D.
+    pub fn letter(self) -> &'static str {
+        match self {
+            Timescale::Quarter => "Q",
+            Timescale::Month => "M",
+            Timescale::Day => "D",
+        }
+    }
+
+    pub fn name_key(self) -> &'static str {
+        match self {
+            Timescale::Quarter => "ts.quarter",
+            Timescale::Month => "ts.month",
+            Timescale::Day => "ts.day",
+        }
+    }
+
+    /// Chart zoom showing this tier: day columns, month headers, or quarter/month tiers.
+    pub fn px_per_day(self) -> f32 {
+        match self {
+            Timescale::Quarter => 2.5,
+            Timescale::Month => 5.0,
+            Timescale::Day => 24.0,
+        }
+    }
+
+    /// The preset the chart zoom currently falls in (None when zoomed out to years or in to hours).
+    pub fn of_px(per_day: f32) -> Option<Timescale> {
+        use plancraft_core::timescale::Unit;
+        match plancraft_core::timescale::tiers(per_day) {
+            (Unit::Week, Unit::Day) => Some(Timescale::Day),
+            (Unit::Month, Unit::Week) => Some(Timescale::Month),
+            (Unit::Quarter, Unit::Month) => Some(Timescale::Quarter),
+            _ => None,
+        }
+    }
+
+    /// The bucket size the usage views should show for this preset.
+    pub fn granularity(self) -> Granularity {
+        match self {
+            Timescale::Quarter => Granularity::Quarter,
+            Timescale::Month => Granularity::Month,
+            Timescale::Day => Granularity::Day,
+        }
+    }
+
+    /// The preset a usage-view bucket size corresponds to (weeks sit between presets).
+    pub fn of_granularity(g: Granularity) -> Option<Timescale> {
+        match g {
+            Granularity::Day => Some(Timescale::Day),
+            Granularity::Week => None,
+            Granularity::Month => Some(Timescale::Month),
+            Granularity::Quarter => Some(Timescale::Quarter),
         }
     }
 }

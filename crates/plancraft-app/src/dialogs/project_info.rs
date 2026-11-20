@@ -153,14 +153,15 @@ impl ProjectInfo {
     pub fn show(&mut self, ctx: &Context, doc: &mut Document) -> bool {
         let mut open = true;
         let mut close = false;
-        egui::Window::new(format!("Project Information for '{}'", doc.project.name))
+        let title = format!("Project Information for '{}'", doc.project.name);
+        egui::Window::new(&title)
             .id(egui::Id::new("project_info"))
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 120.0))
-            .open(&mut open)
-            .collapsible(false)
+            .title_bar(false)
             .default_width(600.0)
             .show(ctx, |ui| {
+                open = crate::widgets::craft::dialog_header(ui, &title);
                 egui::Grid::new("pi").num_columns(4).spacing([12.0, 8.0]).show(ui, |ui| {
                     ui.label("Project name:");
                     ui.text_edit_singleline(&mut self.name);

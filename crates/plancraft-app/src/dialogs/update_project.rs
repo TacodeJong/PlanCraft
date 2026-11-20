@@ -87,10 +87,10 @@ impl UpdateProject {
             .id(egui::Id::new("update_project"))
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 140.0))
-            .open(&mut open)
-            .collapsible(false)
+            .title_bar(false)
             .resizable(false)
             .show(ctx, |ui| {
+                open = crate::widgets::craft::dialog_header(ui, "Update Project");
                 ui.radio_value(&mut self.reschedule, false, "Update work as complete through:");
                 ui.add_enabled_ui(!self.reschedule, |ui| {
                     ui.indent("through", |ui| {

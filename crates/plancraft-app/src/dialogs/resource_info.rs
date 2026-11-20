@@ -77,10 +77,10 @@ impl ResourceInfo {
             .id(egui::Id::new("resource_info"))
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 120.0))
-            .open(&mut open)
-            .collapsible(false)
+            .title_bar(false)
             .default_width(560.0)
             .show(ctx, |ui| {
+                open = crate::widgets::craft::dialog_header(ui, "Resource Information");
                 ui.horizontal(|ui| {
                     for (t, l) in [(Tab::General, "General"), (Tab::TimeOff, "Time Off & Working Time"), (Tab::Availability, "Availability"), (Tab::Notes, "Notes")] {
                         ui.selectable_value(&mut self.tab, t, l);

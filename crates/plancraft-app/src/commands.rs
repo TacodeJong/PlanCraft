@@ -31,6 +31,8 @@ pub enum Command {
     ExportMspdi,
     /// Save the Report view's visible rows as an Excel workbook.
     ExportReport,
+    /// Save the Task Usage view (tasks, assignments, time-phased work) as an Excel workbook.
+    ExportUsage,
     /// Coloured-cell Gantt workbook of the tasks the current filter leaves visible.
     ExportGantt,
     /// The design style, stored on the plan and used for this session.
@@ -138,6 +140,8 @@ pub enum Command {
     /// Highlight the selected task's predecessor and successor chain (Alt+Ctrl+L).
     ToggleHighlightPaths,
     History,
+    /// A Q/M/D chip in the View toolbar: zoom the charts and usage buckets to that tier.
+    SetTimescale(crate::state::Timescale),
     SetTheme(crate::theme::ThemeChoice),
     SetLang(crate::lang::Lang),
     SetStartup(crate::settings::Startup),

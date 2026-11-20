@@ -194,9 +194,9 @@ impl PrintDialog {
             .pivot(Align2::CENTER_CENTER)
             .default_pos(ctx.content_rect().center())
             .resizable(true)
-            .collapsible(false)
-            .open(&mut open)
+            .title_bar(false)
             .show(ctx, |ui| {
+                open = crate::widgets::craft::dialog_header(ui, "Print");
                 let h = ui.available_height().max(480.0);
                 ui.horizontal_top(|ui| {
                     ui.vertical(|ui| {
