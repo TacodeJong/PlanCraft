@@ -1207,6 +1207,62 @@ pub fn try_recalculate(p: &mut Project) -> Result<ScheduleReport, Panicked> {
     guard::catch("recalculate", || calculate(p))
 }
 
+/// When a successor is pinned by a fixed bound yet a predecessor still finishes after that
+/// successor starts, both rows get a warning. Share resolution normally prevents this; the
+/// leftover case is an impossible window that could not be compressed further.
+fn flag_pinned_successor_overruns(p: &mut Project) {
+    let n = p.tasks.len();
+    let mut hits: Vec<(usize, usize)> = Vec::new();
+    for succ_i in 0..n {
+        let Some(succ) = p.tasks.get(succ_i) else { continue };
+        if !successor_is_pinned(succ) {
+            continue;
+        }
+        let Some(succ_start) = succ.sched.start else { continue };
+        for dep in &succ.predecessors {
+            if dep.kind != LinkType::FS {
+                continue;
+            }
+            let Some(pred_id) = dep.predecessor.local() else { continue };
+            let Some(pred_i) = p.tasks.iter().position(|t| t.id == pred_id) else { continue };
+            let Some(pred) = p.tasks.get(pred_i) else { continue };
+            let Some(pred_finish) = pred.sched.finish else { continue };
+            if pred_finish > succ_start {
+                hits.push((pred_i, succ_i));
+            }
+        }
+    }
+    for (pred_i, succ_i) in hits {
+        let succ_name = p.tasks.get(succ_i).map(|t| t.name.clone()).unwrap_or_default();
+        let pred_name = p.tasks.get(pred_i).map(|t| t.name.clone()).unwrap_or_default();
+        if let Some(pred) = p.tasks.get_mut(pred_i) {
+            let msg = format!("Finishes after successor '{succ_name}' which is pinned by a fixed date");
+            if !pred.sched.warnings.iter().any(|w| w == &msg) {
+                pred.sched.warnings.push(msg);
+            }
+        }
+        if let Some(succ) = p.tasks.get_mut(succ_i) {
+            let msg = format!("Pinned date overrides the finish-to-start link from '{pred_name}'");
+            if !succ.sched.warnings.iter().any(|w| w == &msg) {
+                succ.sched.warnings.push(msg);
+            }
+        }
+    }
+}
+
+fn successor_is_pinned(t: &Task) -> bool {
+    if t.bounds.start_latest_fixed && t.bounds.start_latest.is_some() {
+        return true;
+    }
+    if t.bounds.finish_latest_fixed && t.bounds.finish_latest.is_some() {
+        return true;
+    }
+    matches!(
+        t.constraint.kind,
+        ConstraintKind::Mso | ConstraintKind::Mfo | ConstraintKind::Snlt | ConstraintKind::Fnlt
+    ) && t.constraint.date.is_some()
+}
+
 fn calculate(p: &mut Project) -> ScheduleReport {
     for t in &mut p.tasks {
         t.outline_level = t.outline_level.max(1);
@@ -1281,6 +1337,12 @@ fn calculate(p: &mut Project) -> ScheduleReport {
             warnings.push(format!("Finishes after its no-later-than date ({})", latest.format("%Y-%m-%d")));
         }
         t.sched.warnings = warnings;
+    }
+
+    // Ruleset on: a fixed successor pin that still leaves a predecessor finishing after the
+    // successor's start is an impossible FS chain — name it on both rows (Swift conflict + bar rule).
+    if p.settings.rules.enabled() {
+        flag_pinned_successor_overruns(p);
     }
 
     // Summaries' own fixed costs and assignments (active summaries only), counted once at the

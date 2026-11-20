@@ -159,6 +159,64 @@ impl DateBounds {
     }
 }
 
+/// How one side (start or finish) of a task is restricted, read from its earliest/latest pair.
+/// Mirrors Project Planner's `DateMode`: none → unrestricted, equal → on, minimum only → no earlier,
+/// maximum only → no later, both → between.
+///
+/// An unrestricted side carries no date of its own: predecessors, its group and backward pressure
+/// from successors place it. Stretch (remaining space) applies only while both sides are unrestricted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DateMode {
+    Unrestricted,
+    On,
+    NoEarlier,
+    NoLater,
+    Between,
+}
+
+impl DateMode {
+    pub const ALL: [DateMode; 5] = [DateMode::Unrestricted, DateMode::On, DateMode::NoEarlier, DateMode::NoLater, DateMode::Between];
+
+    /// The mode a minimum/maximum pair expresses.
+    pub fn of(min: Option<DateTime>, max: Option<DateTime>) -> DateMode {
+        match (min, max) {
+            (None, None) => DateMode::Unrestricted,
+            (Some(a), Some(b)) if a == b => DateMode::On,
+            (Some(_), Some(_)) => DateMode::Between,
+            (Some(_), None) => DateMode::NoEarlier,
+            (None, Some(_)) => DateMode::NoLater,
+        }
+    }
+
+    /// New minimum and maximum after switching to this mode, keeping existing dates where they fit.
+    pub fn window(self, min: Option<DateTime>, max: Option<DateTime>, anchor: DateTime) -> (Option<DateTime>, Option<DateTime>) {
+        match self {
+            DateMode::Unrestricted => (None, None),
+            DateMode::On => {
+                let day = min.or(max).unwrap_or(anchor);
+                (Some(day), Some(day))
+            }
+            DateMode::NoEarlier => (Some(min.or(max).unwrap_or(anchor)), None),
+            DateMode::NoLater => (None, Some(max.or(min).unwrap_or(anchor))),
+            DateMode::Between => {
+                let lo = min.or(max).unwrap_or(anchor);
+                let hi = max.filter(|d| *d > lo).or_else(|| lo.checked_add(crate::dates::days(1)).ok()).unwrap_or(lo);
+                (Some(lo), Some(hi))
+            }
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            DateMode::Unrestricted => "Unrestricted",
+            DateMode::On => "On",
+            DateMode::NoEarlier => "No Earlier Than",
+            DateMode::NoLater => "No Later Than",
+            DateMode::Between => "Between",
+        }
+    }
+}
+
 impl ConstraintKind {
     pub const ALL: [ConstraintKind; 8] = [
         ConstraintKind::Asap,
@@ -533,8 +591,8 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "DateBounds::is_empty")]
     pub bounds: DateBounds,
     /// Share the parent group's remaining space. Used only while [`ScheduleRules::stretch`] is on.
-    /// A date bound limits where the task may sit; it does not turn stretching off. A task whose
-    /// start and finish are both pinned already has its duration, so it does not stretch.
+    /// Stretching applies when both start and finish are [`DateMode::Unrestricted`] (Project Planner
+    /// `groupShare`); any own date on either side keeps the stored duration instead.
     #[serde(default, skip_serializing_if = "is_false")]
     pub fills_group: bool,
     /// Duration as a percentage of the parent group's share. Used only while [`ScheduleRules::span`] is on.
@@ -703,6 +761,16 @@ impl Task {
 
     pub fn is_summary(&self) -> bool {
         self.sched.is_summary
+    }
+
+    /// How the start side is restricted (bounds only — same pair Project Planner feeds `DateMode`).
+    pub fn start_mode(&self) -> DateMode {
+        DateMode::of(self.bounds.start_earliest, self.bounds.start_latest)
+    }
+
+    /// How the finish side is restricted (bounds only).
+    pub fn finish_mode(&self) -> DateMode {
+        DateMode::of(self.bounds.finish_earliest, self.bounds.finish_latest)
     }
 
     pub fn is_complete(&self) -> bool {
