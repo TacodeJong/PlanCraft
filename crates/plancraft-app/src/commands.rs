@@ -147,6 +147,34 @@ pub enum Command {
     SetStartup(crate::settings::Startup),
     SetOpenOverview(bool),
     About,
+    /// Application Settings… (macOS app menu); opens the AI settings surface for now.
+    Settings,
+    /// Clear the Open Recent list.
+    ClearRecent,
+    /// Show or hide the timeline strip (not “add task to timeline”).
+    ToggleTimelinePane,
+    /// Show or hide the properties pane.
+    TogglePropertiesPane,
+    ToggleShowCritical,
+    ToggleShowSlack,
+    ToggleShowBaseline,
+    ToggleShowProgress,
+    ToggleShowLinks,
+    ToggleShowResourceNames,
+    ToggleShowProjectSummary,
+    SetBaselineSlot(u8),
+    ToggleMultiBaseline(u8),
+    ToggleNetworkCriticalFirst,
+    ToggleNetworkSummaries,
+    ToggleNetworkLinkLabels,
+    ToggleNetworkProgressMarks,
+    ToggleNetworkIdsOnly,
+    /// Bring the open document with this workspace handle to the front.
+    ActivateDocument(u64),
+    /// Minimize the main window (Window menu).
+    MinimizeWindow,
+    /// Hide the application (macOS); the native backend usually runs this itself.
+    HideApp,
 }
 
 /// Context menu shared by the task table and the Gantt chart.

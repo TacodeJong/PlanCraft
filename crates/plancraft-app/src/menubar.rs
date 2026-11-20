@@ -234,64 +234,7 @@ fn view_selector(ui: &mut Ui, rect: Rect, st: &UiState, enabled: bool, push: &dy
 // Tabs
 // ---------------------------------------------------------------------------
 
-fn file_menu(ui: &mut Ui, info: &MenuInfo, settings: &AppSettings, view: ViewKind, push: &dyn Fn(Command)) {
-    let doc = info.has_doc;
-    let item = |ui: &mut Ui, label: &str, shortcut: &str, enabled: bool, cmd: Command| {
-        let resp = ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(shortcut));
-        if resp.clicked() {
-            push(cmd);
-            ui.close();
-        }
-    };
-    ui.set_min_width(220.0);
-    item(ui, crate::lang::text("menu.new"), "Ctrl+N", true, Command::NewProject);
-    item(ui, crate::lang::text("menu.sample"), "", true, Command::NewDemo);
-    item(ui, crate::lang::text("menu.open"), "Ctrl+O", true, Command::Open);
-    item(ui, crate::lang::text("menu.open_server"), "", true, Command::OpenFromServer);
-    ui.menu_button(crate::lang::text("menu.recent"), |ui| {
-        if settings.recent.is_empty() {
-            ui.label(egui::RichText::new(crate::lang::text("menu.no_recent")).color(theme::pal().TEXT_WEAK));
-        }
-        for path in &settings.recent {
-            let name = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-            let resp = ui.add_enabled(path.exists(), egui::Button::new(name)).on_hover_text(path.display().to_string());
-            if resp.clicked() {
-                push(Command::OpenPath(path.clone()));
-                ui.close();
-            }
-        }
-    });
-    ui.separator();
-    item(ui, crate::lang::text("menu.save"), "Ctrl+S", doc, Command::Save);
-    item(ui, crate::lang::text("menu.save_as"), "Ctrl+Shift+S", doc, Command::SaveAs);
-    item(ui, crate::lang::text("menu.print"), "Ctrl+P", doc, Command::Print);
-    item(ui, crate::lang::text("menu.export_pdf"), "", doc, Command::ExportPdf);
-    item(ui, crate::lang::text("menu.import"), "", true, Command::ImportSpreadsheet);
-    ui.add_enabled_ui(doc, |ui| {
-        ui.menu_button(crate::lang::text("menu.export_csv"), |ui| {
-            for table in plancraft_core::tabular::CsvTable::ALL {
-                item(ui, &format!("{}…", table.label()), "", doc, Command::ExportCsv(table));
-            }
-        });
-    });
-    item(ui, crate::lang::text("menu.export_xml"), "", doc, Command::ExportMspdi);
-    item(ui, crate::lang::text("menu.export_report"), "", doc && view == ViewKind::Report, Command::ExportReport);
-    item(ui, crate::lang::text("menu.export_gantt"), "", doc, Command::ExportGantt);
-    item(ui, crate::lang::text("menu.export_usage"), "", doc && view == ViewKind::TaskUsage, Command::ExportUsage);
-    ui.separator();
-    item(ui, crate::lang::text("menu.project_info"), "", doc, Command::ProjectInfo);
-    item(ui, crate::lang::text("menu.start"), "", true, Command::StartPage);
-    item(ui, crate::lang::text("menu.close"), "", doc, Command::Close);
-    ui.separator();
-    item(ui, crate::lang::text("menu.quick"), "Ctrl+Alt+N", doc, Command::QuickEntry);
-    item(ui, crate::lang::text("menu.distill"), "Ctrl+Shift+D", doc, Command::Distill);
-    item(ui, crate::lang::text("menu.ai"), "", true, Command::AiSettings);
-    item(ui, crate::lang::text("menu.mcp"), "", true, Command::McpPanel);
-    item(ui, crate::lang::text("menu.about"), "", true, Command::About);
-    item(ui, crate::lang::text("menu.exit"), "", true, Command::Quit);
-}
-
-fn tab_strip(ui: &mut Ui, rect: Rect, st: &mut UiState, info: &MenuInfo, settings: &AppSettings, push: &dyn Fn(Command)) {
+fn tab_strip(ui: &mut Ui, rect: Rect, st: &mut UiState, info: &MenuInfo, _settings: &AppSettings, push: &dyn Fn(Command)) {
     let p = ui.painter().clone();
     p.rect_filled(rect, 0.0, theme::pal().PANEL_BG);
     p.hline(rect.x_range(), rect.bottom() - 0.5, theme::hairline());
@@ -300,22 +243,8 @@ fn tab_strip(ui: &mut Ui, rect: Rect, st: &mut UiState, info: &MenuInfo, setting
     // Mono-caps HUD tabs; the active one is an inverted chip (the breadcrumb-leaf treatment).
     let caps = |text: &str, color| crate::widgets::craft::caps(&p, text, theme::HUD_SIZE, theme::mono(), theme::HUD_SPACING, color);
 
-    // File menu, drawn as a tab with a chevron.
-    let file = crate::lang::text("menu.file");
-    let w = caps(file, theme::pal().TEXT).size().x + 26.0;
-    let r = tab_rect(x, w);
-    let resp = ui.interact(r, egui::Id::new("tab_file"), Sense::click());
-    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
-    if resp.hovered() || open {
-        p.rect_filled(r, 3.0, theme::pal().WASH_HOVER);
-    }
-    let color = if resp.hovered() || open { theme::pal().TEXT } else { theme::pal().TEXT_WEAK };
-    let g = caps(file, color);
-    p.galley(pos2(r.left() + 8.0, r.center().y - g.size().y / 2.0), g, color);
-    let c = pos2(r.right() - 10.0, r.center().y);
-    p.add(Shape::convex_polygon(vec![c + vec2(-3.5, -1.5), c + vec2(3.5, -1.5), c + vec2(0.0, 2.5)], theme::pal().TEXT_WEAK, Stroke::NONE));
-    egui::Popup::menu(&resp).show(|ui| file_menu(ui, info, settings, st.view, push));
-    x += w + 4.0;
+    // File lives in the shared application menu (native on macOS, in-window row elsewhere).
+    let _ = info;
 
     for tab in MenuTab::ALL {
         let w = caps(tab.label(), theme::pal().TEXT).size().x + 22.0;
@@ -759,12 +688,12 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
             sep(ui);
             if button(ui, "calendar", Some(crate::lang::text("tb.timeline")), "Show the timeline strip", doc, st.timeline_visible).clicked()
             {
-                st.timeline_visible = !st.timeline_visible;
+                push(Command::ToggleTimelinePane);
             }
             if button(ui, "panel-right", Some(crate::lang::text("tb.properties")), "Show the properties pane", doc, st.properties_visible)
                 .clicked()
             {
-                st.properties_visible = !st.properties_visible;
+                push(Command::TogglePropertiesPane);
             }
             if button(ui, "history", Some(crate::lang::text("tb.history")), "Undo history", doc, info.history_open).clicked() {
                 push(Command::History);
@@ -811,32 +740,54 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
             );
         }
         MenuTab::Format => {
-            let toggle = |ui: &mut Ui, icon: &str, label: &str, tip: &str, v: &mut bool| {
-                if button(ui, icon, Some(label), tip, doc, *v).clicked() {
-                    *v = !*v;
+            let toggle = |ui: &mut Ui, icon: &str, label: &str, tip: &str, on: bool, cmd: Command| {
+                if button(ui, icon, Some(label), tip, doc, on).clicked() {
+                    push(cmd);
                 }
             };
             if st.view == ViewKind::NetworkDiagram {
-                let n = &mut st.network;
-                toggle(ui, "triangle-alert", "Critical First", "Lay out the critical path on the top row", &mut n.opts.critical_first);
-                toggle(ui, "rows-3", "Summary Tasks", "Show summary tasks, left of their subtasks", &mut n.show_summaries);
+                let n = &st.network;
+                toggle(
+                    ui,
+                    "triangle-alert",
+                    "Critical First",
+                    "Lay out the critical path on the top row",
+                    n.opts.critical_first,
+                    Command::ToggleNetworkCriticalFirst,
+                );
+                toggle(
+                    ui,
+                    "rows-3",
+                    "Summary Tasks",
+                    "Show summary tasks, left of their subtasks",
+                    n.show_summaries,
+                    Command::ToggleNetworkSummaries,
+                );
                 sep(ui);
-                toggle(ui, "link", "Link Labels", "Show the link type and lag on each line", &mut n.link_labels);
+                toggle(
+                    ui,
+                    "link",
+                    "Link Labels",
+                    "Show the link type and lag on each line",
+                    n.link_labels,
+                    Command::ToggleNetworkLinkLabels,
+                );
                 toggle(
                     ui,
                     "gauge",
                     "Progress Marks",
                     "One diagonal through tasks in progress, an X through complete tasks",
-                    &mut n.progress_marks,
+                    n.progress_marks,
+                    Command::ToggleNetworkProgressMarks,
                 );
-                toggle(ui, "hash", "IDs Only", "Small boxes that show only the task ID", &mut n.opts.ids_only);
+                toggle(ui, "hash", "IDs Only", "Small boxes that show only the task ID", n.opts.ids_only, Command::ToggleNetworkIdsOnly);
                 sep(ui);
                 if button(ui, "maximize", Some(crate::lang::text("tb.fit")), "Zoom to show the whole diagram", doc, false).clicked() {
-                    n.fit_pending = true;
+                    st.network.fit_pending = true;
                 }
                 return;
             }
-            let g = &mut st.gantt;
+            let g = &st.gantt;
             if st.view == ViewKind::MultipleBaselines {
                 combo_label(ui, "Bars of");
                 let shown: Vec<String> =
@@ -848,7 +799,7 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
                             let bit = 1u16 << n;
                             let mut on = g.multi_baselines & bit != 0;
                             if ui.checkbox(&mut on, PlanSlot::Baseline(n).name()).changed() {
-                                g.multi_baselines ^= bit;
+                                push(Command::ToggleMultiBaseline(n));
                             }
                         }
                     })
@@ -856,34 +807,72 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
                     .on_hover_text("Which baselines to compare, one bar each")
                 });
                 sep(ui);
-                toggle(ui, "rows-3", "Project Summary", "Show the project summary bar", &mut g.show_project_summary);
+                toggle(
+                    ui,
+                    "rows-3",
+                    "Project Summary",
+                    "Show the project summary bar",
+                    g.show_project_summary,
+                    Command::ToggleShowProjectSummary,
+                );
                 return;
             }
-            toggle(ui, "triangle-alert", crate::lang::text("fmt.critical"), "Highlight critical tasks", &mut g.show_critical);
+            toggle(
+                ui,
+                "triangle-alert",
+                crate::lang::text("fmt.critical"),
+                "Highlight critical tasks",
+                g.show_critical,
+                Command::ToggleShowCritical,
+            );
             toggle(
                 ui,
                 "route",
                 crate::lang::text("fmt.paths"),
                 "Highlight the selected task's predecessors and successors (Alt+Ctrl+L)",
-                &mut g.show_paths,
+                g.show_paths,
+                Command::ToggleHighlightPaths,
             );
-            toggle(ui, "hourglass", "Slack", "Show total slack after each task", &mut g.show_slack);
-            toggle(ui, "ruler", "Baseline", "Show baseline bars (the Tracking Gantt always does)", &mut g.show_baseline);
+            toggle(ui, "hourglass", "Slack", "Show total slack after each task", g.show_slack, Command::ToggleShowSlack);
+            toggle(
+                ui,
+                "ruler",
+                "Baseline",
+                "Show baseline bars (the Tracking Gantt always does)",
+                g.show_baseline,
+                Command::ToggleShowBaseline,
+            );
             egui::ComboBox::from_id_salt("tb_baseline_slot")
                 .width(88.0)
                 .selected_text(PlanSlot::Baseline(g.baseline_slot).name())
                 .show_ui(ui, |ui| {
                     for n in 0..=plancraft_core::baseline::MAX_BASELINE {
-                        ui.selectable_value(&mut g.baseline_slot, n, PlanSlot::Baseline(n).name());
+                        if ui.selectable_label(g.baseline_slot == n, PlanSlot::Baseline(n).name()).clicked() {
+                            push(Command::SetBaselineSlot(n));
+                        }
                     }
                 })
                 .response
                 .on_hover_text("Which baseline the baseline bars show");
             sep(ui);
-            toggle(ui, "gauge", "Progress", "Show progress inside bars", &mut g.show_progress);
-            toggle(ui, "link", "Links", "Show dependency arrows", &mut g.show_links);
-            toggle(ui, "user-round", "Resource Names", "Show resource names beside bars", &mut g.show_resource_names);
-            toggle(ui, "rows-3", "Project Summary", "Show the project summary bar", &mut g.show_project_summary);
+            toggle(ui, "gauge", "Progress", "Show progress inside bars", g.show_progress, Command::ToggleShowProgress);
+            toggle(ui, "link", "Links", "Show dependency arrows", g.show_links, Command::ToggleShowLinks);
+            toggle(
+                ui,
+                "user-round",
+                "Resource Names",
+                "Show resource names beside bars",
+                g.show_resource_names,
+                Command::ToggleShowResourceNames,
+            );
+            toggle(
+                ui,
+                "rows-3",
+                "Project Summary",
+                "Show the project summary bar",
+                g.show_project_summary,
+                Command::ToggleShowProjectSummary,
+            );
         }
     }
 }
