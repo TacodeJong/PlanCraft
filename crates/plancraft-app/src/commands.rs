@@ -35,6 +35,8 @@ pub enum Command {
     ExportUsage,
     /// Coloured-cell Gantt workbook of the tasks the current filter leaves visible.
     ExportGantt,
+    /// Push the plan to Microsoft Planner (Plan 1+ / basic board).
+    ExportPlanner,
     /// The design style, stored on the plan and used for this session.
     SetChartStyle(plancraft_core::model::ChartStyle),
     Quit,
@@ -212,4 +214,18 @@ pub fn task_context_menu(ui: &mut egui::Ui, emit: &mut dyn FnMut(Command)) {
     ui.separator();
     item(ui, "search", "Find… (Ctrl+F)", Command::Find(false));
     item(ui, "arrow-right", "Go To… (F5)", Command::GoTo);
+}
+
+/// Context menu for the Resource Sheet.
+pub fn resource_context_menu(ui: &mut egui::Ui, emit: &mut dyn FnMut(Command)) {
+    let mut item = |ui: &mut egui::Ui, icon: &'static str, label: &str, cmd: Command| {
+        let img = crate::icons::image(icon, 14.0, crate::theme::pal().TEXT);
+        if ui.add(egui::Button::image_and_text(img, label)).clicked() {
+            emit(cmd);
+            ui.close();
+        }
+    };
+    item(ui, "info", "Resource Information…", Command::ResourceInfo);
+    item(ui, "plus", "Add Resource", Command::InsertResource);
+    item(ui, "trash-2", "Delete Resource", Command::DeleteResources);
 }

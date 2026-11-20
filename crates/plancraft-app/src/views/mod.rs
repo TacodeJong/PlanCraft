@@ -360,6 +360,7 @@ pub fn select_row(sel: &mut Selection, p: &Project, rows: &[Row], row: usize, sh
             sel.tasks.clear();
         }
         sel.tasks.extend(g.tasks.iter().filter_map(|&i| p.tasks.get(i)).map(|t| t.id));
+        sel.clear_resources();
         return;
     }
     let Some(id) = task_at(p, rows, row).map(|t| t.id) else { return };
@@ -374,11 +375,13 @@ pub fn select_row(sel: &mut Selection, p: &Project, rows: &[Row], row: usize, sh
                 sel.tasks.insert(t.id);
             }
         }
+        sel.clear_resources();
     } else if ctrl {
         if !sel.tasks.remove(&id) {
             sel.tasks.insert(id);
         }
         sel.anchor = Some(id);
+        sel.clear_resources();
     } else {
         sel.select_task(id);
     }

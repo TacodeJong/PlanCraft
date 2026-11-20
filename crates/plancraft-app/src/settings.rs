@@ -119,6 +119,21 @@ impl Default for AiSettings {
     }
 }
 
+/// Microsoft Planner export. Tenant / client / org URLs are identifiers, not secrets.
+/// Refresh tokens and optional client secrets live in the OS keyring only.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PlannerSettings {
+    /// Entra tenant id (GUID).
+    pub tenant_id: String,
+    /// App registration (public client) application id.
+    pub client_id: String,
+    /// Dataverse organisation URL for Plan 1+ / PSS, e.g. `https://org.crm4.dynamics.com`.
+    pub dataverse_org_url: String,
+    /// Last M365 group id chosen for a basic board export.
+    pub last_group_id: String,
+}
+
 /// One task table's column visibility as this user set it, keyed by the table's English label
 /// (see `crate::columns::TaskTable::label`). A personal setting like the theme: it never touches
 /// the plan's saved layout, which stays shared.
@@ -155,6 +170,8 @@ pub struct AppSettings {
     #[serde(default = "pane_open")]
     pub properties_open: bool,
     pub ai: AiSettings,
+    /// Microsoft Planner export (non-secret ids only; tokens stay in the keyring).
+    pub planner: PlannerSettings,
     /// Servers plans were opened from, last used first (never a password).
     pub servers: Vec<KnownServer>,
     /// Task table columns switched on or off per table, by the table's label.
@@ -203,6 +220,7 @@ impl Default for AppSettings {
             open_to_overview: true,
             properties_open: true,
             ai: AiSettings::default(),
+            planner: PlannerSettings::default(),
             servers: Vec::new(),
             columns: std::collections::HashMap::new(),
             timescale: crate::state::Timescale::default(),
@@ -262,6 +280,10 @@ impl AppSettings {
         let clip = |s: &mut String, n: usize| *s = s.chars().filter(|c| !c.is_control()).take(n).collect();
         clip(&mut self.ai.model, 200);
         clip(&mut self.ai.base_url, 500);
+        clip(&mut self.planner.tenant_id, 64);
+        clip(&mut self.planner.client_id, 64);
+        clip(&mut self.planner.dataverse_org_url, 300);
+        clip(&mut self.planner.last_group_id, 64);
         // Column choices hold short field keys; anything bigger is not ours. Unknown keys are
         // harmless (`fields::visible_fields` ignores them and never empties a table).
         self.columns.retain(|table, c| !table.is_empty() && table.len() <= 64 && c.hidden.len() <= 200 && c.extra.len() <= 200);

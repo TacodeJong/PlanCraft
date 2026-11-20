@@ -185,10 +185,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
             }
             GridEvent::Select { row, .. } | GridEvent::CursorRow { row, .. } => match rows.get(row) {
                 Some(Row::Resource(res, _)) => st.sel.select_resource(res.id),
-                Some(Row::Assignment(res, a)) => {
-                    st.sel.select_resource(res.id);
-                    st.sel.select_task(a.task);
-                }
+                Some(Row::Assignment(res, a)) => st.sel.select_assignment(res.id, a.task),
                 None => {}
             },
             _ => {}

@@ -995,7 +995,8 @@ pub fn show(
                         Key::Tab if modifiers.shift => dc -= 1,
                         Key::ArrowRight | Key::Tab => dc += 1,
                         Key::F2 => start_edit = true,
-                        Key::Delete => del = true,
+                        // On Apple keyboards the key labeled Delete is Backspace; Fn+Delete is Delete.
+                        Key::Delete | Key::Backspace => del = true,
                         Key::Insert => ins = true,
                         Key::PageDown => dr += (body.height() / cfg.row_height) as isize,
                         Key::PageUp => dr -= (body.height() / cfg.row_height) as isize,

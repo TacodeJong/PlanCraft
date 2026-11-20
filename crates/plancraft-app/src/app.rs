@@ -1085,6 +1085,20 @@ impl PlanCraftApp {
             Command::ExportReport => self.export_report(),
             Command::ExportGantt => self.export_gantt(),
             Command::ExportUsage => self.export_usage(),
+            Command::ExportPlanner => {
+                let opened = {
+                    let ws = lock(&self.ws);
+                    ws.active_doc().map(|doc| Bound::new(doc, dialogs::planner_export::PlannerExport::default()))
+                };
+                match opened {
+                    Some(dialog) if self.dialogs.planner_export.is_none() => {
+                        self.dialogs.planner_export = Some(dialog);
+                        self.st.start_page = false;
+                    }
+                    Some(_) => self.st.start_page = false,
+                    None => self.st.toast(ToastKind::Info, crate::lang::text("planner.need_doc")),
+                }
+            }
             Command::SetChartStyle(style) => {
                 self.st.chart_style = style;
                 theme::set_chart_style(style);
@@ -1148,6 +1162,7 @@ impl PlanCraftApp {
             Command::ToggleTimelinePane => self.st.timeline_visible = !self.st.timeline_visible,
             Command::TogglePropertiesPane => self.st.properties_visible = !self.st.properties_visible,
             Command::ToggleShowCritical => self.st.gantt.show_critical = !self.st.gantt.show_critical,
+            Command::ToggleHighlightPaths => self.st.gantt.show_paths = !self.st.gantt.show_paths,
             Command::ToggleShowSlack => self.st.gantt.show_slack = !self.st.gantt.show_slack,
             Command::ToggleShowBaseline => self.st.gantt.show_baseline = !self.st.gantt.show_baseline,
             Command::ToggleShowProgress => self.st.gantt.show_progress = !self.st.gantt.show_progress,
@@ -1380,7 +1395,11 @@ impl PlanCraftApp {
                 }
             }
             Command::DeleteSelection => {
-                if st.view == ViewKind::ResourceSheet {
+                let resource_view = matches!(
+                    st.view,
+                    ViewKind::ResourceSheet | ViewKind::ResourceUsage | ViewKind::Workload | ViewKind::TeamPlanner | ViewKind::Timesheet
+                );
+                if resource_view && !st.sel.resources.is_empty() {
                     return self.exec_doc(ctx, doc, Command::DeleteResources);
                 }
                 if !sel.is_empty() {
@@ -1741,7 +1760,6 @@ impl PlanCraftApp {
                 }
             }
             Command::ExpandAll => st.collapsed.clear(),
-            Command::ToggleHighlightPaths => st.gantt.show_paths = !st.gantt.show_paths,
             Command::ToggleColumn(key) => {
                 // This user's column choice (the Columns menu): saved with the app settings,
                 // like the theme and language; the plan's shared layout is untouched.
@@ -3188,6 +3206,7 @@ impl PlanCraftApp {
                 }
             });
             views::gantt::context_menu_popup(&ctx, &mut out);
+            views::resource_sheet::context_menu_popup(&ctx, &mut out);
             if let Some(doc) = ws.active_doc() {
                 views::gantt::column_menu_popup(&ctx, &doc.project, &self.st, &mut out);
             }
@@ -3308,11 +3327,16 @@ impl PlanCraftApp {
         }
         let mut open_ai = false;
         let mut distill_notes = Vec::new();
+        let mut planner_notes = Vec::new();
         let ai = self.settings.ai.clone();
         dialogs::show_bound(&mut self.dialogs.distill, &mut ws, |d, doc| d.show(&ctx, doc, &ai, &mut open_ai, &mut distill_notes));
+        dialogs::show_bound(&mut self.dialogs.planner_export, &mut ws, |d, doc| d.show(&ctx, doc, &mut self.settings, &mut planner_notes));
         drop(ws);
         for note in distill_notes {
             self.st.toast(ToastKind::Error, note);
+        }
+        for note in planner_notes {
+            self.st.toast(ToastKind::Info, note);
         }
         if open_ai {
             self.dialogs.ai_open = true;
@@ -3578,6 +3602,34 @@ mod ui_tests {
         assert!(!h.state().st.gantt.show_paths);
     }
 
+    /// Regression: a leftover resource selection from Resource Sheet used to suppress path
+    /// highlighting entirely; selecting a task must clear it and light the dependency chain.
+    #[test]
+    fn highlight_paths_follows_the_selected_tasks_chain() {
+        use plancraft_core::ops::PathRole;
+        let mut h = harness();
+        let ctx = h.ctx.clone();
+        let (a, b, c, rid) = {
+            let mut ws = lock(&h.state().ws);
+            let p = &mut ws.active_doc_mut().unwrap().project;
+            let a = p.add_task("Path A", None);
+            let b = p.add_task("Path B", None);
+            let c = p.add_task("Path C", None);
+            p.link(a.into(), b, LinkType::FS, Lag::None).unwrap();
+            p.link(b.into(), c, LinkType::FS, Lag::None).unwrap();
+            (a, b, c, p.resources[0].id)
+        };
+        h.state_mut().st.sel.select_resource(rid);
+        assert!(h.state().st.sel.resources.contains(&rid));
+        h.state_mut().st.sel.select_task(b);
+        assert!(h.state().st.sel.resources.is_empty(), "selecting a task drops a leftover resource selection");
+        h.state_mut().exec(&ctx, Command::ToggleHighlightPaths);
+        let roles = views::gantt::highlight_path(&lock(&h.state().ws).active_doc().unwrap().project, &h.state().st).expect("paths on");
+        assert_eq!(roles.get(&b), Some(&PathRole::Selected));
+        assert_eq!(roles.get(&a), Some(&PathRole::Direct));
+        assert_eq!(roles.get(&c), Some(&PathRole::Direct));
+    }
+
     /// The Q/M/D chips preset the chart zoom and the usage buckets, remember the choice,
     /// and sit disabled (with a tooltip) on a view without a time axis.
     #[test]
@@ -3613,37 +3665,101 @@ mod ui_tests {
 
     #[test]
     fn deleting_an_assigned_resource_waits_for_a_choice() {
+        use egui_kittest::kittest::Queryable;
         let mut h = harness();
         let ctx = h.ctx.clone();
-        let (rid, before) = {
+        let (rid, before, assigned) = {
             let ws = h.state().ws.lock().unwrap();
             let p = &ws.active_doc().unwrap().project;
             let rid = p.resources.iter().find(|r| p.assignments_for_resource(r.id).next().is_some()).unwrap().id;
-            (rid, p.resources.len())
+            (rid, p.resources.len(), p.assignments_for_resource(rid).count())
         };
+        h.state_mut().st.view = ViewKind::ResourceSheet;
         h.state_mut().st.sel.select_resource(rid);
         h.state_mut().exec(&ctx, Command::DeleteResources);
-        h.run_steps(2);
+        h.run_steps(3);
         assert!(h.state().dialogs.resource_delete.is_some(), "the prompt stays open until a choice");
         {
             let ws = h.state().ws.lock().unwrap();
             let p = &ws.active_doc().unwrap().project;
             assert_eq!(p.resources.len(), before);
             assert!(p.resource(rid).is_some());
-            assert!(p.assignments_for_resource(rid).next().is_some());
+            assert_eq!(p.assignments_for_resource(rid).count(), assigned);
         }
-        let dialog = h.state_mut().dialogs.resource_delete.take().unwrap().dialog;
+        // The dialog's destructive action: strip assignments and delete (matches Project Planner).
+        h.get_by_label("Remove Assignments & Delete").click();
+        h.run_steps(3);
+        assert!(h.state().dialogs.resource_delete.is_none(), "choice closes the prompt");
         {
-            let mut ws = h.state().ws.lock().unwrap();
-            let doc = ws.active_doc_mut().unwrap();
-            dialog.replace(doc).unwrap();
-            assert!(doc.project.resource(rid).is_none());
+            let ws = h.state().ws.lock().unwrap();
+            let p = &ws.active_doc().unwrap().project;
+            assert!(p.resource(rid).is_none());
+            assert_eq!(p.resources.len(), before - 1);
         }
         h.state_mut().exec(&ctx, Command::Undo);
         let ws = h.state().ws.lock().unwrap();
         let p = &ws.active_doc().unwrap().project;
-        assert!(p.resource(rid).is_some(), "replace is one undo step");
-        assert!(p.assignments_for_resource(rid).next().is_some());
+        assert!(p.resource(rid).is_some(), "delete is one undo step");
+        assert_eq!(p.assignments_for_resource(rid).count(), assigned);
+    }
+
+    /// Replace & Delete moves assignments onto another resource in one undo step.
+    #[test]
+    fn replacing_an_assigned_resource_from_the_prompt() {
+        let mut h = harness();
+        let ctx = h.ctx.clone();
+        let (from, to, tasks) = {
+            let ws = h.state().ws.lock().unwrap();
+            let p = &ws.active_doc().unwrap().project;
+            let from = p.resources.iter().find(|r| p.assignments_for_resource(r.id).next().is_some()).unwrap().id;
+            let to = p.resources.iter().find(|r| r.id != from).unwrap().id;
+            let tasks: Vec<_> = p.assignments_for_resource(from).map(|a| a.task).collect();
+            (from, to, tasks)
+        };
+        h.state_mut().st.sel.select_resource(from);
+        h.state_mut().exec(&ctx, Command::DeleteResources);
+        let dialog = h.state_mut().dialogs.resource_delete.take().unwrap().dialog;
+        {
+            let mut ws = h.state().ws.lock().unwrap();
+            let doc = ws.active_doc_mut().unwrap();
+            // Force the known replacement (the prompt defaults to the first other resource).
+            let mut dialog = dialog;
+            dialog.replacement = Some(to);
+            dialog.new_name.clear();
+            dialog.replace(doc).unwrap();
+            assert!(doc.project.resource(from).is_none());
+            for task in &tasks {
+                assert!(
+                    doc.project.assignments.iter().any(|a| a.task == *task && a.resource == to),
+                    "assignments moved onto the replacement"
+                );
+            }
+        }
+        h.state_mut().exec(&ctx, Command::Undo);
+        assert!(lock(&h.state().ws).active_doc().unwrap().project.resource(from).is_some());
+    }
+
+    /// On Apple keyboards the key labeled Delete is Backspace; the resource sheet must honor it.
+    #[test]
+    fn backspace_deletes_a_resource_from_the_sheet() {
+        let mut h = harness();
+        let ctx = h.ctx.clone();
+        h.state_mut().exec(&ctx, Command::SetView(ViewKind::ResourceSheet));
+        let (rid, row, before) = {
+            let ws = h.state().ws.lock().unwrap();
+            let p = &ws.active_doc().unwrap().project;
+            let (row, r) = p.resources.iter().enumerate().find(|(_, r)| p.assignments_for_resource(r.id).next().is_none()).unwrap();
+            (r.id, row, p.resources.len())
+        };
+        h.state_mut().st.sel.select_resource(rid);
+        h.state_mut().st.resource_grid.cursor = Some((row, 1));
+        h.state_mut().st.resource_grid.whole_row = true;
+        h.run_steps(2);
+        h.ctx.memory_mut(|m| m.request_focus(egui::Id::new("resource_sheet").with("body")));
+        h.key_press(egui::Key::Backspace);
+        h.run_steps(3);
+        assert_eq!(lock(&h.state().ws).active_doc().unwrap().project.resources.len(), before - 1);
+        assert!(lock(&h.state().ws).active_doc().unwrap().project.resource(rid).is_none());
     }
 
     /// Regression: CSV export wrote over whatever file was chosen (the open plan included), and

@@ -84,6 +84,7 @@ impl ResourceDelete {
             .pivot(egui::Align2::CENTER_CENTER)
             .default_pos(ctx.content_rect().center())
             .title_bar(false)
+            .resizable(false)
             .default_width(420.0)
             .show(ctx, |ui| {
                 open = crate::widgets::craft::dialog_header(ui, "Delete Resource");
@@ -107,18 +108,23 @@ impl ResourceDelete {
                 });
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Remove Assignments & Delete").clicked() {
-                        match self.remove_assignments(doc) {
-                            Ok(()) => done = true,
-                            Err(e) => toasts.push((ToastKind::Warning, e)),
-                        }
+                    if ui.button("Cancel").clicked() {
+                        open = false;
                     }
-                    if ui.add_enabled(can_replace, egui::Button::new("Replace & Delete")).clicked() {
-                        match self.replace(doc) {
-                            Ok(()) => done = true,
-                            Err(e) => toasts.push((ToastKind::Warning, e)),
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add_enabled(can_replace, egui::Button::new("Replace & Delete")).clicked() {
+                            match self.replace(doc) {
+                                Ok(()) => done = true,
+                                Err(e) => toasts.push((ToastKind::Warning, e)),
+                            }
                         }
-                    }
+                        if ui.button("Remove Assignments & Delete").clicked() {
+                            match self.remove_assignments(doc) {
+                                Ok(()) => done = true,
+                                Err(e) => toasts.push((ToastKind::Warning, e)),
+                            }
+                        }
+                    });
                 });
             });
         if done {

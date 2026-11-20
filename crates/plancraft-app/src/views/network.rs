@@ -406,8 +406,13 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
         resp.request_focus();
     }
     if resp.has_focus() && !ui.ctx().egui_wants_keyboard_input() {
-        let (del, ins, enter) =
-            ui.input(|i| (i.key_pressed(egui::Key::Delete), i.key_pressed(egui::Key::Insert), i.key_pressed(egui::Key::Enter)));
+        let (del, ins, enter) = ui.input(|i| {
+            (
+                i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
+                i.key_pressed(egui::Key::Insert),
+                i.key_pressed(egui::Key::Enter),
+            )
+        });
         if del && !st.sel.tasks.is_empty() {
             out.push(Command::DeleteSelection);
         }

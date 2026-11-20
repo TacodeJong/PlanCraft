@@ -446,7 +446,8 @@ pub fn row_mark_color(mark: plancraft_core::model::RowMark) -> Color32 {
 pub fn path_row(direct: bool) -> Color32 {
     let bg = pal().BG;
     let accent = pal().ACCENT;
-    let t = if direct { 0.22 } else { 0.10 };
+    // Strong enough to read on the brutalist dark default (0.22 was nearly invisible).
+    let t = if direct { 0.40 } else { 0.22 };
     let mix = |a: u8, b: u8| (f32::from(a) * (1.0 - t) + f32::from(b) * t).round().clamp(0.0, 255.0) as u8;
     Color32::from_rgb(mix(bg.r(), accent.r()), mix(bg.g(), accent.g()), mix(bg.b(), accent.b()))
 }

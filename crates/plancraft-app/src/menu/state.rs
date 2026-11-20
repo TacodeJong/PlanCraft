@@ -73,7 +73,8 @@ pub fn command_enabled(cmd: &Command, s: &MenuSnapshot) -> bool {
         | Command::Print
         | Command::ExportPdf
         | Command::ExportMspdi
-        | Command::ExportGantt => doc,
+        | Command::ExportGantt
+        | Command::ExportPlanner => doc,
         Command::ExportCsv(_) => doc,
         Command::ExportReport => doc && s.view == ViewKind::Report,
         Command::ExportUsage => doc && s.view == ViewKind::TaskUsage,
@@ -82,7 +83,17 @@ pub fn command_enabled(cmd: &Command, s: &MenuSnapshot) -> bool {
         Command::Redo => doc && s.can_redo,
         Command::Cut | Command::Copy => sel,
         Command::Paste => doc && s.has_clipboard,
-        Command::FillDown | Command::DeleteSelection | Command::Indent | Command::Outdent | Command::MoveUp | Command::MoveDown => sel,
+        Command::FillDown | Command::Indent | Command::Outdent | Command::MoveUp | Command::MoveDown => sel,
+        // Delete works on tasks, or on resources while a resource view is active (Mac Delete key /
+        // Edit ▸ Delete). Resource Sheet redirects to DeleteResources.
+        Command::DeleteSelection => {
+            sel || (doc
+                && s.resource_selected
+                && matches!(
+                    s.view,
+                    ViewKind::ResourceSheet | ViewKind::ResourceUsage | ViewKind::Workload | ViewKind::TeamPlanner | ViewKind::Timesheet
+                ))
+        }
         Command::LinkSelected | Command::UnlinkSelected | Command::SetPercent(_) | Command::MarkOnTrack | Command::ToggleActive => sel,
         Command::SetMode(_) | Command::TaskInfo | Command::TaskNotes | Command::ToggleTimeline | Command::ScrollToTask => sel,
         Command::InsertTask

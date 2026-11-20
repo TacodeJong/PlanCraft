@@ -592,6 +592,14 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
                 doc && st.view == ViewKind::TaskUsage,
                 Command::ExportUsage,
             );
+            b(
+                ui,
+                "kanban",
+                Some(crate::lang::text("tb.export_planner")),
+                "Push this plan to Microsoft Planner",
+                doc,
+                Command::ExportPlanner,
+            );
         }
         MenuTab::View => {
             combo_label(ui, crate::lang::text("tb.filter"));

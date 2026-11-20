@@ -11,7 +11,7 @@ use plancraft_core::prelude::*;
 use crate::settings::AiSettings;
 
 pub use http::{Chat, ChatRequest, UreqChat};
-pub use keys::{delete as delete_key, load as load_key, store as store_key, tail};
+pub use keys::{delete as delete_key, load as load_key, scrub, store as store_key, tail};
 
 const MAX_SOURCE: usize = 80_000;
 

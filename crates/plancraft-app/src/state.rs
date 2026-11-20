@@ -452,6 +452,9 @@ impl Selection {
         self.tasks.clear();
         self.tasks.insert(id);
         self.anchor = Some(id);
+        // Path highlighting and task commands assume a task selection, not a leftover
+        // resource from Resource Sheet / Usage.
+        self.clear_resources();
     }
     pub fn single_resource(&self) -> Option<ResourceId> {
         if self.resources.len() == 1 {
@@ -464,6 +467,24 @@ impl Selection {
         self.resources.clear();
         self.resources.insert(id);
         self.resource_anchor = Some(id);
+        self.clear_tasks();
+    }
+    /// Resource Usage assignment rows keep both a resource and its task selected.
+    pub fn select_assignment(&mut self, resource: ResourceId, task: TaskId) {
+        self.resources.clear();
+        self.resources.insert(resource);
+        self.resource_anchor = Some(resource);
+        self.tasks.clear();
+        self.tasks.insert(task);
+        self.anchor = Some(task);
+    }
+    pub fn clear_tasks(&mut self) {
+        self.tasks.clear();
+        self.anchor = None;
+    }
+    pub fn clear_resources(&mut self) {
+        self.resources.clear();
+        self.resource_anchor = None;
     }
 }
 

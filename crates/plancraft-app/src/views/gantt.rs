@@ -436,7 +436,7 @@ fn st_context_menu(ui: &Ui, pos: egui::Pos2) {
 
 /// Keeps a popup (an [`egui::Area`] at a stored position) open until a choice, Escape or a
 /// click elsewhere. Returns whether it should close.
-fn popup_area(ctx: &egui::Context, id: egui::Id, pos: egui::Pos2, add: impl FnOnce(&mut Ui) -> bool) -> bool {
+pub(crate) fn popup_area(ctx: &egui::Context, id: egui::Id, pos: egui::Pos2, add: impl FnOnce(&mut Ui) -> bool) -> bool {
     let mut chosen = false;
     let resp = egui::Area::new(id.with("area")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::menu(ui.style()).show(ui, |ui| {
@@ -627,8 +627,9 @@ pub fn outline_with_notes(rows: &[Row], p: &Project, open: &HashSet<TaskId>) -> 
     out
 }
 
-fn highlight_path(p: &Project, st: &UiState) -> Option<HashMap<TaskId, PathRole>> {
-    if !st.gantt.show_paths || !st.sel.resources.is_empty() || st.sel.tasks.is_empty() {
+/// Selected tasks' predecessor/successor chain when Format ▸ Highlight Paths is on.
+pub(crate) fn highlight_path(p: &Project, st: &UiState) -> Option<HashMap<TaskId, PathRole>> {
+    if !st.gantt.show_paths || st.sel.tasks.is_empty() {
         return None;
     }
     let ids: Vec<TaskId> = st.sel.tasks.iter().copied().collect();

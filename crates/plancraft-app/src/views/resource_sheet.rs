@@ -354,13 +354,33 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
             GridEvent::EditLost => st.toast(ToastKind::Warning, "The resource you were editing was deleted, so your typing was not saved."),
             GridEvent::InsertKey => out.push(Command::InsertResource),
             GridEvent::MoveRows { .. } => {}
-            GridEvent::ContextMenu { row, .. } => {
+            GridEvent::ContextMenu { row, pos } => {
                 if let Some(id) = resource_at(doc, row) {
                     st.sel.select_resource(id);
                 }
+                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("resource_ctx_menu"), pos));
             }
             GridEvent::ClickEmpty { .. } => st.sel.resources.clear(),
             GridEvent::ToggleExpand(_) | GridEvent::HeaderClick { .. } | GridEvent::HeaderMenu { .. } | GridEvent::MoveColumn { .. } => {}
         }
+    }
+}
+
+/// Shows the floating context menu requested by the resource sheet, if any.
+pub fn context_menu_popup(ctx: &egui::Context, out: &mut Vec<Command>) {
+    let id = egui::Id::new("resource_ctx_menu");
+    let Some(pos) = ctx.data(|d| d.get_temp::<egui::Pos2>(id)) else {
+        return;
+    };
+    let close = crate::views::gantt::popup_area(ctx, id, pos, |ui| {
+        let mut picked = false;
+        crate::commands::resource_context_menu(ui, &mut |c| {
+            out.push(c);
+            picked = true;
+        });
+        picked
+    });
+    if close {
+        ctx.data_mut(|d| d.remove::<egui::Pos2>(id));
     }
 }

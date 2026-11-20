@@ -31,6 +31,7 @@ mod mcp_host;
 mod menu;
 mod menubar;
 mod open_requests;
+mod planner_export;
 mod printing;
 mod quick_entry;
 mod recovery;

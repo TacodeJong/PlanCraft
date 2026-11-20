@@ -8,6 +8,7 @@ pub mod find;
 pub mod import;
 pub mod mcp_panel;
 pub mod misc;
+pub mod planner_export;
 pub mod print;
 pub mod project_info;
 pub mod quick_entry;
@@ -74,6 +75,7 @@ pub struct Dialogs {
     pub history: bool,
     pub mcp: bool,
     pub distill: Option<Bound<distill::Distill>>,
+    pub planner_export: Option<Bound<planner_export::PlannerExport>>,
     pub quick: Option<Bound<quick_entry::QuickEntry>>,
     pub ai_open: bool,
     pub ai: ai::AiState,
