@@ -96,6 +96,7 @@ pub fn task_table(
             row_height: theme::ROW_HEIGHT,
             row_key: Some(&row_key),
             row_drag,
+            column_drag: true,
             outline_arrows: st.group.is_none(),
             quick_name,
         };
@@ -287,6 +288,9 @@ pub fn task_table(
             GridEvent::HeaderMenu { col, pos } => {
                 ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("column_menu"), (pos, col)));
             }
+            // A header dragged to a new spot edits the plan's shared layout, like the menu's
+            // Move Left/Right (one undo step); this user's hidden columns stay hidden.
+            GridEvent::MoveColumn { from, to } => out.push(Command::MoveColumnTo { from, to }),
         }
     }
     output

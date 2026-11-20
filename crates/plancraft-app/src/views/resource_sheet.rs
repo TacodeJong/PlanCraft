@@ -281,6 +281,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
         row_height: theme::ROW_HEIGHT,
         row_key: Some(&row_key),
         row_drag: false,
+        column_drag: false,
         outline_arrows: false,
         quick_name: None,
     };
@@ -359,7 +360,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
                 }
             }
             GridEvent::ClickEmpty { .. } => st.sel.resources.clear(),
-            GridEvent::ToggleExpand(_) | GridEvent::HeaderClick { .. } | GridEvent::HeaderMenu { .. } => {}
+            GridEvent::ToggleExpand(_) | GridEvent::HeaderClick { .. } | GridEvent::HeaderMenu { .. } | GridEvent::MoveColumn { .. } => {}
         }
     }
 }

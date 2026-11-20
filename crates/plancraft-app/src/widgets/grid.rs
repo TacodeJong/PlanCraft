@@ -165,6 +165,8 @@ pub struct GridState {
     /// The row being dragged by its row number, and its item's key ([`GridConfig::row_key`]): rows
     /// that move during the drag (an agent's or someone else's change) don't change what moves.
     row_drag: Option<(usize, Option<u64>)>,
+    /// The column being dragged by its header, to reorder columns ([`GridConfig::column_drag`]).
+    col_drag: Option<usize>,
     /// Where the rows were drawn last frame (for tests that point at a row).
     pub body: Option<Rect>,
 }
@@ -295,6 +297,12 @@ pub enum GridEvent {
         from: usize,
         to: usize,
     },
+    /// Column `from` was dragged by its header and dropped before column `to` (`to` == the column
+    /// count: after the last column). Only with [`GridConfig::column_drag`].
+    MoveColumn {
+        from: usize,
+        to: usize,
+    },
 }
 
 pub struct GridConfig<'a> {
@@ -314,6 +322,8 @@ pub struct GridConfig<'a> {
     pub row_key: Option<&'a dyn Fn(usize) -> Option<u64>>,
     /// Rows can be dragged by their row number to move them ([`GridEvent::MoveRows`]).
     pub row_drag: bool,
+    /// Columns can be dragged by their header to reorder them ([`GridEvent::MoveColumn`]).
+    pub column_drag: bool,
     /// Left and right on a cell with an expander collapse or expand it instead of moving the cursor.
     pub outline_arrows: bool,
     /// The name column, when Enter should open the next name and Tab should indent.
@@ -452,6 +462,7 @@ pub fn show(
     painter.rect_filled(header, 0.0, theme::pal().HEADER_BG);
     let hdr_painter = painter.with_clip_rect(Rect::from_min_max(pos2(header.left() + rn_w, header.top()), header.max));
     let font = FontId::proportional(12.5);
+    let (mut col_dragging, mut col_drag_stopped) = (false, false);
     for (c, (def, &(x0, x1))) in cfg.columns.iter().zip(&spans).enumerate() {
         let r = Rect::from_x_y_ranges(x0..=x1, header.y_range());
         hdr_painter.vline(r.right() - 0.5, header.y_range(), Stroke::new(1.0, theme::pal().GRID_LINE));
@@ -478,19 +489,36 @@ pub fn show(
             };
             hp.add(egui::Shape::convex_polygon(pts, theme::pal().ACCENT_MID, Stroke::NONE));
         }
-        // Click to sort, right-click for the column menu (the resize handle below wins at the edge).
-        let visible = r.intersect(Rect::from_min_max(pos2(header.left() + rn_w, header.top()), header.max));
+        // Click to sort, right-click for the column menu, drag to reorder (the resize handles,
+        // registered after this loop so they stay on top, win at the edges).
+        let mut visible = r.intersect(Rect::from_min_max(pos2(header.left() + rn_w, header.top()), header.max));
+        let drag_headers = cfg.column_drag && ncols > 1;
+        if drag_headers {
+            // Leave the resize handles' zones to them, so a drag at a column edge never reorders.
+            visible = visible.shrink2(vec2(4.0, 0.0));
+        }
         if visible.width() > 4.0 {
-            let hr = ui.interact(visible, cfg.id.with(("header", c)), Sense::click());
+            let sense = if drag_headers { Sense::click_and_drag() } else { Sense::click() };
+            let hr = ui.interact(visible, cfg.id.with(("header", c)), sense);
             if hr.clicked() {
                 events.push(GridEvent::HeaderClick { col: c });
             }
             if hr.secondary_clicked() {
                 events.push(GridEvent::HeaderMenu { col: c, pos: hr.interact_pointer_pos().unwrap_or(r.left_bottom()) });
             }
+            // A drag begins only past egui's drag threshold, so plain clicks still sort.
+            if hr.drag_started() {
+                state.col_drag = Some(c);
+            }
+            if state.col_drag == Some(c) {
+                col_dragging = hr.dragged();
+                col_drag_stopped = hr.drag_stopped();
+            }
         }
-        // Resize handle.
-        let handle = Rect::from_center_size(pos2(r.right(), header.center().y), vec2(6.0, header.height()));
+    }
+    // Resize handles, on top of the headers so a drag at a column edge resizes and never reorders.
+    for (c, &(_, x1)) in spans.iter().enumerate() {
+        let handle = Rect::from_center_size(pos2(x1, header.center().y), vec2(6.0, header.height()));
         if handle.left() > header.left() + rn_w && handle.right() < header.right() + 3.0 {
             let hr = ui.interact(handle, cfg.id.with(("resize", c)), Sense::drag());
             if hr.hovered() || hr.dragged() {
@@ -500,6 +528,49 @@ pub fn show(
                 && let Some(w) = state.widths.get_mut(c)
             {
                 *w = (*w + hr.drag_delta().x).max(24.0);
+            }
+        }
+    }
+
+    // ---- Dragging a column by its header ----
+    // Ends without a move when Escape is pressed or the release was lost, like a row drag.
+    if state.col_drag.is_some() {
+        let (esc, released, pressed) = ui.input(|i| (i.key_pressed(egui::Key::Escape), !i.pointer.any_down(), i.pointer.any_pressed()));
+        if esc || pressed || (released && !col_drag_stopped) {
+            state.col_drag = None;
+        }
+    }
+    if let Some(from) = state.col_drag {
+        let latest = ui.input(|i| i.pointer.latest_pos());
+        // The boundary between columns nearest the pointer: the dragged column goes before it.
+        let drop_at = |p: Pos2| spans.iter().position(|&(x0, x1)| p.x < (x0 + x1) / 2.0).unwrap_or(ncols);
+        if col_dragging {
+            ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+            // Ghost the dragged header: a wash, never the accent (that marks the drop target).
+            if let Some(&(x0, x1)) = spans.get(from) {
+                hdr_painter.rect_filled(Rect::from_x_y_ranges(x0..=x1, header.y_range()), 0.0, theme::pal().WASH_SELECTED);
+            }
+            if let Some(p) = latest {
+                // Near the view's edges, scroll to reach columns out of view.
+                if p.x < body.left() + rn_w + 20.0 {
+                    state.scroll_x = (state.scroll_x - 8.0).max(0.0);
+                    ui.ctx().request_repaint();
+                } else if p.x > body.right() - 20.0 {
+                    state.scroll_x = (state.scroll_x + 8.0).min((total_cols_w - cols_view_w).max(0.0));
+                    ui.ctx().request_repaint();
+                }
+                let to = drop_at(p);
+                let x = spans.get(to).map(|s| s.0).or_else(|| spans.last().map(|s| s.1)).unwrap_or(body.left());
+                let x = x.clamp(body.left() + rn_w, body.right());
+                painter.vline(x, header.top()..=body.bottom(), Stroke::new(2.0, theme::pal().ACCENT));
+            }
+        } else {
+            state.col_drag = None;
+            if let Some(to) = latest.map(drop_at)
+                && to != from
+                && to != from.saturating_add(1)
+            {
+                events.push(GridEvent::MoveColumn { from, to });
             }
         }
     }
@@ -1027,13 +1098,14 @@ mod tests {
         rows: usize,
         read_only_row: Option<usize>,
         events: Vec<GridEvent>,
+        column_drag: bool,
     }
 
     fn harness(columns: Vec<ColumnDef>, rows: usize, read_only_row: Option<usize>) -> Harness<'static, TestGrid> {
-        let state = TestGrid { grid: GridState::default(), columns, rows, read_only_row, events: Vec::new() };
+        let state = TestGrid { grid: GridState::default(), columns, rows, read_only_row, events: Vec::new(), column_drag: false };
         let mut h = Harness::builder().with_size(vec2(800.0, 400.0)).build_ui_state(
             |ui, t: &mut TestGrid| {
-                let TestGrid { grid, columns, rows, read_only_row, events } = t;
+                let TestGrid { grid, columns, rows, read_only_row, events, column_drag } = t;
                 let cfg = GridConfig {
                     id: Id::new("test_grid"),
                     columns,
@@ -1046,6 +1118,7 @@ mod tests {
                     row_height: 22.0,
                     row_key: None,
                     row_drag: false,
+                    column_drag: *column_drag,
                     outline_arrows: false,
                     quick_name: None,
                 };
@@ -1068,6 +1141,65 @@ mod tests {
 
     fn three_columns() -> Vec<ColumnDef> {
         vec![ColumnDef::new("A", 100.0), ColumnDef::new("B", 100.0), ColumnDef::new("C", 100.0)]
+    }
+
+    /// Dragging a header reorders columns: a MoveColumn event with the drop boundary. A plain
+    /// click (under egui's drag threshold) still sorts, Escape cancels the drag, and a drag that
+    /// starts on a column edge resizes the column instead of reordering.
+    #[test]
+    fn dragging_a_header_reorders_and_clicking_still_sorts() {
+        let mut h = harness(three_columns(), 3, None);
+        h.state_mut().column_drag = true;
+        h.run_steps(1);
+        // Columns A, B, C are 100 wide; the header row sits right above the body.
+        let body = h.state().grid.body.unwrap();
+        let at = move |x: f32| pos2(body.left() + x, body.top() - 12.0);
+        let button =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        // A plain click sorts and moves nothing.
+        h.event(egui::Event::PointerMoved(at(50.0)));
+        h.run_steps(1);
+        h.input_mut().events.extend([button(at(50.0), true), button(at(50.0), false)]);
+        h.run_steps(2);
+        assert!(h.state().events.contains(&GridEvent::HeaderClick { col: 0 }), "{:?}", h.state().events);
+        assert!(!h.state().events.iter().any(|e| matches!(e, GridEvent::MoveColumn { .. })));
+
+        // Dragging A past the right end of C drops it at the end (boundary 3).
+        h.event(button(at(50.0), true));
+        h.run_steps(1);
+        for x in [70.0, 150.0, 280.0] {
+            h.event(egui::Event::PointerMoved(at(x)));
+            h.run_steps(1);
+        }
+        h.event(button(at(280.0), false));
+        h.run_steps(2);
+        assert!(h.state().events.contains(&GridEvent::MoveColumn { from: 0, to: 3 }), "{:?}", h.state().events);
+
+        // Escape cancels a drag in progress.
+        h.state_mut().events.clear();
+        h.event(button(at(150.0), true));
+        h.run_steps(1);
+        h.event(egui::Event::PointerMoved(at(60.0)));
+        h.run_steps(1);
+        h.key_press(Key::Escape);
+        h.run_steps(1);
+        h.event(button(at(60.0), false));
+        h.run_steps(2);
+        assert!(!h.state().events.iter().any(|e| matches!(e, GridEvent::MoveColumn { .. })), "{:?}", h.state().events);
+
+        // A drag on the edge between A and B resizes A; it never reorders.
+        h.state_mut().events.clear();
+        let w0 = h.state().grid.widths[0];
+        h.event(button(at(100.0), true));
+        h.run_steps(1);
+        for x in [110.0, 130.0] {
+            h.event(egui::Event::PointerMoved(at(x)));
+            h.run_steps(1);
+        }
+        h.event(button(at(130.0), false));
+        h.run_steps(2);
+        assert!(h.state().grid.widths[0] > w0, "resizing still works: {} -> {}", w0, h.state().grid.widths[0]);
+        assert!(!h.state().events.iter().any(|e| matches!(e, GridEvent::MoveColumn { .. })), "{:?}", h.state().events);
     }
 
     /// Regression: Shift+Tab moved the cursor right, like Tab, when no cell was being edited.

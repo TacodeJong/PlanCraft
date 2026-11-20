@@ -121,6 +121,12 @@ pub enum Command {
         at: usize,
         right: bool,
     },
+    /// Column `from` was dragged by its header and dropped before column `to` (`to` == the number
+    /// of columns: at the end). Both are positions in the table as rendered for this user.
+    MoveColumnTo {
+        from: usize,
+        to: usize,
+    },
     /// Back to the current table's default columns.
     ResetColumns,
     /// Switch the column with field key `key` on or off for this user (the Columns menu;

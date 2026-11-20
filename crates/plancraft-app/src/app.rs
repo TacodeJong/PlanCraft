@@ -1665,7 +1665,11 @@ impl PlanCraftApp {
                 self.settings.columns = self.st.columns.clone();
                 self.settings.save();
             }
-            Command::InsertColumn { .. } | Command::HideColumn(_) | Command::MoveColumn { .. } | Command::ResetColumns => {
+            Command::InsertColumn { .. }
+            | Command::HideColumn(_)
+            | Command::MoveColumn { .. }
+            | Command::MoveColumnTo { .. }
+            | Command::ResetColumns => {
                 let table = self.st.table;
                 let before = crate::fields::table_fields(&doc.project, table);
                 // The commands carry positions in the table as rendered, which the Columns menu
@@ -1708,6 +1712,19 @@ impl PlanCraftApp {
                             && let (Some(ia), Some(ib)) = (cols.iter().position(|f| f == a), cols.iter().position(|f| f == b))
                         {
                             cols.swap(ia, ib);
+                        }
+                    }
+                    Command::MoveColumnTo { from, to } => {
+                        // A header drag: the dragged rendered column goes before the one at `to`
+                        // (at the end of the layout for `to` == rendered.len()). Mapping through
+                        // the fields themselves keeps columns this user switched off in place.
+                        if let Some(a) = rendered.get(*from).copied() {
+                            let anchor = rendered.get(*to).copied();
+                            if anchor != Some(a) {
+                                cols.retain(|f| *f != a);
+                                let pos = anchor.and_then(|an| cols.iter().position(|f| *f == an)).unwrap_or(cols.len());
+                                cols.insert(pos, a);
+                            }
                         }
                     }
                     _ => {}
@@ -3722,6 +3739,71 @@ mod ui_tests {
         h.run_steps(2);
         let ws = h.state().ws.lock().unwrap();
         assert_eq!(table_fields(&ws.active_doc().unwrap().project, crate::columns::TaskTable::Entry), before);
+    }
+
+    /// Dragging a column header drops it at a new spot: the plan's shared layout changes in one
+    /// undo step (like the header menu's Move Left/Right), undo restores it, and a column this
+    /// user switched off in the Columns menu stays hidden and keeps its place in the layout.
+    #[test]
+    fn dragging_a_column_header_reorders_the_layout_with_undo() {
+        use crate::columns::{TaskCol, TaskTable};
+        use crate::fields::{Field, table_fields, visible_fields};
+        let b = Field::Builtin;
+        let mut h = harness();
+        let ctx = h.ctx.clone();
+        // This user switches the Mode column off (a per-user setting, not the plan).
+        h.state_mut().exec(&ctx, Command::ToggleColumn("mode".into()));
+        h.run_steps(2);
+        let rendered = |h: &Harness<'static, PlanCraftApp>| {
+            let ws = h.state().ws.lock().unwrap();
+            visible_fields(&ws.active_doc().unwrap().project, TaskTable::Entry, h.state().st.columns.get(TaskTable::Entry.label()))
+        };
+        let layout = |h: &Harness<'static, PlanCraftApp>| {
+            let ws = h.state().ws.lock().unwrap();
+            table_fields(&ws.active_doc().unwrap().project, TaskTable::Entry)
+        };
+        use TaskCol::*;
+        assert_eq!(
+            rendered(&h),
+            vec![b(Indicators), b(Name), b(Duration), b(Start), b(Finish), b(Predecessors), b(Resources)],
+            "Mode is hidden for this user"
+        );
+
+        // Drag the Duration header (rendered column 2) and drop it before Finish (boundary 4).
+        let (body, widths) = {
+            let s = h.state();
+            (s.st.task_grid.body.unwrap(), s.st.task_grid.widths.clone())
+        };
+        let y = body.top() - theme::HEADER_HEIGHT / 2.0;
+        let left = |i: usize| body.left() + crate::widgets::grid::ROW_NUM_W + widths.iter().take(i).sum::<f32>();
+        let from = pos2(left(2) + widths[2] / 2.0, y);
+        let to = pos2(left(4) + 2.0, y);
+        let button =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        h.event(egui::Event::PointerMoved(from));
+        h.run_steps(1);
+        h.event(button(from, true));
+        h.run_steps(1);
+        for f in [0.3, 0.7, 1.0] {
+            h.event(egui::Event::PointerMoved(from.lerp(to, f)));
+            h.run_steps(1);
+        }
+        h.event(button(to, false));
+        h.run_steps(3);
+        assert_eq!(
+            layout(&h),
+            vec![b(Indicators), b(Mode), b(Name), b(Start), b(Duration), b(Finish), b(Predecessors), b(Resources)],
+            "the plan's layout reordered; the hidden Mode column kept its place"
+        );
+        assert_eq!(
+            rendered(&h),
+            vec![b(Indicators), b(Name), b(Start), b(Duration), b(Finish), b(Predecessors), b(Resources)],
+            "Mode stays hidden for this user after the reorder"
+        );
+        h.state_mut().exec(&ctx, Command::Undo);
+        h.run_steps(2);
+        assert_eq!(layout(&h), TaskTable::Entry.columns().into_iter().map(Field::Builtin).collect::<Vec<_>>(), "undo restores the layout");
+        assert!(!rendered(&h).contains(&b(Mode)), "undo does not resurrect the column this user hid");
     }
 
     /// The Columns menu: switching a column off removes it from the rendered table, never the

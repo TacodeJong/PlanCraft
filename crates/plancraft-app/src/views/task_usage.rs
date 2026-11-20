@@ -103,6 +103,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
         row_height: theme::ROW_HEIGHT,
         row_key: None,
         row_drag: false,
+        column_drag: false,
         outline_arrows: false,
         quick_name: None,
     };
