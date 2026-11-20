@@ -45,7 +45,7 @@ pub fn dataverse_token(org_url: &str) -> Result<TokenSet, String> {
 }
 
 fn access_token(resource: &str) -> Result<TokenSet, String> {
-    let output = Command::new("az")
+    let output = az_command()
         .args(["account", "get-access-token", "--resource", resource, "-o", "json"])
         .output()
         .map_err(|_| crate::lang::text("planner.az_missing").to_string())?;
@@ -67,7 +67,7 @@ fn access_token(resource: &str) -> Result<TokenSet, String> {
 
 /// Start `az login --use-device-code` and parse the device code for our UI.
 pub fn begin_device_login() -> Result<(DeviceCode, mpsc::Receiver<Result<(), String>>), String> {
-    let mut child = Command::new("az")
+    let mut child = az_command()
         .args(["login", "--use-device-code"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -151,6 +151,21 @@ pub fn begin_device_login() -> Result<(DeviceCode, mpsc::Receiver<Result<(), Str
 
     let pending = code_rx.recv_timeout(Duration::from_secs(90)).map_err(|_| crate::lang::text("planner.az_login_failed").to_string())??;
     Ok((pending, done_rx))
+}
+
+/// Windows installs `az` as `az.cmd` or `az.bat`. `Command` cannot start those
+/// directly; `cmd /C` searches PATH and can.
+fn az_command() -> Command {
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new("cmd");
+        cmd.arg("/C").arg("az");
+        cmd
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new("az")
+    }
 }
 
 fn parse_az_device_code(text: &str) -> Option<DeviceCode> {
