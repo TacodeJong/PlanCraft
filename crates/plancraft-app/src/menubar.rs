@@ -16,7 +16,7 @@
 use plancraft_core::baseline::PlanSlot;
 use std::cell::RefCell;
 
-use egui::{Align, Align2, Color32, CornerRadius, FontId, Layout, Rect, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Align, Align2, FontId, Layout, Rect, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
 use plancraft_core::model::ScheduleMode;
 
 use crate::columns::TaskTable;
@@ -58,19 +58,20 @@ pub fn title_bar(ui: &mut Ui, info: &MenuInfo, out: &mut Vec<Command>) {
     let rect = ui.available_rect_before_wrap();
     let rect = Rect::from_min_size(rect.min, vec2(rect.width(), 34.0));
     ui.painter().rect_filled(rect, 0.0, theme::pal().TITLE_BAR);
+    ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, theme::hairline());
     let mut child =
         ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(8.0, 0.0))).layout(Layout::left_to_right(Align::Center)));
     let ui2 = &mut child;
-    logo::paint_on_dark(ui2.painter(), Rect::from_center_size(pos2(ui2.cursor().left() + 11.0, rect.center().y), vec2(22.0, 22.0)));
+    logo::paint(ui2.painter(), Rect::from_center_size(pos2(ui2.cursor().left() + 11.0, rect.center().y), vec2(22.0, 22.0)));
     ui2.add_space(28.0);
-    ui2.label(egui::RichText::new("PlanCraft").color(Color32::WHITE).size(14.0).strong());
+    ui2.label(egui::RichText::new("PlanCraft").color(theme::pal().TEXT).size(14.0).strong());
     ui2.add_space(12.0);
     let qa = |ui: &mut Ui, icon: &str, tip: &str, enabled: bool| -> bool {
         let (r, resp) = ui.allocate_exact_size(vec2(26.0, 24.0), if enabled { Sense::click() } else { Sense::hover() });
         if enabled && resp.hovered() {
-            ui.painter().rect_filled(r, 3.0, Color32::from_white_alpha(30));
+            ui.painter().rect_filled(r, 3.0, theme::pal().WASH_HOVER);
         }
-        let color = if enabled { Color32::WHITE } else { Color32::from_white_alpha(90) };
+        let color = if enabled { theme::pal().TEXT } else { theme::pal().LINE_STRONG };
         ui.painter().text(r.center(), Align2::CENTER_CENTER, icon, FontId::proportional(14.0), color);
         resp.on_hover_text(tip).clicked()
     };
@@ -88,7 +89,7 @@ pub fn title_bar(ui: &mut Ui, info: &MenuInfo, out: &mut Vec<Command>) {
         out.push(Command::Redo);
     }
     let title = if info.has_doc { format!("{} - PlanCraft", info.title) } else { "PlanCraft".into() };
-    ui2.painter().text(rect.center(), Align2::CENTER_CENTER, title, FontId::proportional(13.0), Color32::WHITE);
+    ui2.painter().text(rect.center(), Align2::CENTER_CENTER, title, FontId::proportional(13.0), theme::pal().TEXT_WEAK);
     ui2.with_layout(Layout::right_to_left(Align::Center), |ui| {
         let (txt, color) = if info.mcp_running { ("⚡ MCP live", theme::pal().MCP_LIVE) } else { ("○ MCP off", theme::pal().MCP_OFF) };
         let resp = ui.add(egui::Label::new(egui::RichText::new(txt).color(color).size(12.0)).sense(Sense::click()));
@@ -114,14 +115,21 @@ fn button(ui: &mut Ui, icon: &str, label: Option<&str>, tip: &str, enabled: bool
     let w = 26.0 + label_w + if label.is_some() { 4.0 } else { 0.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(w, BUTTON_H), if enabled { Sense::click() } else { Sense::hover() });
     let p = ui.painter();
+    // Ghost buttons: transparent at rest; hover is a wash with the border raised — never the accent.
     if active {
-        p.rect_filled(rect, 4.0, theme::pal().ACCENT_LIGHT);
-        p.rect_stroke(rect, 4.0, Stroke::new(1.0, theme::pal().ACCENT_MID), StrokeKind::Inside);
+        p.rect_filled(rect, 3.0, theme::pal().WASH_SELECTED);
+        p.rect_stroke(rect, 3.0, Stroke::new(1.0, theme::pal().LINE_STRONG), StrokeKind::Inside);
     } else if enabled && resp.hovered() {
-        p.rect_filled(rect, 4.0, theme::pal().ACCENT_PALE);
-        p.rect_stroke(rect, 4.0, Stroke::new(1.0, theme::pal().ACCENT_LIGHT), StrokeKind::Inside);
+        p.rect_filled(rect, 3.0, theme::pal().WASH_HOVER);
+        p.rect_stroke(rect, 3.0, Stroke::new(1.0, theme::pal().LINE), StrokeKind::Inside);
     }
-    let icon_color = if enabled { theme::pal().ACCENT } else { theme::pal().GRID_LINE_STRONG };
+    let icon_color = if !enabled {
+        theme::pal().LINE_STRONG
+    } else if active || resp.hovered() {
+        theme::pal().TEXT
+    } else {
+        theme::pal().TEXT_WEAK
+    };
     let center = pos2(rect.left() + 13.0, rect.center().y);
     if icon == "panes" {
         let r = egui::Rect::from_center_size(center, vec2(12.0, 9.0));
@@ -146,16 +154,22 @@ fn button(ui: &mut Ui, icon: &str, label: Option<&str>, tip: &str, enabled: bool
 /// Thin vertical divider between groups of related buttons.
 fn sep(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(vec2(11.0, BUTTON_H), Sense::hover());
-    ui.painter().vline(rect.center().x, (rect.top() + 4.0)..=(rect.bottom() - 4.0), Stroke::new(1.0, theme::pal().GRID_LINE_STRONG));
+    ui.painter().vline(rect.center().x, (rect.top() + 4.0)..=(rect.bottom() - 4.0), theme::hairline());
 }
 
 /// A mini pie button for "x% complete".
 fn pie(ui: &mut Ui, pct: u8, enabled: bool) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(22.0, BUTTON_H), if enabled { Sense::click() } else { Sense::hover() });
     if enabled && resp.hovered() {
-        ui.painter().rect_filled(r, 4.0, theme::pal().ACCENT_PALE);
+        ui.painter().rect_filled(r, 3.0, theme::pal().WASH_HOVER);
     }
-    let color = if enabled { theme::pal().ACCENT } else { theme::pal().GRID_LINE_STRONG };
+    let color = if !enabled {
+        theme::pal().LINE_STRONG
+    } else if resp.hovered() {
+        theme::pal().TEXT
+    } else {
+        theme::pal().TEXT_WEAK
+    };
     let c = r.center();
     ui.painter().circle_stroke(c, 6.5, Stroke::new(1.0, color));
     if pct >= 100 {
@@ -173,7 +187,7 @@ fn pie(ui: &mut Ui, pct: u8, enabled: bool) -> egui::Response {
 }
 
 fn combo_label(ui: &mut Ui, text: &str) {
-    ui.label(egui::RichText::new(text).size(12.5).color(theme::pal().TEXT_WEAK));
+    crate::widgets::craft::hud(ui, text, theme::pal().TEXT_WEAK);
 }
 
 // ---------------------------------------------------------------------------
@@ -183,9 +197,12 @@ fn combo_label(ui: &mut Ui, text: &str) {
 fn view_selector(ui: &mut Ui, rect: Rect, st: &UiState, enabled: bool, push: &dyn Fn(Command)) {
     let resp = ui.interact(rect, egui::Id::new("view_selector"), if enabled { Sense::click() } else { Sense::hover() });
     let p = ui.painter();
-    p.rect_filled(rect, 0.0, if resp.hovered() && enabled { theme::pal().ACCENT_PALE } else { theme::pal().BG });
-    p.vline(rect.right() - 0.5, rect.y_range(), Stroke::new(1.0, theme::pal().GRID_LINE_STRONG));
-    let color = if enabled { theme::pal().ACCENT } else { theme::pal().GRID_LINE_STRONG };
+    p.rect_filled(rect, 0.0, theme::pal().PANEL_BG);
+    if resp.hovered() && enabled {
+        p.rect_filled(rect, 0.0, theme::pal().WASH);
+    }
+    p.vline(rect.right() - 0.5, rect.y_range(), theme::hairline());
+    let color = if enabled { theme::pal().TEXT } else { theme::pal().LINE_STRONG };
     p.text(pos2(rect.center().x, rect.top() + 18.0), Align2::CENTER_CENTER, st.view.icon(), FontId::proportional(20.0), color);
     let galley = p.layout(st.view.label().to_string(), FontId::proportional(12.0), theme::pal().TEXT, rect.width() - 12.0);
     let gh = galley.size().y;
@@ -273,64 +290,59 @@ fn file_menu(ui: &mut Ui, info: &MenuInfo, settings: &AppSettings, report: bool,
 fn tab_strip(ui: &mut Ui, rect: Rect, st: &mut UiState, info: &MenuInfo, settings: &AppSettings, push: &dyn Fn(Command)) {
     let p = ui.painter().clone();
     p.rect_filled(rect, 0.0, theme::pal().PANEL_BG);
-    p.hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, theme::pal().GRID_LINE_STRONG));
-    let font = FontId::proportional(13.0);
+    p.hline(rect.x_range(), rect.bottom() - 0.5, theme::hairline());
     let mut x = rect.left() + 6.0;
-    let tab_rect = |x: f32, w: f32| Rect::from_min_max(pos2(x, rect.top() + 4.0), pos2(x + w, rect.bottom()));
+    let tab_rect = |x: f32, w: f32| Rect::from_min_max(pos2(x, rect.top() + 2.0), pos2(x + w, rect.bottom() - 2.0));
+    // Mono-caps HUD tabs; the active one is an inverted chip (the breadcrumb-leaf treatment).
+    let caps = |text: &str, color| crate::widgets::craft::caps(&p, text, theme::HUD_SIZE, theme::mono(), theme::HUD_SPACING, color);
 
     // File menu, drawn as a tab with a chevron.
     let file = crate::lang::text("menu.file");
-    let w = p.layout_no_wrap(file.into(), font.clone(), theme::pal().TEXT).size().x + 30.0;
+    let w = caps(file, theme::pal().TEXT).size().x + 26.0;
     let r = tab_rect(x, w);
     let resp = ui.interact(r, egui::Id::new("tab_file"), Sense::click());
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
     if resp.hovered() || open {
-        p.rect_filled(r.shrink2(vec2(0.0, 1.0)), CornerRadius { nw: 5, ne: 5, sw: 0, se: 0 }, theme::pal().ACCENT_PALE);
+        p.rect_filled(r, 3.0, theme::pal().WASH_HOVER);
     }
-    p.text(pos2(r.left() + 10.0, r.center().y), Align2::LEFT_CENTER, file, font.clone(), theme::pal().TEXT);
-    let c = pos2(r.right() - 11.0, r.center().y);
+    let color = if resp.hovered() || open { theme::pal().TEXT } else { theme::pal().TEXT_WEAK };
+    let g = caps(file, color);
+    p.galley(pos2(r.left() + 8.0, r.center().y - g.size().y / 2.0), g, color);
+    let c = pos2(r.right() - 10.0, r.center().y);
     p.add(Shape::convex_polygon(vec![c + vec2(-3.5, -1.5), c + vec2(3.5, -1.5), c + vec2(0.0, 2.5)], theme::pal().TEXT_WEAK, Stroke::NONE));
     egui::Popup::menu(&resp).show(|ui| file_menu(ui, info, settings, st.view == crate::state::ViewKind::Report, push));
-    x += w + 2.0;
+    x += w + 4.0;
 
     for tab in MenuTab::ALL {
-        let w = p.layout_no_wrap(tab.label().into(), font.clone(), theme::pal().TEXT).size().x + 26.0;
+        let w = caps(tab.label(), theme::pal().TEXT).size().x + 22.0;
         let r = tab_rect(x, w);
         let resp = ui.interact(r, egui::Id::new(("tab", tab.label())), Sense::click());
         let active = st.menu_tab == tab;
-        if active {
-            // Active tab: white, outlined, open at the bottom so it joins the toolbar row.
-            let rr = CornerRadius { nw: 5, ne: 5, sw: 0, se: 0 };
-            p.rect_filled(r, rr, theme::pal().BG);
-            p.add(Shape::line(
-                vec![pos2(r.left() + 0.5, r.bottom()), pos2(r.left() + 0.5, r.top() + 4.0), pos2(r.left() + 4.0, r.top() + 0.5)],
-                Stroke::new(1.0, theme::pal().GRID_LINE_STRONG),
-            ));
-            p.hline((r.left() + 4.0)..=(r.right() - 4.0), r.top() + 0.5, Stroke::new(1.0, theme::pal().GRID_LINE_STRONG));
-            p.add(Shape::line(
-                vec![pos2(r.right() - 4.0, r.top() + 0.5), pos2(r.right() - 0.5, r.top() + 4.0), pos2(r.right() - 0.5, r.bottom())],
-                Stroke::new(1.0, theme::pal().GRID_LINE_STRONG),
-            ));
-            p.hline((r.left() + 4.0)..=(r.right() - 4.0), r.top() + 1.5, Stroke::new(2.0, theme::pal().ACCENT));
-            p.hline((r.left() + 1.0)..=(r.right() - 1.0), rect.bottom() - 0.5, Stroke::new(1.0, theme::pal().BG));
+        let color = if active {
+            // A square ink block with page-colored mono caps.
+            p.rect_filled(r, 0.0, theme::pal().INVERT_BG);
+            theme::pal().INVERT_FG
         } else if resp.hovered() {
-            p.rect_filled(r.shrink2(vec2(0.0, 1.0)), CornerRadius { nw: 5, ne: 5, sw: 0, se: 0 }, theme::pal().TAB_HOVER);
-        }
-        let color = if active { theme::pal().ACCENT_DARK } else { theme::pal().TEXT };
-        p.text(r.center() + vec2(0.0, 1.0), Align2::CENTER_CENTER, tab.label(), font.clone(), color);
+            p.rect_filled(r, 3.0, theme::pal().WASH_HOVER);
+            theme::pal().TEXT
+        } else {
+            theme::pal().TEXT_WEAK
+        };
+        let g = caps(tab.label(), color);
+        p.galley(pos2(r.center().x - g.size().x / 2.0 + theme::HUD_SPACING / 2.0, r.center().y - g.size().y / 2.0), g, color);
         if resp.clicked() {
             st.menu_tab = tab;
         }
-        x += w + 2.0;
+        x += w + 4.0;
     }
 
     // Right side: help/about.
-    let r = Rect::from_center_size(pos2(rect.right() - 16.0, rect.center().y + 1.0), vec2(22.0, 20.0));
+    let r = Rect::from_center_size(pos2(rect.right() - 16.0, rect.center().y), vec2(22.0, 20.0));
     let resp = ui.interact(r, egui::Id::new("tab_help"), Sense::click());
     if resp.hovered() {
-        p.rect_filled(r, 4.0, theme::pal().ACCENT_PALE);
+        p.rect_filled(r, 3.0, theme::pal().WASH_HOVER);
     }
-    p.text(r.center(), Align2::CENTER_CENTER, "?", FontId::proportional(13.0), theme::pal().ACCENT);
+    p.text(r.center(), Align2::CENTER_CENTER, "?", FontId::proportional(13.0), theme::pal().TEXT_WEAK);
     if resp.on_hover_text("About PlanCraft").clicked() {
         push(Command::About);
     }
@@ -815,7 +827,7 @@ pub fn command_bar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &Ap
 
     tab_strip(ui, tabs, st, info, settings, &push);
 
-    ui.painter().rect_filled(tools, 0.0, theme::pal().BG);
+    ui.painter().rect_filled(tools, 0.0, theme::pal().PANEL);
     let mut child =
         ui.new_child(egui::UiBuilder::new().max_rect(tools.shrink2(vec2(6.0, 0.0))).layout(Layout::left_to_right(Align::Center)));
     egui::ScrollArea::horizontal()
@@ -828,6 +840,6 @@ pub fn command_bar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &Ap
         });
 
     view_selector(ui, selector, st, info.has_doc, &push);
-    ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, theme::pal().GRID_LINE_STRONG));
+    ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, theme::hairline());
     out.extend(cmds.into_inner());
 }

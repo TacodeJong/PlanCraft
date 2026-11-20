@@ -29,7 +29,7 @@ ureq = { version = "2.12", default-features = false, features = ["tls"] }
 keyring = "3"
 
 [dev-dependencies]
-egui_kittest = { version = "0.36", features = ["eframe"] }
+egui_kittest = { version = "0.36", features = ["eframe", "wgpu", "snapshot"] }
 
 # Files opened from Finder arrive as an "open documents" event (`src/mac_open.rs`). Pure Rust
 # bindings to Apple's frameworks, the same versions eframe already uses.

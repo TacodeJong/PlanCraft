@@ -89,6 +89,18 @@ struct BarGeom {
 
 const BAR_H: f32 = 10.0;
 
+/// A summary bracket: a solid bar whose ends are cut downward into triangular points — the
+/// bottom edge slopes up from each tip, as Merlin and MS Project draw groups. The caps shrink
+/// on very short bars so the two points never cross.
+fn summary_bar(bp: &Painter, x0: f32, x1: f32, yc: f32, fill: Color32) {
+    let x1 = x1.max(x0 + 1.0);
+    let (top, bottom, drop) = (yc - 4.0, yc + 2.0, 5.0);
+    bp.rect_filled(Rect::from_min_max(pos2(x0, top), pos2(x1, bottom)), 0.0, fill);
+    let w = ((x1 - x0) / 2.0).min(5.0);
+    bp.add(Shape::convex_polygon(vec![pos2(x0, bottom), pos2(x0 + w, bottom), pos2(x0, bottom + drop)], fill, Stroke::NONE));
+    bp.add(Shape::convex_polygon(vec![pos2(x1 - w, bottom), pos2(x1, bottom), pos2(x1, bottom + drop)], fill, Stroke::NONE));
+}
+
 /// The baselines in a bit set (bit n = Baseline n), lowest first.
 pub fn baseline_slots(mask: u16) -> impl Iterator<Item = u8> {
     (0..=plancraft_core::baseline::MAX_BASELINE).filter(move |n| mask & (1 << n) != 0)
@@ -404,8 +416,7 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
                 let finish = tasks.filter_map(|t| t.sched.finish).max();
                 if let (Some(s), Some(f)) = (start, finish) {
                     let (x0, x1) = (g.x_of(chart_left, s), g.x_of(chart_left, f).max(g.x_of(chart_left, s) + 1.0));
-                    let yc = y + rh / 2.0;
-                    bp.rect_filled(Rect::from_min_max(pos2(x0, yc - 3.0), pos2(x1, yc + 2.0)), 0.0, theme::pal().ACCENT_MID);
+                    summary_bar(&bp, x0, x1, y + rh / 2.0, theme::pal().ACCENT_MID);
                 }
                 continue;
             }
@@ -489,8 +500,7 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
             } else {
                 theme::pal().BAR_SUMMARY
             };
-            let r = Rect::from_min_max(pos2(x0, yc - 4.0), pos2(x1, yc + 1.0));
-            bp.rect_filled(r, 0.0, shown(fill));
+            summary_bar(&bp, x0, x1, yc, shown(fill));
             // Its subtasks' span as a thin bar below it, red where it lies outside the summary.
             if let (Some(rs), Some(rf)) = (t.sched.rollup_start, t.sched.rollup_finish) {
                 let (rx0, rx1) = (g.x_of(chart_left, rs), g.x_of(chart_left, rf));
@@ -503,13 +513,6 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
                 line(rx0, rx1.max(rx0 + 1.0), own.unwrap_or(theme::pal().BAR_SUMMARY));
                 line(rx0, rx1.min(x0), theme::pal().ERROR);
                 line(rx0.max(x1), rx1, theme::pal().ERROR);
-            }
-            for x in [x0, x1] {
-                bp.add(Shape::convex_polygon(
-                    vec![pos2(x - 4.0, yc + 1.0), pos2(x + 4.0, yc + 1.0), pos2(x, yc + 6.0)],
-                    shown(fill),
-                    Stroke::NONE,
-                ));
             }
             if g.show_progress && t.sched.percent_complete > 0.0 {
                 let px = x0 + (x1 - x0) * t.sched.percent_complete / 100.0;

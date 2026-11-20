@@ -73,10 +73,20 @@ impl FontLoader {
             }
             let Some(face) = font::face(i) else { continue };
             let data = FontData { font: Cow::Borrowed(face.data), index: face.index, tweak: Default::default() };
-            let families = [FontFamily::Proportional, FontFamily::Monospace]
-                .into_iter()
-                .map(|family| InsertFontFamily { family, priority: FontPriority::Lowest })
-                .collect();
+            // Every family, including the named faces (medium, display, mono …), so other
+            // scripts render in buttons, headings and HUD labels too.
+            let families = [
+                FontFamily::Proportional,
+                FontFamily::Monospace,
+                crate::theme::medium(),
+                crate::theme::semibold(),
+                crate::theme::display(),
+                crate::theme::mono(),
+                crate::theme::mono_bold(),
+            ]
+            .into_iter()
+            .map(|family| InsertFontFamily { family, priority: FontPriority::Lowest })
+            .collect();
             ctx.add_font(FontInsert::new(&format!("system-fallback-{i}"), data, families));
         }
     }

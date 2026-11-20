@@ -187,7 +187,7 @@ impl Default for AppSettings {
             mcp_port: 7878,
             mcp_autostart: false,
             table_width: 720.0,
-            theme: crate::theme::ThemeChoice::System,
+            theme: crate::theme::ThemeChoice::Dark,
             lang: crate::lang::Lang::Nl,
             startup: Startup::LastFile,
             open_to_overview: true,

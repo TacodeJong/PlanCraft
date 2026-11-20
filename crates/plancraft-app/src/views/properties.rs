@@ -37,8 +37,8 @@ pub fn dock(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState) -> Re
 fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState) {
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
     egui::ScrollArea::vertical().show(&mut child, |ui| {
-        ui.heading(st.t("tb.properties"));
-        ui.add_space(6.0);
+        crate::widgets::craft::section_label(ui, st.t("tb.properties"));
+        ui.add_space(2.0);
         if resource_view(st.view) {
             match st.sel.single_resource().or_else(|| (st.view == ViewKind::Timesheet).then_some(st.timesheet_resource).flatten()) {
                 Some(id) => resource_pane(ui, doc, st, id),

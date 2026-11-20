@@ -1800,6 +1800,7 @@ impl PlanCraftApp {
         let rect = ui.available_rect_before_wrap();
         let rect = Rect::from_min_size(rect.min, vec2(rect.width(), 26.0));
         ui.painter().rect_filled(rect, 0.0, theme::pal().PANEL_BG);
+        ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, theme::hairline());
         let mut child =
             ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(8.0, 2.0))).layout(Layout::left_to_right(Align::Center)));
         let mut switch = None;
@@ -1809,7 +1810,23 @@ impl PlanCraftApp {
             let mark = if self.disk_bars.contains_key(&d.handle) || d.lock.elsewhere().is_some() { "⚠ " } else { "" };
             let remote = self.remotes.get(d.handle);
             let icon = if remote.is_some() { "👥" } else { "📄" };
-            let mut resp = child.selectable_label(active, format!("{icon} {mark}{}", d.title()));
+            // The nav-row treatment: selected = wash + a 2 px solid ink bar at the left edge.
+            let label = format!("{icon} {mark}{}", d.title());
+            let font = egui::FontId::proportional(12.5);
+            let text_w = child.painter().layout_no_wrap(label.clone(), font.clone(), theme::pal().TEXT).size().x;
+            let (row, mut resp) = child.allocate_exact_size(vec2(text_w + 18.0, 22.0), Sense::click());
+            let ink = if active {
+                child.painter().rect_filled(row, 3.0, theme::pal().WASH_SELECTED);
+                let bar = Rect::from_min_size(pos2(row.left(), row.center().y - 8.0), vec2(2.0, 16.0));
+                child.painter().rect_filled(bar, 0.0, theme::pal().TEXT);
+                theme::pal().TEXT
+            } else if resp.hovered() {
+                child.painter().rect_filled(row, 3.0, theme::pal().WASH);
+                theme::pal().TEXT
+            } else {
+                theme::pal().TEXT_WEAK
+            };
+            child.painter().text(pos2(row.left() + 10.0, row.center().y), Align2::LEFT_CENTER, label, font, ink);
             if let Some(r) = remote {
                 resp = resp.on_hover_text(format!("Opened from {} as {}: {}", r.server, r.user, r.state_label()));
             }
@@ -1841,14 +1858,23 @@ impl PlanCraftApp {
     }
 
     fn status_bar(&mut self, ui: &mut Ui, ws: &mut Workspace, out: &mut Vec<Command>) {
+        // The status band sits on the chrome tier under a hairline; its segments are HUD labels.
+        let band = ui.available_rect_before_wrap();
+        ui.painter().rect_filled(band, 0.0, theme::pal().TITLE_BAR);
+        ui.painter().hline(band.x_range(), band.top() + 0.5, theme::hairline());
+        let hud = crate::widgets::craft::hud_job;
         let doc = ws.active_doc_mut();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
-            let msg = match &self.status {
-                Some((m, at)) if at.elapsed() < StdDuration::from_secs(8) => m.clone(),
-                _ => "Ready".to_string(),
-            };
-            ui.label(RichText::new(msg).size(12.0));
+            // The free-form message (often a file path) keeps its case; "Ready" is a HUD label.
+            match &self.status {
+                Some((m, at)) if at.elapsed() < StdDuration::from_secs(8) => {
+                    ui.label(RichText::new(m).size(12.0).color(theme::pal().TEXT_WEAK));
+                }
+                _ => {
+                    ui.label(hud("Ready", theme::pal().TEXT_WEAK));
+                }
+            }
             if let Some(doc) = doc {
                 if let Some(r) = self.remotes.get(doc.handle) {
                     ui.separator();
@@ -1857,9 +1883,10 @@ impl PlanCraftApp {
                 ui.separator();
                 let auto = doc.project.settings.new_tasks_auto;
                 let resp = ui.add(
-                    egui::Label::new(
-                        RichText::new(if auto { "⟳ New Tasks: Auto Scheduled" } else { "📌 New Tasks: Manually Scheduled" }).size(12.0),
-                    )
+                    egui::Label::new(hud(
+                        if auto { "⟳ New Tasks: Auto Scheduled" } else { "📌 New Tasks: Manually Scheduled" },
+                        theme::pal().TEXT_WEAK,
+                    ))
                     .sense(Sense::click()),
                 );
                 if resp.on_hover_text("Click to change how new tasks are scheduled").clicked()
@@ -1869,26 +1896,20 @@ impl PlanCraftApp {
                 }
                 if self.st.filter != crate::state::TaskFilter::All {
                     ui.separator();
-                    ui.label(
-                        RichText::new(format!("{}: {}", self.st.t("status_bar.filter"), self.st.filter.label()))
-                            .size(12.0)
-                            .color(theme::pal().ACCENT_MID),
-                    );
+                    ui.label(hud(&format!("{}: {}", self.st.t("status_bar.filter"), self.st.filter.label()), theme::pal().ACCENT_DARK));
                 }
                 let warnings = doc.project.sched.warnings.len();
                 if warnings > 0 {
                     ui.separator();
-                    let r = ui.add(
-                        egui::Label::new(RichText::new(format!("⚠ {warnings} scheduling issue(s)")).size(12.0).color(theme::pal().ERROR))
-                            .sense(Sense::click()),
-                    );
+                    let r = ui
+                        .add(egui::Label::new(hud(&format!("⚠ {warnings} scheduling issue(s)"), theme::pal().ERROR)).sense(Sense::click()));
                     if r.on_hover_text(doc.project.sched.warnings.join("\n")).clicked() {
                         out.push(Command::Statistics);
                     }
                 }
                 if let Some((label, ChangeSource::Agent)) = &doc.last_change {
                     ui.separator();
-                    ui.label(RichText::new(format!("⚡ Last AI change: {label}")).size(12.0).color(theme::pal().ACCENT_MID));
+                    ui.label(hud(&format!("⚡ Last AI change: {label}"), theme::pal().ACCENT_DARK));
                 }
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1934,12 +1955,20 @@ impl PlanCraftApp {
 
     fn view_bar(&self, ui: &Ui, rect: Rect) {
         let p = ui.painter();
-        p.rect_filled(rect, 0.0, theme::pal().TITLE_BAR);
+        p.rect_filled(rect, 0.0, theme::pal().PANEL_BG);
+        p.vline(rect.right() - 0.5, rect.y_range(), theme::hairline());
+        // A vertical HUD label: upper case, letter-spaced, in the mono face.
+        let format = egui::TextFormat {
+            font_id: FontId::new(theme::HUD_SIZE, theme::mono()),
+            color: theme::pal().TEXT_WEAK,
+            extra_letter_spacing: theme::HUD_SPACING,
+            ..Default::default()
+        };
         let label = self.st.view.label().to_uppercase();
-        let galley = p.layout_no_wrap(label, FontId::proportional(12.0), Color32::WHITE);
+        let galley = p.layout_job(egui::text::LayoutJob::single_section(label, format));
         let w = galley.size().x;
         let pos = pos2(rect.center().x - galley.size().y / 2.0, rect.center().y + w / 2.0);
-        p.add(egui::epaint::TextShape::new(pos, galley, Color32::WHITE).with_angle(-std::f32::consts::FRAC_PI_2));
+        p.add(egui::epaint::TextShape::new(pos, galley, theme::pal().TEXT_WEAK).with_angle(-std::f32::consts::FRAC_PI_2));
     }
 
     fn toasts(&mut self, ctx: &egui::Context) {
@@ -3282,6 +3311,26 @@ mod ui_tests {
         let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).build_eframe(move |cc| PlanCraftApp::new(cc, shared));
         h.run_steps(3);
         h
+    }
+
+    /// Saves PNG previews of the main views in both themes for visual review. Not part of the
+    /// gates (it rasterizes on the GPU): `cargo test -p plancraft-app theme_preview -- --ignored`.
+    #[test]
+    #[ignore = "renders on the GPU; run explicitly for visual review"]
+    fn theme_preview_images() {
+        let mut h = harness();
+        let ctx = h.ctx.clone();
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/theme-previews");
+        std::fs::create_dir_all(&dir).unwrap();
+        for (theme, choice) in [("dark", crate::theme::ThemeChoice::Dark), ("light", crate::theme::ThemeChoice::Light)] {
+            h.state_mut().exec(&ctx, Command::SetTheme(choice));
+            for view in [ViewKind::Gantt, ViewKind::Overview, ViewKind::Board, ViewKind::ResourceUsage] {
+                h.state_mut().exec(&ctx, Command::SetView(view));
+                h.run_steps(4);
+                let img = h.render().expect("rasterize the frame");
+                img.save(dir.join(format!("{theme}-{}.png", view.label().to_lowercase().replace(' ', "-")))).unwrap();
+            }
+        }
     }
 
     #[test]

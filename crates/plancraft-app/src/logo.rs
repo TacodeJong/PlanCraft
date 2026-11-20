@@ -93,10 +93,3 @@ pub fn icon_data() -> egui::IconData {
     let size = 256;
     egui::IconData { rgba: rasterize(size), width: size, height: size }
 }
-
-/// Paints the mark on a dark/accent background, with a light outline so the tile stays visible.
-pub fn paint_on_dark(painter: &Painter, rect: Rect) {
-    let s = rect.width().min(rect.height());
-    painter.rect_filled(rect.expand(1.5), (s + 3.0) * TILE_RADIUS, Color32::from_white_alpha(235));
-    paint(painter, rect);
-}
