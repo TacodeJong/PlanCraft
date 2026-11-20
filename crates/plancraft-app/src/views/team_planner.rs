@@ -246,7 +246,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
                 t.name,
                 format::date(t.sched.start),
                 format::date(t.sched.finish),
-                p.format_resource_names(t.id)
+                p.format_resource_names_only(t.id)
             ));
         }
         if resp.clicked() {

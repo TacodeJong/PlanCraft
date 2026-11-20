@@ -233,7 +233,7 @@ pub fn resource_matches(st: &UiState, r: &Resource) -> bool {
 
 pub fn agenda_matches(p: &Project, st: &UiState, id: TaskId) -> bool {
     let Some(name) = st.agenda_resource.as_deref() else { return true };
-    p.format_resource_names(id).split(',').any(|part| part.split('[').next().is_some_and(|who| who.trim().eq_ignore_ascii_case(name)))
+    p.format_resource_names_only(id).split(',').any(|who| who.trim().eq_ignore_ascii_case(name))
 }
 
 fn split(rect: Rect) -> (Rect, Rect) {

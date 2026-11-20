@@ -283,7 +283,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
                     text_color,
                 );
             }
-            let res = p.format_resource_names(t.id);
+            let res = p.format_resource_names_only(t.id);
             if !res.is_empty() {
                 painter.galley(pos2(r.left() + pad, y0 + row_h * 3.0), line(ui, &format!("Res: {res}"), fs, weak, inner), weak);
             }

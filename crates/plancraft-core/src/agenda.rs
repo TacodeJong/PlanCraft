@@ -97,7 +97,7 @@ pub struct DayCount {
 
 fn named(p: &Project, id: TaskId, resource: Option<&str>) -> bool {
     let Some(name) = resource.map(str::trim).filter(|s| !s.is_empty()) else { return true };
-    p.format_resource_names(id).split(',').any(|part| part.split('[').next().is_some_and(|who| who.trim().eq_ignore_ascii_case(name)))
+    p.format_resource_names_only(id).split(',').any(|who| who.trim().eq_ignore_ascii_case(name))
 }
 
 /// Overdue, due this calendar week, milestones in the next 30 days, and deliveries still waiting.

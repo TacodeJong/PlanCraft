@@ -275,6 +275,9 @@ fn predecessor_text_round_trip() {
     let _ = (a, b);
     p.apply_resource_names(c, "Ana[50%], Ben").unwrap();
     assert_eq!(p.format_resource_names(c), "Ana[50%],Ben");
+    // The display splits the same assignments into names and units, aligned.
+    assert_eq!(p.format_resource_names_only(c), "Ana, Ben");
+    assert_eq!(p.format_resource_units(c), "50%, 100%");
 }
 
 #[test]

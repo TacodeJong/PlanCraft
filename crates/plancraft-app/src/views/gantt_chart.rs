@@ -613,7 +613,7 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
         }
         // Resource names to the right.
         if g.show_resource_names && !summary && !t.is_milestone() {
-            let names = p.format_resource_names(t.id);
+            let names = p.format_resource_names_only(t.id);
             if !names.is_empty() {
                 bp.text(
                     pos2(x1 + 6.0, yc),
@@ -913,7 +913,7 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
             if t.sched.percent_complete > 0.0 {
                 text += &format!("\nComplete: {}", format::percent(t.sched.percent_complete));
             }
-            let res = p.format_resource_names(t.id);
+            let res = p.format_resource_names_only(t.id);
             if !res.is_empty() {
                 text += &format!("\nResources: {res}");
             }

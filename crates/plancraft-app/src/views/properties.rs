@@ -463,7 +463,7 @@ fn snapshot(p: &Project, ids: &[TaskId]) -> Snap {
         finish_fixed: flag(&|t| t.bounds.finish_latest_fixed),
         stretch: flag(&|t| t.fills_group),
         percent_group: text(&|t| t.duration_percent.map(|n| n.to_string()).unwrap_or_default()),
-        resources: text(&|t| p.format_resource_names(t.id)),
+        resources: text(&|t| p.format_resource_names_only(t.id)),
         percent: text(&|t| t.percent_complete.to_string()),
         status: common_status(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.status)),
         mark: common_mark(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.row_mark)),

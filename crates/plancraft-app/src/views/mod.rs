@@ -186,7 +186,7 @@ fn text_hit(p: &Project, t: &Task, search: &str) -> bool {
     if search.is_empty() {
         return true;
     }
-    t.name.to_lowercase().contains(search) || p.format_resource_names(t.id).to_lowercase().contains(search)
+    t.name.to_lowercase().contains(search) || p.format_resource_names_only(t.id).to_lowercase().contains(search)
 }
 
 fn page_label(group: PageGroup, p: &Project, idx: usize) -> String {
@@ -209,7 +209,7 @@ fn page_label(group: PageGroup, p: &Project, idx: usize) -> String {
         }
         PageGroup::Priority => format!("Priority {}", t.priority),
         PageGroup::Resources => {
-            let names = p.format_resource_names(t.id);
+            let names = p.format_resource_names_only(t.id);
             if names.trim().is_empty() { "Unassigned".into() } else { names }
         }
         PageGroup::Status => crate::lang::status_name(p.displayed_status(idx)).into(),

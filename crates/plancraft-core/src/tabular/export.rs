@@ -78,7 +78,7 @@ pub fn table_to_csv(p: &Project, table: CsvTable) -> String {
 
 /// The fixed columns, before the plan's custom fields.
 const HEADINGS: &str =
-    "ID,Unique ID,WBS,Outline Level,Name,Milestone,Duration,Start,Finish,% Complete,Work (h),Cost,Predecessors,Resources,Critical";
+    "ID,Unique ID,WBS,Outline Level,Name,Milestone,Duration,Start,Finish,% Complete,Work (h),Cost,Predecessors,Resources,Units,Critical";
 
 /// A cell, quoted. A cell a spreadsheet would run as a formula (starting with `=`, `+`, `-` or
 /// `@`, or a tab or line break, also after leading spaces, and the full-width forms) gets an
@@ -104,7 +104,7 @@ pub fn to_csv(p: &Project) -> String {
     s.push('\n');
     for (i, t) in p.tasks.iter().enumerate() {
         s += &format!(
-            "{},{},{},{},{},{},{},{},{},{:.0},{:.2},{:.2},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{:.0},{:.2},{:.2},{},{},{},{}",
             i.saturating_add(1),
             t.id.0,
             quote(&p.wbs(i)),
@@ -118,7 +118,8 @@ pub fn to_csv(p: &Project) -> String {
             t.sched.work as f64 / 60.0,
             t.sched.cost,
             quote(&p.format_predecessors(t.id)),
-            quote(&p.format_resource_names(t.id)),
+            quote(&p.format_resource_names_only(t.id)),
+            quote(&p.format_resource_units(t.id)),
             t.sched.critical
         );
         for f in &p.custom_fields {

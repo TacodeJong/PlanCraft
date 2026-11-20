@@ -425,7 +425,7 @@ fn card(ui: &Ui, painter: &egui::Painter, r: Rect, p: &Project, t: &Task, select
     }
     let name = line(ui, &t.name, 13.5, if done { pal.TEXT_WEAK } else { pal.TEXT }, r.width() - 20.0 - (tx - x));
     painter.galley(pos2(tx, r.top() + 8.0), name, pal.TEXT);
-    let who = p.format_resource_names(t.id);
+    let who = p.format_resource_names_only(t.id);
     let who = line(ui, if who.is_empty() { "Unassigned" } else { &who }, 11.5, pal.TEXT_WEAK, r.width() - 122.0);
     painter.galley(pos2(x, r.top() + 29.0), who, pal.TEXT_WEAK);
     let due = format!("Due {}", format::date(t.sched.finish));

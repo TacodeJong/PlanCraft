@@ -122,7 +122,7 @@ fn card(out: &mut Vec<Item>, r: Rect, p: &Project, t: &crate::model::Task, late:
     };
     let name_color = if done { pal.text_weak } else { pal.text };
     line_text(out, x, r.y + 8.0, &format!("{mark}{}", t.name), 13.5, name_color, false, r.w - 20.0);
-    let who = p.format_resource_names(t.id);
+    let who = p.format_resource_names_only(t.id);
     line_text(out, x, r.y + 29.0, if who.is_empty() { words.unassigned } else { &who }, 11.5, pal.text_weak, false, r.w - 122.0);
     let due = format!("{} {}", words.due, date(t.sched.finish));
     let w = font::width(&due, 11.5, false);

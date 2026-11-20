@@ -140,7 +140,7 @@ pub fn items(p: &Project, d: &Diagram, opts: NetPrintOptions, pal: &Palette) -> 
                 line_text(&mut out, x, y, left, fs, text, false, left_w);
                 line_text(&mut out, x + right_x, y, right, fs, text, false, inner - right_x);
             }
-            let res = p.format_resource_names(t.id);
+            let res = p.format_resource_names_only(t.id);
             if !res.is_empty() {
                 line_text(&mut out, x, y0 + row_h * 3.0, &format!("Res: {res}"), fs, weak, false, inner);
             }

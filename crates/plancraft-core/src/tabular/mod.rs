@@ -221,13 +221,15 @@ pub enum Field {
     Finish,
     Predecessors,
     Resources,
+    /// Assignment units, one per resource name (`"50%, 100%"`); brackets in the names win.
+    Units,
     PercentComplete,
     Milestone,
     Notes,
 }
 
 impl Field {
-    pub const ALL: [Field; 12] = [
+    pub const ALL: [Field; 13] = [
         Field::Id,
         Field::Name,
         Field::OutlineLevel,
@@ -237,6 +239,7 @@ impl Field {
         Field::Finish,
         Field::Predecessors,
         Field::Resources,
+        Field::Units,
         Field::PercentComplete,
         Field::Milestone,
         Field::Notes,
@@ -254,6 +257,7 @@ impl Field {
             Field::Finish => "Finish",
             Field::Predecessors => "Predecessors",
             Field::Resources => "Resource Names",
+            Field::Units => "Units",
             Field::PercentComplete => "% Complete",
             Field::Milestone => "Milestone",
             Field::Notes => "Notes",
@@ -272,6 +276,7 @@ impl Field {
             Field::Finish => "finish",
             Field::Predecessors => "predecessors",
             Field::Resources => "resources",
+            Field::Units => "units",
             Field::PercentComplete => "percent_complete",
             Field::Milestone => "milestone",
             Field::Notes => "notes",
@@ -294,6 +299,7 @@ impl Field {
             Field::Finish => &["finish", "finishdate", "end", "enddate", "due", "duedate", "plannedfinish", "deadline", "ends"],
             Field::Predecessors => &["predecessors", "predecessor", "dependson", "dependencies", "dependency", "depends", "after"],
             Field::Resources => &["resourcenames", "resources", "resource", "assignedto", "assignee", "assignees", "owner", "who"],
+            Field::Units => &["units", "assignmentunits", "resourceunits", "eenheden"],
             Field::PercentComplete => &["complete", "percentcomplete", "progress", "done", "percentdone", "pctcomplete"],
             Field::Milestone => &["milestone", "ismilestone"],
             Field::Notes => &["notes", "note", "comments", "comment", "description", "details", "remarks"],
@@ -408,7 +414,7 @@ mod tests {
     #[test]
     fn plancrafts_own_export_headings_are_recognised() {
         let headers: Vec<String> =
-            "ID,Unique ID,WBS,Outline Level,Name,Milestone,Duration,Start,Finish,% Complete,Work (h),Cost,Predecessors,Resources,Critical"
+            "ID,Unique ID,WBS,Outline Level,Name,Milestone,Duration,Start,Finish,% Complete,Work (h),Cost,Predecessors,Resources,Units,Critical"
                 .split(',')
                 .map(String::from)
                 .collect();
@@ -426,6 +432,7 @@ mod tests {
             Field::PercentComplete,
             Field::Predecessors,
             Field::Resources,
+            Field::Units,
         ] {
             assert!(found.contains(&f), "{f:?} not recognised");
         }

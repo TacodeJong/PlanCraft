@@ -448,9 +448,12 @@ fn links(p: &mut Project, grid: &Grid, options: &ImportOptions, rows: &[usize], 
 }
 
 /// Assignments from the Resource Names column: names separated by commas or semicolons, each
-/// with optional units in brackets (`Ana[50%]`). A new name makes a new work resource.
+/// with optional units in brackets (`Ana[50%]`). A Units column (PlanCraft's own export writes
+/// one) pairs with the names by position; brackets in a name win. A new name makes a new work
+/// resource.
 fn resources(p: &mut Project, grid: &Grid, options: &ImportOptions, rows: &[usize], ids: &[TaskId], summary: &[bool], notes: &mut Notes) {
     let Some(res_col) = options.columns.iter().position(|c| *c == Some(Field::Resources)) else { return };
+    let units_col = options.columns.iter().position(|c| *c == Some(Field::Units));
     let mut by_name: HashMap<String, ResourceId> = HashMap::new();
     for (i, &r) in rows.iter().enumerate() {
         let text = grid.cell(r, res_col).trim();
@@ -463,8 +466,20 @@ fn resources(p: &mut Project, grid: &Grid, options: &ImportOptions, rows: &[usiz
         }
         let Some(&task) = ids.get(i) else { continue };
         let Some(duration) = p.tasks.get(i).filter(|t| t.id == task).map(|t| t.duration) else { continue };
+        let unit_cells: Vec<String> =
+            units_col.map(|c| grid.cell(r, c).split([',', ';']).map(|s| s.trim().to_string()).collect()).unwrap_or_default();
         let mut assigned: Vec<ResourceId> = Vec::new();
-        for part in text.split([',', ';']).map(str::trim).filter(|s| !s.is_empty()) {
+        for (k, part) in text.split([',', ';']).map(str::trim).enumerate() {
+            if part.is_empty() {
+                continue;
+            }
+            // The Units column entry at the name's position, as if it were in brackets
+            // ("-" is a cost resource's no-units marker in PlanCraft's export).
+            let part = match unit_cells.get(k).map(String::as_str) {
+                Some(u) if !u.is_empty() && u != "-" && !part.contains('[') => format!("{part}[{u}]"),
+                _ => part.to_string(),
+            };
+            let part = part.as_str();
             // `Ana`, `Ana[50%]`, `Ana[0.5]`, or a material with its amount: `Cement[5 bags]`.
             let (name, units, material) = match part.split_once('[') {
                 Some((n, rest)) => {
@@ -855,6 +870,21 @@ mod tests {
     fn a_column_of_zeros_and_ones_is_read_as_fractions() {
         let (p, _) = import("Name,Duration,Start,% Complete\nA,1d,2026-10-19,1\nB,1d,2026-10-19,0\n");
         assert_eq!((task(&p, "A").percent_complete, task(&p, "B").percent_complete), (100, 0));
+    }
+
+    /// A Units column (PlanCraft's own export writes one next to the plain names) pairs with
+    /// the resource names by position; brackets in a name win over the column.
+    #[test]
+    fn a_units_column_pairs_with_the_resource_names() {
+        let (p, _) = import(
+            "Name,Duration,Resources,Units\n\
+             A,3d,\"Ana, Ben\",\"50%, 100%\"\n\
+             B,2d,\"Cement, Dan[25%]\",\"5 bags, 75%\"\n",
+        );
+        assert_eq!(p.format_resource_names(task(&p, "A").id), "Ana[50%],Ben");
+        assert_eq!(p.format_resource_units(task(&p, "A").id), "50%, 100%");
+        assert_eq!(p.format_resource_names(task(&p, "B").id), "Cement[5 bags],Dan[25%]", "the bracket beats the column");
+        assert_eq!(p.format_resource_names_only(task(&p, "B").id), "Cement, Dan");
     }
 
     /// Regression (review): a material amount made a work resource at 500%.

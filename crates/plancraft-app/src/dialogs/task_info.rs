@@ -1002,7 +1002,7 @@ impl TaskInfo {
 
     fn resources_tab(&mut self, ui: &mut Ui, p: &Project) {
         if self.summary {
-            let names = p.format_resource_names(self.id);
+            let names = p.format_resource_names_only(self.id);
             ui.label("A group's resources are the resources of its tasks.");
             ui.label(if names.is_empty() { "geen" } else { names.as_str() });
             return;

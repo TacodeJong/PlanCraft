@@ -1192,23 +1192,52 @@ impl Project {
         Ok(())
     }
 
-    /// Resource names for a task, e.g. `"Ana[50%],Build Co"`.
+    /// Resource names with the units in brackets, e.g. `"Ana[50%],Build Co"`: the editing and
+    /// interchange syntax that [`Self::apply_resource_names`] reads back. The table displays
+    /// [`Self::format_resource_names_only`] and shows the units in their own column.
     ///
     /// A summary has no assignments of its own. Its names are the resources of its tasks, in
     /// outline order, each resource once (the first task that uses it supplies the units).
     pub fn format_resource_names(&self, task: TaskId) -> String {
+        let parts: Vec<String> = self.named_rows(task).into_iter().filter_map(|(rid, units)| self.format_named(rid, units)).collect();
+        parts.join(",")
+    }
+
+    /// The resource names without any units, e.g. `"Ana, Build Co"`: the Resources column and
+    /// every other display. The units are in [`Self::format_resource_units`], in the same order.
+    pub fn format_resource_names_only(&self, task: TaskId) -> String {
+        let parts: Vec<String> =
+            self.named_rows(task).into_iter().filter_map(|(rid, _)| self.resource(rid).map(|r| r.name.clone())).collect();
+        parts.join(", ")
+    }
+
+    /// The assignment units, one per name of [`Self::format_resource_names_only`]: a work
+    /// resource's percentage (`"50%, 100%"`), a material's amount (`"5 bags"`), and `"-"` for
+    /// a cost resource, so the entries line up with the names.
+    pub fn format_resource_units(&self, task: TaskId) -> String {
+        let entry = |rid: ResourceId, units: f64| -> Option<String> {
+            let r = self.resource(rid)?;
+            Some(match r.kind {
+                ResourceType::Work => format!("{}%", (units * 100.0).round()),
+                ResourceType::Material => format!("{} {}", trim_f(units), r.material_label).trim_end().to_string(),
+                ResourceType::Cost => "-".to_string(),
+            })
+        };
+        let parts: Vec<String> = self.named_rows(task).into_iter().filter_map(|(rid, units)| entry(rid, units)).collect();
+        parts.join(", ")
+    }
+
+    /// [`Self::resource_rows`] with each resource once: the rows behind the name and unit lists.
+    fn named_rows(&self, task: TaskId) -> Vec<(ResourceId, f64)> {
         let mut seen = Vec::new();
-        let mut parts = Vec::new();
+        let mut rows = Vec::new();
         for (rid, units) in self.resource_rows(task) {
-            if seen.contains(&rid) {
-                continue;
-            }
-            seen.push(rid);
-            if let Some(text) = self.format_named(rid, units) {
-                parts.push(text);
+            if !seen.contains(&rid) {
+                seen.push(rid);
+                rows.push((rid, units));
             }
         }
-        parts.join(",")
+        rows
     }
 
     /// `(resource, units)` in outline order. A summary contributes its leaf descendants only.

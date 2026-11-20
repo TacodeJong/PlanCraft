@@ -11,7 +11,7 @@ use crate::theme;
 use crate::views::{self, Row};
 use crate::widgets::date_picker;
 
-fn titles(st: &UiState) -> [&'static str; 10] {
+fn titles(st: &UiState) -> [&'static str; 11] {
     [
         st.t("rpt.wbs"),
         st.t("rpt.name"),
@@ -20,6 +20,7 @@ fn titles(st: &UiState) -> [&'static str; 10] {
         st.t("rpt.finish"),
         st.t("rpt.duration"),
         st.t("rpt.resources"),
+        st.t("rpt.units"),
         st.t("rpt.predecessors"),
         st.t("rpt.percent"),
         st.t("rpt.status"),
@@ -27,7 +28,7 @@ fn titles(st: &UiState) -> [&'static str; 10] {
 }
 
 struct Line {
-    cells: [String; 10],
+    cells: [String; 11],
     milestone: bool,
     group: bool,
     mark: Option<RowMark>,
@@ -96,7 +97,7 @@ pub fn workbook(p: &Project, st: &UiState) -> Result<Vec<u8>, String> {
 
 /// The same rows, laid out for the print preview. Column widths sum to a landscape page.
 pub fn sheet(p: &Project, st: &UiState) -> Sheet {
-    let widths = [46.0, 160.0, 52.0, 72.0, 72.0, 58.0, 110.0, 90.0, 58.0, 70.0];
+    let widths = [46.0, 144.0, 52.0, 72.0, 72.0, 58.0, 80.0, 46.0, 90.0, 58.0, 70.0];
     let columns =
         titles(st).iter().zip(widths).map(|(title, width)| PrintColumn { title: (*title).into(), width, align: Align::Left }).collect();
     let rows = lines(p, st)
@@ -125,6 +126,7 @@ fn lines(p: &Project, st: &UiState) -> Vec<Line> {
                     String::new(),
                     String::new(),
                     String::new(),
+                    String::new(),
                 ],
                 milestone: false,
                 group: true,
@@ -144,7 +146,8 @@ fn lines(p: &Project, st: &UiState) -> Vec<Line> {
                         day(t.sched.start.or(t.manual_start)),
                         day(t.sched.finish.or(t.manual_finish)),
                         p.format_task_duration(t),
-                        p.format_resource_names(t.id),
+                        p.format_resource_names_only(t.id),
+                        p.format_resource_units(t.id),
                         p.format_predecessors(t.id),
                         t.percent_complete.to_string(),
                         crate::lang::status_name(p.displayed_status(idx)).into(),
@@ -158,7 +161,7 @@ fn lines(p: &Project, st: &UiState) -> Vec<Line> {
         .collect()
 }
 
-fn report_sheet(p: &Project, idxs: &[usize], headers: &[String; 10]) -> plancraft_core::xlsx_out::XlsxSheet {
+fn report_sheet(p: &Project, idxs: &[usize], headers: &[String; 11]) -> plancraft_core::xlsx_out::XlsxSheet {
     let mut rows = vec![header_row(headers)];
     for &idx in idxs {
         let Some(t) = p.tasks.get(idx) else { continue };
@@ -174,7 +177,8 @@ fn report_sheet(p: &Project, idxs: &[usize], headers: &[String; 10]) -> plancraf
             day(t.sched.start.or(t.manual_start)),
             day(t.sched.finish.or(t.manual_finish)),
             p.format_task_duration(t),
-            p.format_resource_names(t.id),
+            p.format_resource_names_only(t.id),
+            p.format_resource_units(t.id),
             p.format_predecessors(t.id),
             t.percent_complete.to_string(),
             crate::lang::status_name(p.displayed_status(idx)).into(),
@@ -211,6 +215,7 @@ fn data_sheet(p: &Project, idxs: &[usize]) -> plancraft_core::xlsx_out::XlsxShee
             "Finish",
             crate::lang::text("rpt.duration_days"),
             "Resources",
+            "Units",
             "% complete",
             "Status",
         ]
@@ -240,7 +245,12 @@ fn data_sheet(p: &Project, idxs: &[usize]) -> plancraft_core::xlsx_out::XlsxShee
             cells.push(plancraft_core::xlsx_out::XlsxCell::text(text));
         }
         cells.push(plancraft_core::xlsx_out::XlsxCell::number(duration_days(p, t)));
-        for text in [p.format_resource_names(t.id), t.percent_complete.to_string(), p.displayed_status(idx).label().into()] {
+        for text in [
+            p.format_resource_names_only(t.id),
+            p.format_resource_units(t.id),
+            t.percent_complete.to_string(),
+            p.displayed_status(idx).label().into(),
+        ] {
             cells.push(plancraft_core::xlsx_out::XlsxCell::text(text));
         }
         rows.push(plancraft_core::xlsx_out::XlsxRow { cells, outline: 0 });
@@ -314,6 +324,21 @@ mod tests {
         assert!(text.contains("Design"), "{text}");
         assert!(text.contains("Build"), "{text}");
         assert!(text.contains("sheet1.xml") || text.contains("<sheetData"), "{text}");
+    }
+
+    /// The workbook carries the names and the units as their own columns, no `[50%]` suffixes.
+    #[test]
+    fn the_workbook_splits_resource_names_and_units() {
+        let mut p = Project::new("Units", plancraft_core::dates::ymd(2026, 11, 16).unwrap());
+        let id = p.add_task("Design", None);
+        p.apply_resource_names(id, "Ana[50%], Ben").unwrap();
+        plancraft_core::schedule::recalculate(&mut p);
+        let bytes = workbook(&p, &UiState::default()).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("Ana, Ben"), "{text}");
+        assert!(text.contains("50%, 100%"), "{text}");
+        assert!(!text.contains("Ana[50%]"), "{text}");
+        assert!(text.contains(crate::lang::text("rpt.units")), "{text}");
     }
 
     #[test]

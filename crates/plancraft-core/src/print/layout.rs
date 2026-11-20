@@ -772,7 +772,7 @@ impl Chart<'_> {
                     hline(out, x1, xs(lf), yc + BAR_H / 2.0 + 1.5, Stroke::new(1.0, pal.bar_slack));
                 }
                 if o.resource_names {
-                    let names = p.format_resource_names(t.id);
+                    let names = p.format_resource_names_only(t.id);
                     if !names.is_empty() {
                         out.push(text(pt(x1 + 4.0, yc + 2.5), SMALL, pal.text, false, names));
                     }
@@ -1261,7 +1261,7 @@ pub fn task_sheet(p: &Project, with_chart: bool) -> Sheet {
             ];
             if !with_chart {
                 cells.push(PrintCell::text(p.format_predecessors(t.id)));
-                cells.push(PrintCell::text(p.format_resource_names(t.id)));
+                cells.push(PrintCell::text(p.format_resource_names_only(t.id)));
             }
             for c in cells.iter_mut().skip(2) {
                 c.bold = summary;

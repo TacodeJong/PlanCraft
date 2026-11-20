@@ -20,6 +20,8 @@ pub enum TaskCol {
     Predecessors,
     Successors,
     Resources,
+    /// Assignment units, one per name in Resources (`"50%, 100%"`).
+    Units,
     PercentComplete,
     /// The workflow status (not started, started, in progress, done).
     Status,
@@ -234,6 +236,7 @@ impl TaskCol {
             Predecessors => ColumnDef::new(ct("col.predecessors"), 96.0),
             Successors => ColumnDef::new(ct("col.successors"), 96.0).read_only(),
             Resources => ColumnDef::new(ct("col.resources"), 160.0),
+            Units => ColumnDef::new(ct("col.units"), 90.0).read_only(),
             PercentComplete => ColumnDef::new(ct("col.percent"), 62.0).right(),
             Status => {
                 let names = TaskStatus::ALL.map(crate::lang::status_name);
@@ -419,7 +422,12 @@ pub fn cell(col: TaskCol, p: &Project, idx: usize, ctx: &CellCtx) -> Cell {
         Successors => Cell::text(
             p.successors(t.id).iter().filter_map(|(sid, _)| p.row_number(*sid)).map(|r| r.to_string()).collect::<Vec<_>>().join(","),
         ),
-        Resources => Cell::text(p.format_resource_names(t.id)),
+        // The table shows the names alone; the units are in their own column. The editor gets
+        // the bracket syntax (like dates edit as ISO), so an edit never resets the units.
+        Resources => {
+            Cell { text: p.format_resource_names_only(t.id), edit_text: Some(p.format_resource_names(t.id)), ..Default::default() }
+        }
+        Units => Cell::text(p.format_resource_units(t.id)),
         PercentComplete => Cell::text(format::percent(s.percent_complete)),
         Status => {
             // A group's status rolls up from its subtasks, like its percent.
@@ -842,6 +850,25 @@ mod tests {
         commit(TaskCol::RowMark, &mut p, id, "").unwrap();
         assert_eq!(p.task(id).unwrap().row_mark, None);
         assert!(commit(TaskCol::Status, &mut p, id, "nonsense").is_err());
+    }
+
+    /// The Resources column shows only the names; the units are in their own read-only Units
+    /// column, in the same order. The cell editor still gets the bracket syntax (like dates
+    /// edit as ISO), so an edit never resets Ana to 100%.
+    #[test]
+    fn resources_show_names_only_and_units_get_their_own_column() {
+        let mut p = Project::new("U", plancraft_core::dates::ymd(2026, 11, 16).unwrap());
+        let id = p.add_task("Task", None);
+        p.apply_resource_names(id, "Ana[50%], Ben").unwrap();
+        plancraft_core::schedule::recalculate(&mut p);
+        let idx = p.task_index(id).unwrap();
+        let none = |_: TaskId| false;
+        let ctx = CellCtx { overallocated: &none, others_on: None };
+        let res = cell(TaskCol::Resources, &p, idx, &ctx);
+        assert_eq!(res.text, "Ana, Ben");
+        assert_eq!(res.edit_text.as_deref(), Some("Ana[50%],Ben"));
+        assert_eq!(cell(TaskCol::Units, &p, idx, &ctx).text, "50%, 100%");
+        assert!(commit(TaskCol::Units, &mut p, id, "60%").is_err(), "the Units column is read-only");
     }
 
     /// Regression: the Notes cell shows only the first line, and committing it used to replace
