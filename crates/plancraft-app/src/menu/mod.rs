@@ -192,15 +192,13 @@ mod tests {
         s.view = ViewKind::ResourceSheet;
         assert!(command_enabled(&Command::DeleteSelection, &s));
         assert!(command_enabled(&Command::DeleteResources, &s));
-        s.view = ViewKind::Gantt;
-        assert!(!command_enabled(&Command::DeleteSelection, &s), "Gantt needs a task selection");
         let bar = build_menu_bar(&s, LayoutKind::Desktop);
         let edit = bar.menus.iter().find(|m| m.title == "Edit").unwrap();
         assert!(
             edit.children.iter().any(|n| matches!(n, Node::Item(it) if it.id == "edit.delete" && it.label.contains("Resource"))),
             "Edit ▸ Delete Resource on a resource view"
         );
-        let project = bar.menus.iter().find(|m| m.title == "Project" || m.title == lang::text("tab.project")).unwrap();
+        let project = bar.menus.iter().find(|m| m.title == "Project" || m.title == crate::lang::text("tab.project")).unwrap();
         assert!(
             project.children.iter().any(|n| matches!(n, Node::Item(it) if it.id == "project.deleteResource")),
             "Project menu lists Delete Resource"
@@ -209,6 +207,8 @@ mod tests {
             project.children.iter().any(|n| matches!(n, Node::Item(it) if it.id == "project.addResource")),
             "Project menu lists Add Resource"
         );
+        s.view = ViewKind::Gantt;
+        assert!(!command_enabled(&Command::DeleteSelection, &s), "Gantt needs a task selection");
     }
 
     #[test]
