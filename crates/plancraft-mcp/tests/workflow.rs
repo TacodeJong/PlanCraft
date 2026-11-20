@@ -131,8 +131,13 @@ fn full_project_workflow() {
     assert_eq!(list["count"], 3);
     let tmp = c.call("assign_resource", json!({ "task": "QA", "resource": "Build Co", "units": 50 }));
     assert_eq!(tmp["assignment"]["units_text"], "50%");
+    let changed = c.call("update_assignment", json!({ "task": "QA", "resource": "Build Co", "units": "25%", "work": "2h" }));
+    assert_eq!(changed["assignment"]["work_minutes"], 120);
+    let backend = c.call("list_assignments", json!({ "task": "Backend", "resource": "Bob" }));
+    assert_eq!(backend["assignments"][0]["work_minutes"], 960);
     c.call("unassign_resource", json!({ "task": "QA", "resource": "Build Co" }));
-    c.call_err("assign_resource", json!({ "task": "Build", "resource": "Bob" }));
+    let refused = c.call_err("assign_resource", json!({ "task": "Build", "resource": "Bob" }));
+    assert!(refused.contains("group's resources"), "{refused}");
 
     // --- Workload & overallocation -----------------------------------------
     let over = c.call("get_overallocations", json!({}));

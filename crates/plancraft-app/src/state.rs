@@ -19,6 +19,9 @@ pub enum ViewKind {
     Board,
     TaskUsage,
     Milestones,
+    Overview,
+    Deliveries,
+    Report,
     ResourceSheet,
     ResourceUsage,
     Workload,
@@ -28,22 +31,34 @@ pub enum ViewKind {
 }
 
 impl ViewKind {
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
-            ViewKind::Gantt => "Gantt Chart",
-            ViewKind::TrackingGantt => "Tracking Gantt",
-            ViewKind::MultipleBaselines => "Multiple Baselines Gantt",
-            ViewKind::NetworkDiagram => "Network Diagram",
-            ViewKind::Board => "Task Board",
-            ViewKind::TaskUsage => "Task Usage",
-            ViewKind::Milestones => "Milestones",
-            ViewKind::ResourceSheet => "Resource Sheet",
-            ViewKind::ResourceUsage => "Resource Usage",
-            ViewKind::Workload => "Workload",
-            ViewKind::TeamPlanner => "Team Planner",
-            ViewKind::Timesheet => "Timesheet",
-            ViewKind::Calendar => "Calendar",
+            ViewKind::Gantt => "view.gantt",
+            ViewKind::TrackingGantt => "view.tracking",
+            ViewKind::MultipleBaselines => "view.baselines",
+            ViewKind::NetworkDiagram => "view.network",
+            ViewKind::Board => "view.board",
+            ViewKind::TaskUsage => "view.task_usage",
+            ViewKind::Milestones => "view.milestones",
+            ViewKind::Overview => "view.overview",
+            ViewKind::Deliveries => "view.deliveries",
+            ViewKind::Report => "view.report",
+            ViewKind::ResourceSheet => "view.resources",
+            ViewKind::ResourceUsage => "view.resource_usage",
+            ViewKind::Workload => "view.workload",
+            ViewKind::TeamPlanner => "view.team",
+            ViewKind::Timesheet => "view.timesheet",
+            ViewKind::Calendar => "view.calendar",
         }
+    }
+
+    pub fn label(self) -> &'static str {
+        crate::lang::text(self.key())
+    }
+
+    /// The English name, for `PLANCRAFT_VIEW` and other stable lookups.
+    pub fn english(self) -> &'static str {
+        crate::lang::tr(crate::lang::Lang::En, self.key())
     }
 
     pub fn icon(self) -> &'static str {
@@ -55,6 +70,9 @@ impl ViewKind {
             ViewKind::Board => "📇",
             ViewKind::TaskUsage => "📝",
             ViewKind::Milestones => "♦",
+            ViewKind::Overview => "◎",
+            ViewKind::Deliveries => "✉",
+            ViewKind::Report => "📄",
             ViewKind::ResourceSheet => "👥",
             ViewKind::ResourceUsage => "📋",
             ViewKind::Workload => "📶",
@@ -64,7 +82,7 @@ impl ViewKind {
         }
     }
 
-    pub const ALL: [ViewKind; 13] = [
+    pub const ALL: [ViewKind; 16] = [
         ViewKind::Gantt,
         ViewKind::TrackingGantt,
         ViewKind::MultipleBaselines,
@@ -72,6 +90,9 @@ impl ViewKind {
         ViewKind::Board,
         ViewKind::TaskUsage,
         ViewKind::Milestones,
+        ViewKind::Overview,
+        ViewKind::Deliveries,
+        ViewKind::Report,
         ViewKind::Calendar,
         ViewKind::ResourceSheet,
         ViewKind::ResourceUsage,
@@ -93,15 +114,23 @@ pub enum MenuTab {
 
 impl MenuTab {
     pub const ALL: [MenuTab; 6] = [MenuTab::Task, MenuTab::Resource, MenuTab::Project, MenuTab::Report, MenuTab::View, MenuTab::Format];
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
-            MenuTab::Task => "Task",
-            MenuTab::Resource => "Resource",
-            MenuTab::Report => "Report",
-            MenuTab::Project => "Project",
-            MenuTab::View => "View",
-            MenuTab::Format => "Format",
+            MenuTab::Task => "tab.task",
+            MenuTab::Resource => "tab.resource",
+            MenuTab::Report => "tab.report",
+            MenuTab::Project => "tab.project",
+            MenuTab::View => "tab.view",
+            MenuTab::Format => "tab.format",
         }
+    }
+
+    pub fn label(self) -> &'static str {
+        crate::lang::text(self.key())
+    }
+
+    pub fn english(self) -> &'static str {
+        crate::lang::tr(crate::lang::Lang::En, self.key())
     }
 }
 
@@ -118,6 +147,34 @@ pub enum TaskFilter {
     Summary,
 }
 
+/// How a task page groups the rows it already filtered. None leaves the outline (or the toolbar group) as it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum PageGroup {
+    #[default]
+    None,
+    Milestones,
+    Critical,
+    Priority,
+    Resources,
+    Status,
+}
+
+impl PageGroup {
+    pub const ALL: [PageGroup; 6] =
+        [PageGroup::None, PageGroup::Milestones, PageGroup::Critical, PageGroup::Priority, PageGroup::Resources, PageGroup::Status];
+
+    pub fn label(self) -> &'static str {
+        crate::lang::text(match self {
+            PageGroup::None => "group.none",
+            PageGroup::Milestones => "group.milestones",
+            PageGroup::Critical => "group.critical",
+            PageGroup::Priority => "group.priority",
+            PageGroup::Resources => "group.resources",
+            PageGroup::Status => "group.status",
+        })
+    }
+}
+
 impl TaskFilter {
     pub const ALL: [TaskFilter; 8] = [
         TaskFilter::All,
@@ -130,16 +187,16 @@ impl TaskFilter {
         TaskFilter::Unassigned,
     ];
     pub fn label(self) -> &'static str {
-        match self {
-            TaskFilter::All => "All Tasks",
-            TaskFilter::Critical => "Critical",
-            TaskFilter::Incomplete => "Incomplete Tasks",
-            TaskFilter::Completed => "Completed Tasks",
-            TaskFilter::Milestones => "Milestones",
-            TaskFilter::Late => "Late Tasks",
-            TaskFilter::Unassigned => "Unassigned Tasks",
-            TaskFilter::Summary => "Summary Tasks",
-        }
+        crate::lang::text(match self {
+            TaskFilter::All => "filter.all",
+            TaskFilter::Critical => "filter.critical",
+            TaskFilter::Incomplete => "filter.incomplete",
+            TaskFilter::Completed => "filter.completed",
+            TaskFilter::Milestones => "filter.milestones",
+            TaskFilter::Late => "filter.late",
+            TaskFilter::Unassigned => "filter.unassigned",
+            TaskFilter::Summary => "filter.summary",
+        })
     }
 }
 
@@ -279,6 +336,8 @@ pub struct GanttState {
     pub px_per_day: f32,
     pub drag: Option<BarDrag>,
     pub show_critical: bool,
+    /// Highlight the selected task's predecessor and successor chain.
+    pub show_paths: bool,
     pub show_baseline: bool,
     /// Split Task: the next click on a bar splits the task there.
     pub split_mode: bool,
@@ -301,6 +360,7 @@ impl Default for GanttState {
             px_per_day: 24.0,
             drag: None,
             show_critical: false,
+            show_paths: false,
             show_baseline: false,
             split_mode: false,
             baseline_slot: 0,
@@ -403,10 +463,14 @@ pub struct ViewOrder {
     pub sort: Option<(String, bool)>,
     pub group: Option<String>,
     pub collapsed_groups: HashSet<String>,
+    /// Tasks whose notes row is open. Kept per document, not in the plan file.
+    pub notes_open: HashSet<TaskId>,
 }
 
 pub struct UiState {
     pub view: ViewKind,
+    /// Interface language. Dutch unless the user picks English.
+    pub lang: crate::lang::Lang,
     pub menu_tab: MenuTab,
     /// The Start Page is shown instead of the views.
     pub start_page: bool,
@@ -417,8 +481,19 @@ pub struct UiState {
     pub resource_usage_grid: GridState,
     pub misc_grid: GridState,
     pub collapsed: HashSet<TaskId>,
+    /// Tasks whose notes are shown as a row under them. Not stored in the plan.
+    pub notes_open: HashSet<TaskId>,
     pub collapsed_resources: HashSet<ResourceId>,
     pub filter: TaskFilter,
+    /// The activity the task views are narrowed to, plus every view's other criteria.
+    pub focus: Option<ActivityFocus>,
+    pub status_filter: Option<TaskStatus>,
+    pub kind_filter: TaskKindFilter,
+    pub date_window: DateWindow,
+    pub date_from: Option<Date>,
+    pub date_to: Option<Date>,
+    /// Empty means every resource. Otherwise a task must be assigned to one of these.
+    pub filter_resources: Vec<ResourceId>,
     pub search: String,
     /// Sort of task views: field key and descending.
     pub sort: Option<(String, bool)>,
@@ -437,6 +512,22 @@ pub struct UiState {
     pub board: BoardState,
     pub table_width: f32,
     pub timeline_visible: bool,
+    /// The properties pane on the right of the active view.
+    pub properties_visible: bool,
+    /// Width of the properties pane, in points.
+    pub properties_width: f32,
+    /// Design style for this session. Copied from the plan when that plan becomes active.
+    pub chart_style: plancraft_core::model::ChartStyle,
+    /// The document handle `chart_style` was last taken from.
+    pub style_doc: Option<u64>,
+    /// Grouping chosen on the page filter bar.
+    pub page_group: PageGroup,
+    /// Resource pages: a category, or every category.
+    pub resource_category: Option<ResourceCategory>,
+    /// Overview: one resource name, or everyone.
+    pub agenda_resource: Option<String>,
+    /// Overview day strip: show only items that start or finish on this day.
+    pub agenda_day: Option<Date>,
     pub granularity: Granularity,
     pub usage_from: Option<Date>,
     pub timesheet_week: Date,
@@ -454,6 +545,7 @@ impl Default for UiState {
         let monday = plancraft_core::dates::shift_days(today, -(today.weekday().num_days_from_monday() as i64));
         Self {
             view: ViewKind::Gantt,
+            lang: crate::lang::Lang::Nl,
             menu_tab: MenuTab::Task,
             start_page: false,
             sel: Selection::default(),
@@ -463,8 +555,16 @@ impl Default for UiState {
             resource_usage_grid: GridState::default(),
             misc_grid: GridState::default(),
             collapsed: HashSet::new(),
+            notes_open: HashSet::new(),
             collapsed_resources: HashSet::new(),
             filter: TaskFilter::All,
+            focus: None,
+            status_filter: None,
+            kind_filter: TaskKindFilter::All,
+            date_window: DateWindow::All,
+            date_from: None,
+            date_to: None,
+            filter_resources: Vec::new(),
             search: String::new(),
             sort: None,
             group: None,
@@ -477,6 +577,14 @@ impl Default for UiState {
             board: BoardState::default(),
             table_width: 720.0,
             timeline_visible: true,
+            properties_visible: false,
+            properties_width: 340.0,
+            chart_style: plancraft_core::model::ChartStyle::Blue,
+            style_doc: None,
+            page_group: PageGroup::None,
+            resource_category: None,
+            agenda_resource: None,
+            agenda_day: None,
             granularity: Granularity::Day,
             usage_from: None,
             timesheet_week: monday,
@@ -489,7 +597,87 @@ impl Default for UiState {
     }
 }
 
+/// How a focused activity limits the task views.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ActivityFocus {
+    pub task: TaskId,
+    pub scope: FocusScope,
+}
+
+/// Task and subtasks follows the outline. Dependency path follows links both ways.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum FocusScope {
+    #[default]
+    Subtree,
+    Path,
+}
+
+impl FocusScope {
+    pub const ALL: [FocusScope; 2] = [FocusScope::Subtree, FocusScope::Path];
+
+    pub fn label(self) -> &'static str {
+        crate::lang::text(match self {
+            FocusScope::Subtree => "filter.subtree",
+            FocusScope::Path => "filter.path",
+        })
+    }
+}
+
+/// Tasks, milestones or groups. `All` leaves the outline as it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TaskKindFilter {
+    #[default]
+    All,
+    Tasks,
+    Milestones,
+    Groups,
+}
+
+impl TaskKindFilter {
+    pub const ALL: [TaskKindFilter; 4] = [TaskKindFilter::All, TaskKindFilter::Tasks, TaskKindFilter::Milestones, TaskKindFilter::Groups];
+
+    pub fn label(self) -> &'static str {
+        crate::lang::text(match self {
+            TaskKindFilter::All => "filter.type_all",
+            TaskKindFilter::Tasks => "filter.tasks",
+            TaskKindFilter::Milestones => "filter.milestones",
+            TaskKindFilter::Groups => "filter.groups",
+        })
+    }
+}
+
+/// Which dates a task view keeps. `Range` uses [`UiState::date_from`] and [`UiState::date_to`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum DateWindow {
+    #[default]
+    All,
+    Overdue,
+    ThisWeek,
+    NextTwoWeeks,
+    Range,
+}
+
+impl DateWindow {
+    pub const ALL: [DateWindow; 5] =
+        [DateWindow::All, DateWindow::Overdue, DateWindow::ThisWeek, DateWindow::NextTwoWeeks, DateWindow::Range];
+
+    pub fn label(self) -> &'static str {
+        crate::lang::text(match self {
+            DateWindow::All => "filter.dates_all",
+            DateWindow::Overdue => "filter.overdue",
+            DateWindow::ThisWeek => "filter.this_week",
+            DateWindow::NextTwoWeeks => "filter.next_two",
+            DateWindow::Range => "filter.date_range",
+        })
+    }
+}
+
 impl UiState {
+    /// The label for `key` in this session's language.
+    pub fn t(&self, key: &'static str) -> &'static str {
+        crate::lang::tr(self.lang, key)
+    }
+
     pub fn toast(&mut self, kind: ToastKind, text: impl Into<String>) {
         self.toasts.push(Toast { text: text.into(), kind, at: Instant::now() });
     }

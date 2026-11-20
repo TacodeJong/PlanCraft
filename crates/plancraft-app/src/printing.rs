@@ -35,10 +35,11 @@ pub enum PrintView {
     Resources,
     Network,
     Board,
+    Report,
 }
 
 impl PrintView {
-    pub const ALL: [PrintView; 7] = [
+    pub const ALL: [PrintView; 8] = [
         PrintView::Gantt,
         PrintView::Tracking,
         PrintView::Baselines,
@@ -46,6 +47,7 @@ impl PrintView {
         PrintView::Resources,
         PrintView::Network,
         PrintView::Board,
+        PrintView::Report,
     ];
 
     pub fn label(self) -> &'static str {
@@ -57,6 +59,7 @@ impl PrintView {
             PrintView::Resources => "Resource Sheet",
             PrintView::Network => "Network Diagram",
             PrintView::Board => "Task Board",
+            PrintView::Report => "Report",
         }
     }
 
@@ -73,6 +76,7 @@ impl PrintView {
             ViewKind::ResourceSheet | ViewKind::ResourceUsage | ViewKind::Workload | ViewKind::TeamPlanner => PrintView::Resources,
             ViewKind::NetworkDiagram => PrintView::Network,
             ViewKind::Board => PrintView::Board,
+            ViewKind::Report => PrintView::Report,
             _ => PrintView::Gantt,
         }
     }
@@ -149,6 +153,7 @@ fn task_sheet(p: &Project, st: &UiState, title: &str, pal: &Palette, all_columns
                 }
                 Some(PrintRow { kind: RowKind::Task(t.id), cells })
             }
+            Row::Notes(_) => None,
             Row::Group(g) => {
                 let tasks = g.tasks.iter().filter_map(|&i| p.tasks.get(i));
                 let start = tasks.clone().filter_map(|t| t.sched.start).min();
@@ -191,6 +196,7 @@ pub fn sheet(p: &Project, st: &UiState, view: PrintView, all_columns: bool) -> (
         // Without a chart there is no divider: the whole table prints.
         PrintView::TaskTable => (task_sheet(p, st, view.label(), &pal, true), None),
         PrintView::Resources => (views::resource_sheet::print_sheet(p, &pal), None),
+        PrintView::Report => (views::report::sheet(p, st), None),
         // Drawings are not sheets (see `drawing`); an empty sheet if asked anyway.
         PrintView::Network | PrintView::Board => (Sheet { title: view.label().into(), columns: Vec::new(), rows: Vec::new() }, None),
     }
@@ -211,7 +217,7 @@ fn drawing(p: &Project, st: &UiState, view: PrintView) -> (Vec<print::Item>, f32
                     rows: rows.into_iter().filter(|&i| p.tasks.get(i).is_some_and(|t| views::task_matches(p, st, t))).collect(),
                 })
                 .collect();
-            print::board::items(p, &columns, &pal)
+            print::board::items_labeled(p, &columns, &pal, &board_words())
         }
         _ => {
             let net = &st.network;
@@ -256,7 +262,32 @@ pub fn document(
         to,
         printed: plancraft_core::dates::now(),
         palette: Palette::default(),
+        legend: legend_words(),
     })
+}
+
+fn legend_words() -> print::LegendWords {
+    print::LegendWords {
+        project: crate::lang::text("print.project"),
+        date: crate::lang::text("print.date"),
+        task: crate::lang::text("print.task"),
+        milestone: crate::lang::text("print.milestone"),
+        summary: crate::lang::text("print.summary"),
+        manual: crate::lang::text("print.manual"),
+        inactive: crate::lang::text("print.inactive"),
+        deadline: crate::lang::text("print.deadline"),
+        critical: crate::lang::text("print.critical"),
+        progress: crate::lang::text("print.progress"),
+        slack: crate::lang::text("print.slack"),
+    }
+}
+
+fn board_words() -> print::board::CardWords {
+    print::board::CardWords {
+        due: crate::lang::text("print.due"),
+        unassigned: crate::lang::text("print.unassigned"),
+        empty: crate::lang::text("print.no_columns"),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -491,7 +522,10 @@ mod tests {
             assert!(all.iter().any(|t| t == view.label()), "the footer names the view: {all:?}");
             match view {
                 PrintView::Network => assert!(all.iter().any(|t| t.starts_with("Start: "))),
-                _ => assert!(all.iter().any(|t| t == "Not Started") && all.iter().any(|t| t.starts_with("Due "))),
+                _ => {
+                    let due = format!("{} ", crate::lang::text("print.due"));
+                    assert!(all.iter().any(|t| t == "Not Started") && all.iter().any(|t| t.starts_with(&due)));
+                }
             }
             assert!(print::pdf::write(&doc).starts_with(b"%PDF"));
         }
@@ -501,7 +535,8 @@ mod tests {
             for page in &document(&p, st, view, &setup, None, None).pages {
                 texts(&page.items, &mut all);
             }
-            all.iter().filter(|t| t.starts_with("Start: ") || t.starts_with("Due ")).count()
+            let due = format!("{} ", crate::lang::text("print.due"));
+            all.iter().filter(|t| t.starts_with("Start: ") || t.starts_with(&due)).count()
         };
         let (net, board) = (count(&st, PrintView::Network), count(&st, PrintView::Board));
         st.filter = crate::state::TaskFilter::Milestones;

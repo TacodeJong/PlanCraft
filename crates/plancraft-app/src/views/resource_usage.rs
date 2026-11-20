@@ -73,6 +73,9 @@ pub fn step(g: Granularity, d: Date, n: i32) -> Date {
 }
 
 pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: &mut Vec<Command>) {
+    let total = doc.project.resources.len();
+    let shown = doc.project.resources.iter().filter(|r| super::filter_bar::resource_matches(st, r)).count();
+    let rect = super::filter_bar::resources(ui, rect, st, shown, total);
     let mut toolbar =
         ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(rect.min + vec2(8.0, 4.0), vec2(rect.width() - 16.0, 24.0))));
     let from = period_toolbar(&mut toolbar, st, &doc.project);
@@ -92,6 +95,9 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
     let mut rows: Vec<Row> = Vec::new();
     // The report lists resources in project order.
     for (r, rl) in p.resources.iter().zip(&report.resources) {
+        if !super::filter_bar::resource_matches(st, r) {
+            continue;
+        }
         rows.push(Row::Resource(r, rl));
         if !st.collapsed_resources.contains(&r.id) {
             rows.extend(rl.assignments.iter().map(|a| Row::Assignment(r, a)));
@@ -112,6 +118,8 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
         row_height: theme::ROW_HEIGHT,
         row_key: None,
         row_drag: false,
+        outline_arrows: false,
+        quick_name: None,
     };
     let left = Rect::from_min_size(rect.min, vec2(left_w, rect.height()));
     let output = {

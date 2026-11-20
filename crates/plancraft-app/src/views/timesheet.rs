@@ -132,6 +132,8 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState) {
         row_height: theme::ROW_HEIGHT,
         row_key: None,
         row_drag: false,
+        outline_arrows: false,
+        quick_name: None,
     };
     let output = {
         let lines = &lines;
@@ -195,7 +197,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState) {
         grid::show(ui, rect, &mut st.misc_grid, &cfg, &|_| false, &mut cell)
     };
     for ev in output.events {
-        if let GridEvent::Commit { row, col, text } = ev {
+        if let GridEvent::Commit { row, col, text, .. } = ev {
             let (Some(l), Some(&d)) = (lines.get(row).cloned(), col.checked_sub(2).and_then(|k| days.get(k))) else {
                 continue;
             };

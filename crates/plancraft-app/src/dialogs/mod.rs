@@ -1,14 +1,18 @@
 //! Modal-style windows.
 
+pub mod ai;
 pub mod baseline;
 pub mod custom_fields;
+pub mod distill;
 pub mod find;
 pub mod import;
 pub mod mcp_panel;
 pub mod misc;
 pub mod print;
 pub mod project_info;
+pub mod quick_entry;
 pub mod recurring;
+pub mod resource_delete;
 pub mod resource_info;
 pub mod server;
 pub mod task_info;
@@ -60,6 +64,7 @@ pub struct Dialogs {
     pub recurring: Option<Bound<recurring::RecurringTask>>,
     /// Follows the active document's selection; reset when the active document changes.
     pub assign: Option<Bound<misc::AssignResources>>,
+    pub resource_delete: Option<Bound<resource_delete::ResourceDelete>>,
     pub external: Option<Bound<misc::ExternalLinks>>,
     /// Import Spreadsheet windows, shown one at a time (not bound to a document: each makes a new
     /// one). Several files opened at once each get their turn.
@@ -68,4 +73,8 @@ pub struct Dialogs {
     pub about: bool,
     pub history: bool,
     pub mcp: bool,
+    pub distill: Option<Bound<distill::Distill>>,
+    pub quick: Option<Bound<quick_entry::QuickEntry>>,
+    pub ai_open: bool,
+    pub ai: ai::AiState,
 }

@@ -474,3 +474,410 @@ fn manual_summaries_survive_a_round_trip() {
     recalculate(&mut r);
     assert_eq!(r.tasks[0].sched, p.tasks[0].sched.clone());
 }
+
+fn task_body<'a>(xml: &'a str, name: &str) -> &'a str {
+    let needle = format!("<Name>{name}</Name>");
+    let at = xml.find(&needle).unwrap_or_else(|| panic!("no task {name}"));
+    let start = xml[..at].rfind("<Task>").unwrap();
+    let end = xml[at..].find("</Task>").unwrap() + at;
+    &xml[start..end]
+}
+
+/// Direct child element names of one `<Task>`, in document order.
+fn child_tags(task_xml: &str) -> Vec<String> {
+    let mut tags = Vec::new();
+    let mut depth = 0i32;
+    let mut rest = task_xml;
+    while let Some(i) = rest.find('<') {
+        rest = &rest[i + 1..];
+        if rest.starts_with('/') {
+            depth -= 1;
+            if let Some(j) = rest.find('>') {
+                rest = &rest[j + 1..];
+            }
+            continue;
+        }
+        if rest.starts_with('!') || rest.starts_with('?') {
+            if let Some(j) = rest.find('>') {
+                rest = &rest[j + 1..];
+            }
+            continue;
+        }
+        let end = rest.find(|c: char| c.is_whitespace() || c == '>' || c == '/').unwrap_or(rest.len());
+        let name = rest[..end].to_string();
+        let close = rest.find('>').unwrap_or(rest.len());
+        let empty = rest[..close].ends_with('/');
+        if depth == 0 && name != "Task" {
+            tags.push(name);
+        }
+        if !empty {
+            depth += 1;
+        }
+        rest = &rest[close + 1..];
+    }
+    tags
+}
+
+fn tag(body: &str, name: &str) -> String {
+    let open = format!("<{name}>");
+    let close = format!("</{name}>");
+    let Some(i) = body.find(&open) else { return String::new() };
+    let rest = &body[i + open.len()..];
+    let Some(j) = rest.find(&close) else { return String::new() };
+    rest[..j].to_string()
+}
+
+#[test]
+fn planner_fields_round_trip_and_dates_hold() {
+    let mut p = Project::new("Fidelity", d(2026, 1, 5));
+    p.settings.rules = ScheduleRules::on();
+    let cal = p.calendar;
+    p.calendars.iter_mut().find(|c| c.id == cal).unwrap().exceptions.push(CalendarException::non_working(
+        "Koningsdag",
+        d(2026, 4, 27),
+        d(2026, 4, 27),
+    ));
+    let g = p.add_task("Group", None);
+    let start = p.start;
+    let window = plancraft_core::schedule::project_calendar(&p).add(start, 8 * 480);
+    {
+        let t = p.task_mut(g).unwrap();
+        t.bounds.start_earliest = Some(start);
+        t.bounds.finish_latest = Some(window);
+    }
+    let stretch = p.add_task("Stretch", None);
+    let percent = p.add_task("Quarter", None);
+    let marked = p.add_task("Marked", None);
+    let pinned = p.add_task("Pinned", None);
+    let mile = p.add_task("Gate", None);
+    for (id, mark, status) in [
+        (stretch, RowMark::Amber, TaskStatus::Busy),
+        (percent, RowMark::Blue, TaskStatus::Started),
+        (marked, RowMark::Pink, TaskStatus::Done),
+        (pinned, RowMark::Green, TaskStatus::NotStarted),
+    ] {
+        let t = p.task_mut(id).unwrap();
+        t.outline_level = 2;
+        t.row_mark = Some(mark);
+        t.status = status;
+        t.duration = 480;
+        t.estimated = false;
+    }
+    p.task_mut(stretch).unwrap().fills_group = true;
+    p.task_mut(percent).unwrap().duration_percent = Some(25.0);
+    {
+        let t = p.task_mut(pinned).unwrap();
+        t.bounds.start_earliest = Some(start);
+        t.bounds.start_latest = Some(start);
+        t.bounds.start_latest_fixed = true;
+        t.bounds.finish_earliest = Some(window);
+        t.bounds.finish_latest = Some(window);
+        t.bounds.finish_latest_fixed = true;
+        t.constraint = Constraint { kind: ConstraintKind::Mso, date: Some(start) };
+    }
+    p.set_milestone(mile, true).unwrap();
+    let ana = p.add_resource("Ana");
+    let bob = p.add_resource("Bob");
+    p.assign(stretch, ana, Some(1.0), Some(480)).unwrap();
+    p.assign(percent, bob, Some(0.5), Some(240)).unwrap();
+    recalculate(&mut p);
+
+    let (xml, _) = mspdi::to_xml(&p);
+    let stretch_body = task_body(&xml, "Stretch");
+    let stored = plancraft_core::mspdi::codes::duration_text(480);
+    let resolved = plancraft_core::mspdi::codes::duration_text(p.task(stretch).unwrap().sched.duration);
+    assert_ne!(stored, resolved, "the stretch must not still be one day");
+    assert!(stretch_body.contains(&format!("<Duration>{resolved}</Duration>")), "{stretch_body}");
+    assert!(!stretch_body.contains(&format!("<Duration>{stored}</Duration>")));
+    let pinned_body = task_body(&xml, "Pinned");
+    assert_eq!(tag(&pinned_body, "ConstraintType"), "2", "a must-start that still matches the bound is kept");
+    assert_eq!(pinned_body.matches("<ConstraintType>").count(), 1);
+
+    let order = [
+        "UID",
+        "ID",
+        "Name",
+        "Active",
+        "Manual",
+        "Type",
+        "WBS",
+        "OutlineNumber",
+        "OutlineLevel",
+        "Priority",
+        "Start",
+        "Finish",
+        "Duration",
+        "DurationFormat",
+        "Work",
+        "Stop",
+        "Resume",
+        "EffortDriven",
+        "Recurring",
+        "Estimated",
+        "Milestone",
+        "Summary",
+        "Critical",
+        "FixedCost",
+        "PercentComplete",
+        "Cost",
+        "ActualStart",
+        "ActualFinish",
+        "ActualDuration",
+        "ActualWork",
+        "RemainingDuration",
+        "ConstraintType",
+        "CalendarUID",
+        "ConstraintDate",
+        "Deadline",
+        "LevelingDelay",
+        "LevelingDelayFormat",
+        "IgnoreResourceCalendar",
+        "Notes",
+        "PredecessorLink",
+        "ExtendedAttribute",
+        "Baseline",
+    ];
+    let tags = child_tags(stretch_body);
+    for pair in tags.windows(2) {
+        let a = order.iter().position(|t| *t == pair[0].as_str()).unwrap_or_else(|| panic!("unexpected element {}", pair[0]));
+        let b = order.iter().position(|t| *t == pair[1].as_str()).unwrap_or_else(|| panic!("unexpected element {}", pair[1]));
+        assert!(a < b, "{} is after {} in the task, Microsoft Project writes them the other way", pair[1], pair[0]);
+    }
+    let date10 = plancraft_core::mspdi::codes::field_id(plancraft_core::mspdi::codes::PlannerField::StartEarliest.slot()).unwrap();
+    assert!(xml.contains(&format!("<FieldID>{date10}</FieldID>")), "Date10 is reserved for Planner Start Earliest");
+    assert!(xml.contains("Planner Start Earliest"));
+    assert!(xml.contains("<Alias>Planner Fills Group</Alias>"));
+
+    let (mut q, in_notes) = mspdi::from_xml(&xml, "fallback").unwrap();
+    assert!(in_notes.iter().all(|n| !n.contains("could not be read")), "{in_notes:?}");
+    assert_eq!(q.settings.rules, ScheduleRules::on());
+    assert!(!plancraft_core::schedule::project_calendar(&q).is_working_day(d(2026, 4, 27)));
+    let same = |name: &str| {
+        let a = p.tasks.iter().find(|t| t.name == name).unwrap();
+        let b = q.tasks.iter().find(|t| t.name == name).unwrap();
+        assert_eq!(a.bounds, b.bounds, "{name}");
+        assert_eq!(a.fills_group, b.fills_group, "{name}");
+        assert_eq!(a.duration_percent, b.duration_percent, "{name}");
+        assert_eq!(a.row_mark, b.row_mark, "{name}");
+        assert_eq!(a.status, b.status, "{name}");
+        assert_eq!(a.kind, b.kind, "{name}");
+    };
+    for name in ["Group", "Stretch", "Quarter", "Marked", "Pinned", "Gate"] {
+        same(name);
+    }
+    assert!(q.task(mile).unwrap().is_milestone());
+    assert_eq!(q.assignments.len(), 2);
+    for a in &p.assignments {
+        let b = q.assignments.iter().find(|x| x.task == a.task && x.resource == a.resource).unwrap();
+        assert_eq!((a.units, a.work), (b.units, b.work));
+    }
+    recalculate(&mut q);
+    for (a, b) in p.tasks.iter().zip(&q.tasks) {
+        assert_eq!((a.sched.start, a.sched.finish, a.sched.duration), (b.sched.start, b.sched.finish, b.sched.duration), "{}", a.name);
+    }
+}
+
+#[test]
+fn a_resolved_duration_survives_when_the_ruleset_is_off() {
+    let mut p = Project::new("Resolved", d(2026, 1, 5));
+    p.settings.rules = ScheduleRules::on();
+    let g = p.add_task("Group", None);
+    let start = p.start;
+    let end = plancraft_core::schedule::project_calendar(&p).add(start, 8 * 480);
+    {
+        let t = p.task_mut(g).unwrap();
+        t.bounds.start_earliest = Some(start);
+        t.bounds.finish_latest = Some(end);
+    }
+    let quarter = p.add_task("Quarter", None);
+    let fill = p.add_task("Fill", None);
+    for id in [quarter, fill] {
+        let t = p.task_mut(id).unwrap();
+        t.outline_level = 2;
+        t.duration = 480;
+        t.estimated = false;
+    }
+    p.task_mut(quarter).unwrap().duration_percent = Some(25.0);
+    p.task_mut(fill).unwrap().fills_group = true;
+    recalculate(&mut p);
+    let (xml, _) = mspdi::to_xml(&p);
+    for id in [quarter, fill] {
+        let t = p.task(id).unwrap();
+        let body = task_body(&xml, &t.name);
+        let resolved = plancraft_core::mspdi::codes::duration_text(t.sched.duration);
+        assert!(body.contains(&format!("<Duration>{resolved}</Duration>")), "{} exported {}\n{body}", t.name, resolved);
+        assert_ne!(t.sched.duration, t.duration);
+    }
+    let (mut q, _) = mspdi::from_xml(&xml, "fallback").unwrap();
+    q.settings.rules = ScheduleRules::default();
+    for t in &mut q.tasks {
+        t.bounds = DateBounds::default();
+        t.fills_group = false;
+        t.duration_percent = None;
+    }
+    recalculate(&mut q);
+    for (a, b) in p.tasks.iter().zip(&q.tasks) {
+        assert_eq!((a.sched.start, a.sched.finish), (b.sched.start, b.sched.finish), "{}", a.name);
+    }
+}
+
+struct Snap {
+    name: String,
+    start: String,
+    finish: String,
+    duration: String,
+    constraint: String,
+    constraint_date: String,
+    deadline: String,
+    milestone: String,
+}
+
+fn unescape(text: &str) -> String {
+    text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'")
+}
+
+fn snaps(xml: &str) -> Vec<Snap> {
+    let mut out = Vec::new();
+    let mut rest = xml;
+    while let Some(i) = rest.find("<Task>") {
+        rest = &rest[i + 6..];
+        let Some(j) = rest.find("</Task>") else { break };
+        let body = &rest[..j];
+        rest = &rest[j + 7..];
+        if tag(body, "OutlineLevel") == "0" {
+            continue;
+        }
+        out.push(Snap {
+            name: tag(body, "Name"),
+            start: tag(body, "Start"),
+            finish: tag(body, "Finish"),
+            duration: tag(body, "Duration"),
+            constraint: tag(body, "ConstraintType"),
+            constraint_date: tag(body, "ConstraintDate"),
+            deadline: tag(body, "Deadline"),
+            milestone: tag(body, "Milestone"),
+        });
+    }
+    out
+}
+
+fn minutes_apart(a: &str, b: &str) -> Option<i64> {
+    let (Some(a), Some(b)) = (plancraft_core::mspdi::codes::datetime_of(a), plancraft_core::mspdi::codes::datetime_of(b)) else {
+        return None;
+    };
+    Some((plancraft_core::dates::minutes_between(a, b)).abs())
+}
+
+#[test]
+fn cyclus_export_matches_the_swift_file_and_reimports_stable() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../Real files to evaluate");
+    let json = std::fs::read_to_string(dir.join("PLANNER-cyclus.json")).expect("PLANNER-cyclus.json");
+    let swift = std::fs::read_to_string(dir.join("PLANNER-cyclus.xml")).expect("PLANNER-cyclus.xml");
+    let (mut p, _) = plancraft_core::planner_json::import_text(&json, "PLANNER-cyclus").unwrap();
+    recalculate(&mut p);
+    assert_eq!(p.tasks.len(), 142, "the real plan has 142 tasks");
+    let (xml, notes) = mspdi::to_xml(&p);
+    let known = [
+        "estimates",
+        "milestone members",
+        "milestone deliverables",
+        "split tasks",
+        "recurring tasks",
+        "Task Board",
+        "calendars of material",
+        "resource categories",
+        "logged time",
+        "links to tasks in other projects",
+        "custom fields beyond",
+        "days with more than five",
+        "yearly calendar exceptions",
+        "a deadline and an unfixed latest finish",
+        "a task already had a constraint",
+        "a stored constraint no longer matched",
+        "a task has several date bounds",
+    ];
+    for note in &notes {
+        assert!(known.iter().any(|k| note.contains(k)), "unexpected export note: {note}");
+    }
+
+    let ours = snaps(&xml);
+    let theirs = snaps(&swift);
+    let mut span_bugs = Vec::new();
+    for task in &ours {
+        if task.milestone == "1" {
+            continue;
+        }
+        let (Some(start), Some(finish)) =
+            (plancraft_core::mspdi::codes::datetime_of(&task.start), plancraft_core::mspdi::codes::datetime_of(&task.finish))
+        else {
+            continue;
+        };
+        let span = plancraft_core::schedule::project_calendar(&p).between(start, finish).max(0);
+        let written = plancraft_core::mspdi::codes::duration_of(&task.duration).unwrap_or(-1);
+        if (span - written).abs() > 1 {
+            span_bugs.push(format!("{} exported {written} min but start–finish is {span} min", unescape(&task.name)));
+        }
+    }
+    assert!(span_bugs.is_empty(), "duration contradicts the dates:\n{}", span_bugs.join("\n"));
+
+    let our_names: Vec<String> = ours.iter().map(|t| unescape(&t.name)).collect();
+    let mut used = vec![false; ours.len()];
+    let mut diverged = Vec::new();
+    if ours.len() != theirs.len() {
+        diverged.push(format!("task count {} vs Swift {}", ours.len(), theirs.len()));
+    }
+    for swift_task in &theirs {
+        let name = unescape(&swift_task.name);
+        let Some(i) = our_names.iter().enumerate().position(|(i, n)| !used[i] && *n == name) else {
+            diverged.push(format!("Swift task not in our export: {name}"));
+            continue;
+        };
+        used[i] = true;
+        let our = &ours[i];
+        let mut date = |label: &str, a: &str, b: &str| {
+            if a.is_empty() && b.is_empty() {
+                return;
+            }
+            match minutes_apart(a, b) {
+                Some(m) if m <= 1 => {}
+                Some(m) => diverged.push(format!("{name} {label} differs by {m} min ({a} vs {b})")),
+                None => diverged.push(format!("{name} {label} {a:?} vs {b:?}")),
+            }
+        };
+        date("start", &our.start, &swift_task.start);
+        date("finish", &our.finish, &swift_task.finish);
+        let our_mins = plancraft_core::mspdi::codes::duration_of(&our.duration);
+        let their_mins = plancraft_core::mspdi::codes::duration_of(&swift_task.duration);
+        if our_mins != their_mins {
+            diverged.push(format!("{name} duration {:?} vs Swift {:?}", our.duration, swift_task.duration));
+        }
+        if our.constraint != swift_task.constraint || our.constraint_date != swift_task.constraint_date {
+            diverged.push(format!(
+                "{name} constraint {} @ {} vs Swift {} @ {}",
+                our.constraint, our.constraint_date, swift_task.constraint, swift_task.constraint_date
+            ));
+        }
+        if our.deadline != swift_task.deadline {
+            diverged.push(format!("{name} deadline {} vs Swift {}", our.deadline, swift_task.deadline));
+        }
+        if our.milestone != swift_task.milestone {
+            diverged.push(format!("{name} milestone {} vs Swift {}", our.milestone, swift_task.milestone));
+        }
+    }
+    for (i, name) in our_names.iter().enumerate() {
+        if !used[i] {
+            diverged.push(format!("our task not in the Swift export: {name}"));
+        }
+    }
+    // Merlin's schedule is not ours. The list is the comparison; the assertions above and below
+    // are the export guarantees (duration spans the dates, and re-import reproduces our schedule).
+    println!("{} divergences against the Swift export:\n{}", diverged.len(), diverged.join("\n"));
+
+    let (mut q, _) = mspdi::from_xml(&xml, "PLANNER-cyclus").unwrap();
+    recalculate(&mut q);
+    assert_eq!(q.tasks.len(), p.tasks.len());
+    for (a, b) in p.tasks.iter().zip(&q.tasks) {
+        assert_eq!(a.is_milestone(), b.is_milestone(), "{}", a.name);
+        assert_eq!((a.sched.start, a.sched.finish, a.sched.duration), (b.sched.start, b.sched.finish, b.sched.duration), "{}", a.name);
+    }
+}

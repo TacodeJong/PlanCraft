@@ -10,6 +10,111 @@ use plancraft_core::io::{Privacy, create_private_dir, write_atomic};
 
 use serde::{Deserialize, Serialize};
 
+/// What a launch with no document already open should show.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Startup {
+    #[default]
+    LastFile,
+    Blank,
+    StartPage,
+}
+
+impl Startup {
+    pub const ALL: [Startup; 3] = [Startup::LastFile, Startup::Blank, Startup::StartPage];
+
+    pub fn label(self) -> &'static str {
+        crate::lang::text(match self {
+            Startup::LastFile => "startup.last",
+            Startup::Blank => "startup.blank",
+            Startup::StartPage => "startup.page",
+        })
+    }
+}
+
+/// The launch decision when the window is created. A document that is already open is left alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Launch {
+    /// Stay with the start page, or with the document that is already open.
+    Keep,
+    OpenRecent,
+    Blank,
+}
+
+pub fn launch(has_doc: bool, startup: Startup, recent_is_file: bool) -> Launch {
+    if has_doc {
+        return Launch::Keep;
+    }
+    match startup {
+        Startup::StartPage => Launch::Keep,
+        Startup::LastFile if recent_is_file => Launch::OpenRecent,
+        Startup::LastFile => Launch::Keep,
+        Startup::Blank => Launch::Blank,
+    }
+}
+
+fn overview_on_launch() -> bool {
+    true
+}
+
+/// Which chat service Distill calls. The API key for each one lives in the system key store.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiProvider {
+    #[default]
+    OpenAi,
+    Anthropic,
+    Xai,
+    Compatible,
+}
+
+impl AiProvider {
+    pub const ALL: [AiProvider; 4] = [AiProvider::OpenAi, AiProvider::Anthropic, AiProvider::Xai, AiProvider::Compatible];
+
+    pub fn account(self) -> &'static str {
+        match self {
+            AiProvider::OpenAi => "openai",
+            AiProvider::Anthropic => "anthropic",
+            AiProvider::Xai => "xai",
+            AiProvider::Compatible => "compatible",
+        }
+    }
+
+    pub fn default_model(self) -> &'static str {
+        match self {
+            AiProvider::OpenAi => "gpt-4o-mini",
+            AiProvider::Anthropic => "claude-sonnet-4-5",
+            AiProvider::Xai => "grok-3",
+            AiProvider::Compatible => "",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        crate::lang::text(match self {
+            AiProvider::OpenAi => "distill.provider.openai",
+            AiProvider::Anthropic => "distill.provider.anthropic",
+            AiProvider::Xai => "distill.provider.xai",
+            AiProvider::Compatible => "distill.provider.custom",
+        })
+    }
+}
+
+/// Distill's chosen service. The API key is not a field here and is never serialized.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AiSettings {
+    pub provider: AiProvider,
+    pub model: String,
+    /// Base URL for an OpenAI-compatible service, such as `https://example.com/v1`.
+    pub base_url: String,
+}
+
+impl Default for AiSettings {
+    fn default() -> Self {
+        Self { provider: AiProvider::OpenAi, model: AiProvider::OpenAi.default_model().to_string(), base_url: String::new() }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
@@ -18,6 +123,13 @@ pub struct AppSettings {
     pub mcp_autostart: bool,
     pub table_width: f32,
     pub theme: crate::theme::ThemeChoice,
+    /// Interface language. Dutch when the file does not say.
+    pub lang: crate::lang::Lang,
+    pub startup: Startup,
+    /// A launch that opens a project lands on the overview.
+    #[serde(default = "overview_on_launch")]
+    pub open_to_overview: bool,
+    pub ai: AiSettings,
     /// Servers plans were opened from, last used first (never a password).
     pub servers: Vec<KnownServer>,
 }
@@ -56,6 +168,10 @@ impl Default for AppSettings {
             mcp_autostart: false,
             table_width: 720.0,
             theme: crate::theme::ThemeChoice::System,
+            lang: crate::lang::Lang::Nl,
+            startup: Startup::LastFile,
+            open_to_overview: true,
+            ai: AiSettings::default(),
             servers: Vec::new(),
         }
     }
@@ -110,6 +226,9 @@ impl AppSettings {
             short(&mut k.name);
         }
         self.servers.retain(|k| !k.address.is_empty());
+        let clip = |s: &mut String, n: usize| *s = s.chars().filter(|c| !c.is_control()).take(n).collect();
+        clip(&mut self.ai.model, 200);
+        clip(&mut self.ai.base_url, 500);
         self
     }
 
@@ -184,6 +303,31 @@ mod tests {
         assert_eq!((s.mcp_port, s.table_width), (7878, 720.0));
         std::fs::write(&path, vec![b' '; (MAX_SETTINGS_BYTES + 1) as usize]).unwrap();
         assert_eq!(AppSettings::load_from(&path).mcp_port, 7878);
+    }
+
+    #[test]
+    fn launch_leaves_an_open_plan_and_an_empty_recent_list_alone() {
+        assert_eq!(launch(true, Startup::Blank, true), Launch::Keep);
+        assert_eq!(launch(false, Startup::LastFile, false), Launch::Keep);
+        assert_eq!(launch(false, Startup::LastFile, true), Launch::OpenRecent);
+        assert_eq!(launch(false, Startup::Blank, false), Launch::Blank);
+        assert_eq!(launch(false, Startup::StartPage, true), Launch::Keep);
+        let secret = "sk-live-secret-DO-NOT-STORE";
+        let mut s = AppSettings::default();
+        s.ai.model = "gpt-4o-mini".into();
+        s.ai.base_url = "https://example.com/v1".into();
+        let text = serde_json::to_string(&s).unwrap();
+        assert!(!text.contains(secret), "{text}");
+        assert!(!text.contains("api_key") && !text.contains("apiKey"), "{text}");
+        let raw = format!(r#"{{"ai":{{"model":"m","api_key":"{secret}"}}}}"#);
+        let back: AppSettings = serde_json::from_str(&raw).unwrap();
+        let again = serde_json::to_string(&back).unwrap();
+        assert!(!again.contains(secret), "{again}");
+        assert_eq!(back.ai.model, "m");
+        let back: AppSettings = serde_json::from_str(r#"{"startup":"blank","open_to_overview":false}"#).unwrap();
+        assert_eq!((back.startup, back.open_to_overview), (Startup::Blank, false));
+        let old: AppSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!((old.startup, old.open_to_overview), (Startup::LastFile, true));
     }
 
     #[test]

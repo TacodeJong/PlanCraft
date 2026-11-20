@@ -278,6 +278,71 @@ fn predecessor_text_round_trip() {
 }
 
 #[test]
+fn a_group_shows_the_resources_of_its_tasks() {
+    let mut p = project();
+    let group = task(&mut p, "Group", 1);
+    let a = task(&mut p, "A", 1);
+    let sub = task(&mut p, "Sub", 1);
+    let b = task(&mut p, "B", 1);
+    let c = task(&mut p, "C", 1);
+    p.task_mut(a).unwrap().outline_level = 2;
+    p.task_mut(sub).unwrap().outline_level = 2;
+    p.task_mut(b).unwrap().outline_level = 3;
+    p.task_mut(c).unwrap().outline_level = 3;
+    let ana = p.add_resource("Ana");
+    let ben = p.add_resource("Ben");
+    p.assign(a, ana, None, None).unwrap();
+    p.assign(b, ben, None, None).unwrap();
+    p.assign(c, ana, Some(0.5), None).unwrap();
+    assert_eq!(p.format_resource_names(a), "Ana");
+    assert_eq!(p.format_resource_names(sub), "Ben,Ana[50%]");
+    assert_eq!(p.format_resource_names(group), "Ana,Ben");
+    let err = p.assign(group, ana, None, None).unwrap_err();
+    assert!(err.to_string().contains("group's resources"), "{err}");
+}
+
+#[test]
+fn path_roles_walk_both_ways_and_keep_the_nearest_link() {
+    let mut p = project();
+    let a = task(&mut p, "A", 1);
+    let b = task(&mut p, "B", 1);
+    let c = task(&mut p, "C", 1);
+    let d = task(&mut p, "D", 1);
+    p.link(a.into(), b, LinkType::FS, Lag::None).unwrap();
+    p.link(b.into(), c, LinkType::FS, Lag::None).unwrap();
+    p.link(c.into(), d, LinkType::FS, Lag::None).unwrap();
+    let roles = p.path_roles(&[b]);
+    assert_eq!(roles.get(&b), Some(&PathRole::Selected));
+    assert_eq!(roles.get(&a), Some(&PathRole::Direct));
+    assert_eq!(roles.get(&c), Some(&PathRole::Direct));
+    assert_eq!(roles.get(&d), Some(&PathRole::Indirect));
+    let both = p.path_roles(&[a, d]);
+    assert_eq!(both.get(&a), Some(&PathRole::Selected));
+    assert_eq!(both.get(&b), Some(&PathRole::Direct));
+    assert_eq!(both.get(&c), Some(&PathRole::Direct));
+}
+
+#[test]
+fn replacing_a_resource_moves_its_assignments_and_logged_time() {
+    let mut p = project();
+    let t = task(&mut p, "Build", 2);
+    let other = task(&mut p, "Review", 1);
+    let ana = p.add_resource("Ana");
+    let ben = p.add_resource("Ben");
+    p.assign(t, ana, Some(0.5), Some(120)).unwrap();
+    p.assign(t, ben, None, None).unwrap();
+    p.assign(other, ana, None, None).unwrap();
+    p.log_time(other, ana, d(2026, 10, 19), 60, "notes").unwrap();
+    p.replace_resource(ana, ben).unwrap();
+    assert!(p.resource(ana).is_none());
+    assert_eq!(p.assignments.iter().filter(|a| a.task == t).count(), 1);
+    assert_eq!(p.assignments.iter().find(|a| a.task == t).unwrap().resource, ben);
+    assert_eq!(p.format_resource_names(other), "Ben");
+    assert!(p.time_entries.iter().all(|e| e.resource == ben));
+    assert!(p.replace_resource(ben, ben).is_err());
+}
+
+#[test]
 fn delete_cleans_references() {
     let mut p = project();
     let a = task(&mut p, "A", 1);

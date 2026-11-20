@@ -76,6 +76,8 @@ pub struct ChartInput<'a> {
     pub row_height: f32,
     pub header_height: f32,
     pub blank_rows: usize,
+    /// Selected task's dependency chain, when path highlighting is on.
+    pub path: Option<&'a HashMap<TaskId, PathRole>>,
 }
 
 #[derive(Clone, Copy)]
@@ -295,8 +297,17 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
                 if (pg.y < top_vis && sg.y < top_vis) || (pg.y > bot_vis && sg.y > bot_vis) {
                     continue;
                 }
+                let on_chain = input.path.is_some_and(|map| map.contains_key(&t.id) && map.contains_key(&pid));
                 let critical = g.show_critical && t.sched.critical && p.task(pid).is_some_and(|pt| pt.sched.critical);
-                let stroke = if critical { Stroke::new(1.2, theme::pal().BAR_CRITICAL_EDGE) } else { link_stroke };
+                let stroke = if on_chain {
+                    Stroke::new(2.0, theme::pal().ACCENT)
+                } else if input.path.is_some() {
+                    Stroke::new(0.8, theme::pal().LINK.gamma_multiply(0.25))
+                } else if critical {
+                    Stroke::new(1.2, theme::pal().BAR_CRITICAL_EDGE)
+                } else {
+                    link_stroke
+                };
                 let color = stroke.color;
                 let down = sg.y > pg.y;
                 let half = BAR_H / 2.0 + 1.0;
@@ -383,6 +394,7 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
     for r in first..last.min(input.rows.len()) {
         let idx = match input.rows.get(r) {
             Some(super::Row::Task(idx)) => *idx,
+            Some(super::Row::Notes(_)) => continue,
             Some(super::Row::Group(group)) => {
                 // A group header spans its tasks, drawn like a summary bar on a tinted row.
                 let y = body.top() + r as f32 * rh - *scroll_y;
@@ -400,6 +412,19 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
             None => continue,
         };
         let Some(t) = p.tasks.get(idx) else { continue };
+        let on_path = input.path.is_none_or(|map| map.contains_key(&t.id));
+        let shown = |c: Color32| if on_path { c } else { c.gamma_multiply(0.35) };
+        if let Some(role) = input.path.and_then(|map| map.get(&t.id)).copied()
+            && !matches!(role, PathRole::Selected)
+            && !(input.selected)(t.id)
+        {
+            let row_y = body.top() + r as f32 * rh - *scroll_y;
+            bp.rect_filled(
+                Rect::from_min_size(pos2(body.left(), row_y), vec2(body.width(), rh)),
+                0.0,
+                theme::path_row(matches!(role, PathRole::Direct)),
+            );
+        }
         let Some(bg) = geom.get(&t.id).copied() else {
             continue;
         };
@@ -444,7 +469,7 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
             } else {
                 theme::pal().MILESTONE
             };
-            diamond(&bp, pos2(x0, yc), 6.5, fill, Stroke::new(1.0, theme::pal().BG));
+            diamond(&bp, pos2(x0, yc), 6.5, shown(fill), Stroke::new(1.0, shown(theme::pal().BG)));
             let label = t.sched.finish.map(|f| f.format("%-m/%-d").to_string()).unwrap_or_default().to_string();
             bp.text(pos2(x0 + 10.0, yc), Align2::LEFT_CENTER, label, label_font.clone(), theme::pal().TEXT);
             if t.deadline.is_some_and(|dl| t.sched.finish.is_some_and(|f| f > dl)) {
@@ -452,8 +477,12 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
             }
         } else if summary {
             // A manually scheduled summary is drawn in the manual-task colour.
+            // A group's own color stays on the bracket and is not copied onto its children.
             let manual = t.sched.rollup_start.is_some();
-            let fill = if critical {
+            let own = t.bar_color.map(theme::paint_rgb);
+            let fill = if let Some(color) = own {
+                color
+            } else if critical {
                 theme::pal().BAR_CRITICAL_EDGE
             } else if manual {
                 theme::pal().BAR_MANUAL
@@ -461,7 +490,7 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
                 theme::pal().BAR_SUMMARY
             };
             let r = Rect::from_min_max(pos2(x0, yc - 4.0), pos2(x1, yc + 1.0));
-            bp.rect_filled(r, 0.0, fill);
+            bp.rect_filled(r, 0.0, shown(fill));
             // Its subtasks' span as a thin bar below it, red where it lies outside the summary.
             if let (Some(rs), Some(rf)) = (t.sched.rollup_start, t.sched.rollup_finish) {
                 let (rx0, rx1) = (g.x_of(chart_left, rs), g.x_of(chart_left, rf));
@@ -471,14 +500,14 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
                         bp.rect_filled(Rect::from_min_max(pos2(a, yb), pos2(b, yb + 2.0)), 0.0, color);
                     }
                 };
-                line(rx0, rx1.max(rx0 + 1.0), theme::pal().BAR_SUMMARY);
+                line(rx0, rx1.max(rx0 + 1.0), own.unwrap_or(theme::pal().BAR_SUMMARY));
                 line(rx0, rx1.min(x0), theme::pal().ERROR);
                 line(rx0.max(x1), rx1, theme::pal().ERROR);
             }
             for x in [x0, x1] {
                 bp.add(Shape::convex_polygon(
                     vec![pos2(x - 4.0, yc + 1.0), pos2(x + 4.0, yc + 1.0), pos2(x, yc + 6.0)],
-                    fill,
+                    shown(fill),
                     Stroke::NONE,
                 ));
             }
@@ -499,6 +528,7 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
             } else {
                 (theme::pal().BAR_TASK, theme::pal().BAR_TASK_EDGE)
             };
+            let (fill, edge) = (shown(fill), shown(edge));
             // A split task: its working parts joined by dots across the pauses.
             let split = t.sched.parts.len() > 1;
             if split {

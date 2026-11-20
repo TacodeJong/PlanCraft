@@ -94,17 +94,21 @@ fn cell(p: &Project, r: &Resource, col: Col, over: &HashSet<ResourceId>, work: &
         Col::Indicators => {
             let mut icons = Vec::new();
             if over.contains(&r.id) {
-                icons.push(("⚠".to_string(), theme::pal().ERROR, "This resource is overallocated and should be leveled.".to_string()));
+                icons.push((
+                    grid::Glyph::from("⚠"),
+                    theme::pal().ERROR,
+                    "This resource is overallocated and should be leveled.".to_string(),
+                ));
             }
             if !r.exceptions.is_empty() {
                 icons.push((
-                    "📅".to_string(),
+                    grid::Glyph::from("📅"),
                     theme::pal().ACCENT_MID,
                     format!("{} calendar exception(s): time off or altered hours", r.exceptions.len()),
                 ));
             }
             if !r.notes.is_empty() {
-                icons.push(("📝".to_string(), theme::pal().TEXT_WEAK, r.notes.clone()));
+                icons.push((grid::Glyph::Note, theme::pal().TEXT_WEAK, r.notes.clone()));
             }
             icons.truncate(2);
             Cell { icons, ..Default::default() }
@@ -255,12 +259,16 @@ pub fn print_sheet(p: &Project, pal: &plancraft_core::print::layout::Palette) ->
 }
 
 pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: &mut Vec<Command>) {
+    let shown: Vec<usize> =
+        doc.project.resources.iter().enumerate().filter(|(_, r)| super::filter_bar::resource_matches(st, r)).map(|(i, _)| i).collect();
+    let total = doc.project.resources.len();
+    let rect = super::filter_bar::resources(ui, rect, st, shown.len(), total);
     let defs = defs(&doc.project);
     let over: HashSet<ResourceId> = plancraft_core::workload::overallocations(&doc.project).into_iter().map(|(r, _)| r).collect();
     let work = totals(&doc.project);
-    let n = doc.project.resources.len();
+    let n = shown.len();
     // The cursor and an open editor follow their resource when an agent adds or deletes one.
-    let row_key = |r: usize| doc.project.resources.get(r).map(|res| u64::from(res.id.0));
+    let row_key = |r: usize| shown.get(r).and_then(|i| doc.project.resources.get(*i)).map(|res| u64::from(res.id.0));
     let cfg = GridConfig {
         id: egui::Id::new("resource_sheet"),
         columns: &defs,
@@ -273,18 +281,20 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
         row_height: theme::ROW_HEIGHT,
         row_key: Some(&row_key),
         row_drag: false,
+        outline_arrows: false,
+        quick_name: None,
     };
     let output = {
         let p = &doc.project;
         let sel = &st.sel;
-        let is_sel = |r: usize| p.resources.get(r).is_some_and(|res| sel.resources.contains(&res.id));
-        let mut cellf = |r: usize, c: usize| match (p.resources.get(r), COLS.get(c)) {
+        let is_sel = |r: usize| shown.get(r).and_then(|i| p.resources.get(*i)).is_some_and(|res| sel.resources.contains(&res.id));
+        let mut cellf = |r: usize, c: usize| match (shown.get(r).and_then(|i| p.resources.get(*i)), COLS.get(c)) {
             (Some(res), Some(&col)) => cell(p, res, col, &over, &work),
             _ => Cell::default(),
         };
         grid::show(ui, rect, &mut st.resource_grid, &cfg, &is_sel, &mut cellf)
     };
-    let resource_at = |doc: &Document, row: usize| doc.project.resources.get(row).map(|r| r.id);
+    let resource_at = |doc: &Document, row: usize| shown.get(row).and_then(|i| doc.project.resources.get(*i)).map(|r| r.id);
     for ev in output.events {
         match ev {
             GridEvent::Select { row, ctrl, .. } => {
@@ -308,7 +318,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
                     out.push(Command::ResourceInfo);
                 }
             }
-            GridEvent::Commit { row, col, text } => {
+            GridEvent::Commit { row, col, text, .. } => {
                 let (Some(&column), Some(def)) = (COLS.get(col), defs.get(col)) else { continue };
                 if row < n {
                     let Some(id) = resource_at(doc, row) else { continue };

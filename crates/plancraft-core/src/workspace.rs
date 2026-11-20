@@ -832,6 +832,9 @@ impl Workspace {
         if crate::tabular::is_table_path(path) {
             return self.import_spreadsheet(path, 0, None, true);
         }
+        if crate::planner_json::is_planner_path(path) {
+            return self.import_planner(path);
+        }
         let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         if let Some(i) =
             self.docs.iter().position(|d| d.path.as_ref().is_some_and(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()) == abs))
@@ -865,6 +868,20 @@ impl Workspace {
             return Ok(doc.handle);
         }
         let (project, notes) = crate::mspdi::load(&abs)?;
+        Ok(self.add_imported(project, notes, abs))
+    }
+
+    /// Imports a Project Planner JSON file as a new unsaved document. The JSON is not overwritten.
+    pub fn import_planner(&mut self, path: impl AsRef<Path>) -> FileResult<u64> {
+        let path = path.as_ref();
+        let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if let Some(i) = self.docs.iter().position(|d| d.path.is_none() && d.imported_from.as_ref() == Some(&abs))
+            && let Some(doc) = self.docs.get(i)
+        {
+            self.active = Some(i);
+            return Ok(doc.handle);
+        }
+        let (project, notes) = crate::planner_json::load(&abs)?;
         Ok(self.add_imported(project, notes, abs))
     }
 

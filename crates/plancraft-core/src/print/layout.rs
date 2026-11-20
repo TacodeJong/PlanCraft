@@ -227,6 +227,46 @@ impl Default for Palette {
     }
 }
 
+/// Words in the printed Gantt legend. English unless the app passes its language.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LegendWords {
+    pub project: &'static str,
+    pub date: &'static str,
+    pub task: &'static str,
+    pub milestone: &'static str,
+    pub summary: &'static str,
+    pub manual: &'static str,
+    pub inactive: &'static str,
+    pub deadline: &'static str,
+    pub critical: &'static str,
+    pub progress: &'static str,
+    pub slack: &'static str,
+}
+
+impl LegendWords {
+    pub fn english() -> Self {
+        Self {
+            project: "Project",
+            date: "Date",
+            task: "Task",
+            milestone: "Milestone",
+            summary: "Summary",
+            manual: "Manual Task",
+            inactive: "Inactive Task",
+            deadline: "Deadline",
+            critical: "Critical Task",
+            progress: "Progress",
+            slack: "Slack",
+        }
+    }
+}
+
+impl Default for LegendWords {
+    fn default() -> Self {
+        Self::english()
+    }
+}
+
 /// Everything one print needs.
 pub struct PrintJob<'a> {
     pub project: &'a Project,
@@ -240,6 +280,7 @@ pub struct PrintJob<'a> {
     /// When it was printed, for `[Date]`.
     pub printed: DateTime,
     pub palette: Palette,
+    pub legend: LegendWords,
 }
 
 /// One vertical slice of the printout: some table columns and/or a stretch of the timescale.
@@ -787,11 +828,19 @@ fn legend(out: &mut Vec<Item>, job: &PrintJob, opts: &ChartOptions, r: Rect) {
     out.push(Item::Rect { rect: r, fill: None, stroke: Some(Stroke::new(0.6, pal.grid_strong)) });
     let left_w = (r.w * 0.28).min(200.0);
     let p = job.project;
-    boxed_text(out, Rect::new(r.x, r.y + 4.0, left_w, 14.0), &format!("Project: {}", p.name), TEXT, pal.text, true, Align::Left);
+    boxed_text(
+        out,
+        Rect::new(r.x, r.y + 4.0, left_w, 14.0),
+        &format!("{}: {}", job.legend.project, p.name),
+        TEXT,
+        pal.text,
+        true,
+        Align::Left,
+    );
     boxed_text(
         out,
         Rect::new(r.x, r.y + 20.0, left_w, 14.0),
-        &format!("Date: {}", job.printed.format("%a %m/%d/%y")),
+        &format!("{}: {}", job.legend.date, job.printed.format("%a %m/%d/%y")),
         TEXT,
         pal.text,
         false,
@@ -800,15 +849,15 @@ fn legend(out: &mut Vec<Item>, job: &PrintJob, opts: &ChartOptions, r: Rect) {
     vline(out, r.x + left_w, r.y, r.bottom(), Stroke::new(0.6, pal.grid_strong));
     type Swatch = fn(&mut Vec<Item>, Pt, &Palette);
     let mut entries: Vec<(&str, Swatch)> = vec![
-        ("Task", |o, c, p| {
+        (job.legend.task, |o, c, p| {
             o.push(Item::Rect {
                 rect: Rect::new(c.x, c.y - 3.5, 22.0, 7.0),
                 fill: Some(p.bar_task),
                 stroke: Some(Stroke::new(0.6, p.bar_task_edge)),
             })
         }),
-        ("Milestone", |o, c, p| diamond(o, pt(c.x + 11.0, c.y), 4.5, p.milestone)),
-        ("Summary", |o, c, p| {
+        (job.legend.milestone, |o, c, p| diamond(o, pt(c.x + 11.0, c.y), 4.5, p.milestone)),
+        (job.legend.summary, |o, c, p| {
             o.push(Item::Rect { rect: Rect::new(c.x, c.y - 2.5, 22.0, 3.0), fill: Some(p.bar_summary), stroke: None });
             for x in [c.x, c.x + 22.0] {
                 o.push(Item::Polygon {
@@ -817,21 +866,21 @@ fn legend(out: &mut Vec<Item>, job: &PrintJob, opts: &ChartOptions, r: Rect) {
                 });
             }
         }),
-        ("Manual Task", |o, c, p| {
+        (job.legend.manual, |o, c, p| {
             o.push(Item::Rect {
                 rect: Rect::new(c.x, c.y - 3.5, 22.0, 7.0),
                 fill: Some(p.bar_manual),
                 stroke: Some(Stroke::new(0.6, p.bar_task_edge)),
             })
         }),
-        ("Inactive Task", |o, c, p| {
+        (job.legend.inactive, |o, c, p| {
             o.push(Item::Rect {
                 rect: Rect::new(c.x, c.y - 3.5, 22.0, 7.0),
                 fill: Some(p.bar_inactive),
                 stroke: Some(Stroke::new(0.6, p.bar_baseline)),
             })
         }),
-        ("Deadline", |o, c, p| {
+        (job.legend.deadline, |o, c, p| {
             o.push(Item::Polygon {
                 points: vec![pt(c.x + 11.0, c.y - 4.5), pt(c.x + 14.5, c.y - 4.5), pt(c.x + 11.0, c.y - 1.0)],
                 fill: p.deadline,
@@ -842,7 +891,7 @@ fn legend(out: &mut Vec<Item>, job: &PrintJob, opts: &ChartOptions, r: Rect) {
     if opts.critical {
         entries.insert(
             1,
-            ("Critical Task", |o, c, p| {
+            (job.legend.critical, |o, c, p| {
                 o.push(Item::Rect {
                     rect: Rect::new(c.x, c.y - 3.5, 22.0, 7.0),
                     fill: Some(p.bar_critical),
@@ -852,7 +901,7 @@ fn legend(out: &mut Vec<Item>, job: &PrintJob, opts: &ChartOptions, r: Rect) {
         );
     }
     if opts.progress {
-        entries.push(("Progress", |o, c, p| {
+        entries.push((job.legend.progress, |o, c, p| {
             o.push(Item::Rect { rect: Rect::new(c.x, c.y - 1.0, 22.0, 2.0), fill: Some(p.bar_progress), stroke: None })
         }));
     }
@@ -863,7 +912,7 @@ fn legend(out: &mut Vec<Item>, job: &PrintJob, opts: &ChartOptions, r: Rect) {
         }));
     }
     if opts.slack {
-        entries.push(("Slack", |o, c, p| hline(o, c.x, c.x + 22.0, c.y, Stroke::new(1.0, p.bar_slack))));
+        entries.push((job.legend.slack, |o, c, p| hline(o, c.x, c.x + 22.0, c.y, Stroke::new(1.0, p.bar_slack))));
     }
     // The Multiple Baselines Gantt shows only baseline bars: its key is one colour per baseline.
     let series: Vec<(String, Rgb)> = if opts.baselines != 0 {
@@ -1237,6 +1286,7 @@ mod tests {
             to: None,
             printed: crate::dates::ymd(2026, 11, 12).unwrap().and_hms_opt(9, 0, 0).unwrap(),
             palette: Palette::default(),
+            legend: LegendWords::english(),
         }
     }
 

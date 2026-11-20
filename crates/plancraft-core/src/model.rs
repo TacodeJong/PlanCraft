@@ -98,6 +98,67 @@ pub enum ConstraintKind {
     Mfo,
 }
 
+/// Stretch (remaining space in a group) and span (percent of the group), used together.
+///
+/// Both flags are off unless a project turns the ruleset on, so an existing plan schedules
+/// exactly as it did before these fields existed.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct ScheduleRules {
+    pub stretch: bool,
+    pub span: bool,
+}
+
+impl ScheduleRules {
+    /// Stretch and span together, for a Project Planner import or an opted-in plan.
+    pub fn on() -> Self {
+        Self { stretch: true, span: true }
+    }
+
+    pub fn enabled(self) -> bool {
+        self.stretch || self.span
+    }
+
+    pub fn is_off(&self) -> bool {
+        !self.enabled()
+    }
+}
+
+/// Earliest and latest dates on one task. Each side can be set at once.
+///
+/// A minimum always pushes the early date. An unfixed maximum only limits the late date.
+/// A fixed maximum moves the plan. "On" is an earliest date equal to its latest date.
+/// Absent on plans that only use [`Constraint`].
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct DateBounds {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_earliest: Option<DateTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_latest: Option<DateTime>,
+    /// When set, `start_latest` caps the early start. When clear, it only limits the late start.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub start_latest_fixed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_earliest: Option<DateTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_latest: Option<DateTime>,
+    /// When set, `finish_latest` pulls the early finish. When clear, a missed date is reported.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub finish_latest_fixed: bool,
+}
+
+impl DateBounds {
+    pub fn is_empty(&self) -> bool {
+        self.start_earliest.is_none()
+            && self.start_latest.is_none()
+            && self.finish_earliest.is_none()
+            && self.finish_latest.is_none()
+            && !self.start_latest_fixed
+            && !self.finish_latest_fixed
+    }
+}
+
 impl ConstraintKind {
     pub const ALL: [ConstraintKind; 8] = [
         ConstraintKind::Asap,
@@ -294,6 +355,108 @@ pub struct Interim {
     pub finish: DateTime,
 }
 
+/// Workflow status, independent of percent complete. Missing on old files, which read as not started.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    #[default]
+    NotStarted,
+    Started,
+    Busy,
+    Done,
+}
+
+impl TaskStatus {
+    pub const ALL: [TaskStatus; 4] = [TaskStatus::NotStarted, TaskStatus::Started, TaskStatus::Busy, TaskStatus::Done];
+
+    /// Serde token (`not_started`, `started`, `busy`, `done`). MSPDI stores this, never the Dutch label.
+    pub fn token(self) -> &'static str {
+        match self {
+            TaskStatus::NotStarted => "not_started",
+            TaskStatus::Started => "started",
+            TaskStatus::Busy => "busy",
+            TaskStatus::Done => "done",
+        }
+    }
+
+    pub fn from_token(text: &str) -> Option<Self> {
+        Some(match text.trim() {
+            "not_started" => TaskStatus::NotStarted,
+            "started" => TaskStatus::Started,
+            "busy" => TaskStatus::Busy,
+            "done" => TaskStatus::Done,
+            _ => return None,
+        })
+    }
+
+    /// Dutch label shown in the properties pane, Task Information, the report and the filter strip.
+    pub fn label(self) -> &'static str {
+        match self {
+            TaskStatus::NotStarted => "Niet gestart",
+            TaskStatus::Started => "Gestart",
+            TaskStatus::Busy => "Bezig",
+            TaskStatus::Done => "Gereed",
+        }
+    }
+
+    fn is_not_started(&self) -> bool {
+        *self == TaskStatus::NotStarted
+    }
+
+    /// A parent's displayed status. Every child the same value keeps that value.
+    /// All done is done. Any mix, or any started or busy child, is in progress.
+    pub fn rollup(children: &[TaskStatus]) -> TaskStatus {
+        let Some(first) = children.first().copied() else { return TaskStatus::NotStarted };
+        if children.iter().all(|s| *s == first) {
+            return first;
+        }
+        TaskStatus::Busy
+    }
+}
+
+/// A personal highlight on a whole outline row, for a question or a flag.
+/// It does not change the bar color or the schedule.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum RowMark {
+    Amber,
+    Blue,
+    Pink,
+    Green,
+}
+
+impl RowMark {
+    pub const ALL: [RowMark; 4] = [RowMark::Amber, RowMark::Blue, RowMark::Pink, RowMark::Green];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RowMark::Amber => "Amber",
+            RowMark::Blue => "Blue",
+            RowMark::Pink => "Pink",
+            RowMark::Green => "Green",
+        }
+    }
+
+    pub fn token(self) -> &'static str {
+        match self {
+            RowMark::Amber => "amber",
+            RowMark::Blue => "blue",
+            RowMark::Pink => "pink",
+            RowMark::Green => "green",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "amber" => Some(RowMark::Amber),
+            "blue" => Some(RowMark::Blue),
+            "pink" => Some(RowMark::Pink),
+            "green" => Some(RowMark::Green),
+            _ => None,
+        }
+    }
+}
+
 /// Values computed by the scheduler. Never edit directly.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
@@ -366,6 +529,17 @@ pub struct Task {
     pub effort_driven: bool,
     #[serde(default)]
     pub constraint: Constraint,
+    /// Both start bounds and both finish bounds. Empty bounds leave the single [`Constraint`] in charge.
+    #[serde(default, skip_serializing_if = "DateBounds::is_empty")]
+    pub bounds: DateBounds,
+    /// Share the parent group's remaining space. Used only while [`ScheduleRules::stretch`] is on.
+    /// A date bound limits where the task may sit; it does not turn stretching off. A task whose
+    /// start and finish are both pinned already has its duration, so it does not stretch.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fills_group: bool,
+    /// Duration as a percentage of the parent group's share. Used only while [`ScheduleRules::span`] is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_percent: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deadline: Option<DateTime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -386,6 +560,10 @@ pub struct Task {
     pub estimate: Option<Estimate>,
     #[serde(default)]
     pub percent_complete: u8,
+    /// Workflow status. Old files omit it and load as not started. Percent complete stays independent
+    /// except when a status change sets 100 (done) or 0 (not started).
+    #[serde(default, skip_serializing_if = "TaskStatus::is_not_started")]
+    pub status: TaskStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actual_start: Option<DateTime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -435,6 +613,10 @@ pub struct Task {
     pub show_on_timeline: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bar_color: Option<[u8; 3]>,
+    /// Whole-row highlight for a question or flag the planner wants to see in the outline.
+    /// Independent of `bar_color`. Absent on plans that never set one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row_mark: Option<RowMark>,
     /// Values of the project's custom fields (see [`crate::custom`]).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub custom: std::collections::BTreeMap<CustomFieldId, crate::custom::CustomValue>,
@@ -470,6 +652,9 @@ impl Task {
             task_type: TaskType::FixedUnits,
             effort_driven: false,
             constraint: Constraint::default(),
+            bounds: DateBounds::default(),
+            fills_group: false,
+            duration_percent: None,
             deadline: None,
             calendar: None,
             ignore_resource_calendars: false,
@@ -479,6 +664,7 @@ impl Task {
             deliverable: String::new(),
             estimate: None,
             percent_complete: 0,
+            status: TaskStatus::NotStarted,
             actual_start: None,
             actual_finish: None,
             manual_start: None,
@@ -497,6 +683,7 @@ impl Task {
             interim: std::collections::BTreeMap::new(),
             show_on_timeline: false,
             bar_color: None,
+            row_mark: None,
             custom: std::collections::BTreeMap::new(),
             sched: TaskSchedule::default(),
         }
@@ -825,6 +1012,48 @@ impl ExternalProject {
     }
 }
 
+/// Bar, summary, milestone and critical colors, on top of the light or dark theme.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ChartStyle {
+    #[default]
+    Blue,
+    Graphite,
+    Green,
+    Orange,
+    HighContrast,
+}
+
+impl ChartStyle {
+    pub const ALL: [ChartStyle; 5] =
+        [ChartStyle::Blue, ChartStyle::Graphite, ChartStyle::Green, ChartStyle::Orange, ChartStyle::HighContrast];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ChartStyle::Blue => "Blue",
+            ChartStyle::Graphite => "Graphite",
+            ChartStyle::Green => "Green",
+            ChartStyle::Orange => "Orange",
+            ChartStyle::HighContrast => "High Contrast",
+        }
+    }
+
+    /// The light-theme task bar, used when a task has no color of its own.
+    pub fn bar_rgb(self) -> [u8; 3] {
+        match self {
+            ChartStyle::Blue => [0x5A, 0x86, 0xD6],
+            ChartStyle::Graphite => [0x6E, 0x74, 0x80],
+            ChartStyle::Green => [0x2F, 0x8F, 0x62],
+            ChartStyle::Orange => [0xE0, 0x8A, 0x2F],
+            ChartStyle::HighContrast => [0x0B, 0x2E, 0x6B],
+        }
+    }
+
+    fn is_default(&self) -> bool {
+        *self == ChartStyle::Blue
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Project
 // ---------------------------------------------------------------------------
@@ -849,6 +1078,12 @@ pub struct ProjectSettings {
     /// The baseline (0–10) earned value is measured against.
     #[serde(skip_serializing_if = "is_zero_u8")]
     pub earned_value_baseline: u8,
+    /// Group stretch and percent-of-group. Off for every plan that does not set it.
+    #[serde(default, skip_serializing_if = "ScheduleRules::is_off")]
+    pub rules: ScheduleRules,
+    /// Chart colors. Blue is the original palette and is omitted from saved files.
+    #[serde(default, skip_serializing_if = "ChartStyle::is_default")]
+    pub chart_style: ChartStyle,
 }
 
 impl Default for ProjectSettings {
@@ -863,6 +1098,8 @@ impl Default for ProjectSettings {
             use_resource_calendars: true,
             progress_from_time: false,
             earned_value_baseline: 0,
+            rules: ScheduleRules::default(),
+            chart_style: ChartStyle::Blue,
         }
     }
 }
@@ -1039,6 +1276,24 @@ impl Project {
     pub fn parent_index(&self, idx: usize) -> Option<usize> {
         let level = self.tasks.get(idx)?.outline_level;
         self.tasks.get(..idx)?.iter().rposition(|t| t.outline_level < level)
+    }
+
+    /// Status shown for the task at `idx`. A leaf shows its stored status. A summary shows the
+    /// roll-up of its children: all done is done, every child the same value keeps it, and any mix
+    /// is in progress.
+    pub fn displayed_status(&self, idx: usize) -> TaskStatus {
+        let own = self.tasks.get(idx).map(|t| t.status).unwrap_or_default();
+        if !self.has_children(idx) {
+            return own;
+        }
+        let level = self.tasks.get(idx).map(|t| t.outline_level).unwrap_or(1);
+        let next = level.saturating_add(1);
+        let children: Vec<TaskStatus> = self
+            .descendants_range(idx)
+            .filter(|&i| self.tasks.get(i).is_some_and(|t| t.outline_level == next))
+            .map(|i| self.displayed_status(i))
+            .collect();
+        if children.is_empty() { own } else { TaskStatus::rollup(&children) }
     }
 
     /// Whether the task at `idx` has children.

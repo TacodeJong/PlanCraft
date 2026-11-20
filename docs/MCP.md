@@ -279,7 +279,7 @@ entity; read-only tools are annotated with `readOnlyHint`.
 
 | Tool | Arguments (required in **bold**) | Description |
 |---|---|---|
-| `assign_resource` | contour, cost, **resource**, **task**, units, work | Assign a resource to a task (or update the existing assignment). Units default to 100%. Without 'work', work follows the task duration, or the task's estimate for the first assignment of an estimated task. Effort-driven tasks redistribute work among resources. |
+| `assign_resource` | contour, cost, **resource**, **task**, units, work | Assign a resource to a task (or update the existing assignment). A summary task is refused: a group's resources are the resources of its tasks. Units default to 100%. Without 'work', work follows the task duration, or the task's estimate for the first assignment of an estimated task. Effort-driven tasks redistribute work among resources. |
 | `update_assignment` | actual_work, assignment, contour, cost, resource, task, units, work | Change an assignment's units, work, actual work, contour or cost. Identify it by 'assignment' id or by 'task' + 'resource'. |
 | `unassign_resource` | assignment, resource, task | Remove a resource from a task. Identify the assignment by id or by 'task' + 'resource'. |
 | `list_assignments` *(read-only)* | resource, task | List assignments (all, or for a task or a resource) with units, work, actual and remaining work, cost and dates. |

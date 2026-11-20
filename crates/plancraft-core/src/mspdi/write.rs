@@ -86,6 +86,10 @@ pub fn export(p: &Project) -> (String, Vec<String>) {
     for f in &p.custom_fields {
         let n = used.entry(f.kind).or_insert(0);
         *n += 1;
+        if *n > codes::user_slot_limit(f.kind) {
+            note("custom fields beyond the number Microsoft Project has of their kind were left out");
+            continue;
+        }
         match codes::field_id(Slot { kind: f.kind, number: *n }) {
             Some(fid) => {
                 slots.insert(f.id, (fid, f.kind));
@@ -94,7 +98,8 @@ pub fn export(p: &Project) -> (String, Vec<String>) {
             None => note("custom fields beyond the number Microsoft Project has of their kind were left out"),
         }
     }
-    if !defs.is_empty() {
+    let planner = used_planner_fields(p);
+    if !defs.is_empty() || !planner.is_empty() {
         w.open("ExtendedAttributes");
         for (fid, slot, f) in &defs {
             w.open("ExtendedAttribute");
@@ -115,6 +120,17 @@ pub fn export(p: &Project) -> (String, Vec<String>) {
                 }
                 w.close("ValueList");
             }
+            w.close("ExtendedAttribute");
+        }
+        for field in planner {
+            let Some(fid) = codes::field_id(field.slot()) else { continue };
+            w.open("ExtendedAttribute");
+            w.leaf("FieldID", fid);
+            w.leaf("FieldName", field.slot().field_name());
+            w.leaf("CFType", codes::cf_type_code(field.slot().kind));
+            w.leaf("ElemType", 20);
+            w.leaf("UserDef", 1);
+            w.leaf("Alias", field.alias());
             w.close("ExtendedAttribute");
         }
         w.close("ExtendedAttributes");
@@ -403,6 +419,141 @@ fn shift_year(d: Date, years: i32) -> Option<Date> {
     d.with_year(y).or_else(|| crate::dates::ymd(y, d.month32(), 28))
 }
 
+struct NativeConstraint {
+    kind: ConstraintKind,
+    date: Option<DateTime>,
+    deadline: Option<DateTime>,
+}
+
+/// The one constraint and the deadline Microsoft Project can store. Empty bounds leave the stored
+/// constraint in charge. Otherwise the bounds win, except a non-ASAP constraint whose date still
+/// sits on a bound: that is a must-start, must-finish or as-late choice the four bound kinds
+/// cannot say by themselves.
+fn native_constraint(t: &Task, note: &mut impl FnMut(&'static str)) -> NativeConstraint {
+    if t.bounds.is_empty() {
+        return NativeConstraint {
+            kind: t.constraint.kind,
+            date: t.constraint.date.filter(|_| t.constraint.kind.needs_date()),
+            deadline: t.deadline,
+        };
+    }
+    let mut deadline = t.deadline;
+    if !t.bounds.finish_latest_fixed
+        && let Some(fin) = t.bounds.finish_latest
+    {
+        match deadline {
+            None => deadline = Some(fin),
+            Some(existing) if existing != fin => {
+                note("a deadline and an unfixed latest finish were both set; the earlier date was exported as the deadline");
+                deadline = Some(existing.min(fin));
+            }
+            Some(_) => {}
+        }
+    }
+    let mut options = Vec::new();
+    if t.bounds.finish_latest_fixed
+        && let Some(d) = t.bounds.finish_latest
+    {
+        options.push((ConstraintKind::Fnlt, d));
+    }
+    if t.bounds.start_latest_fixed
+        && let Some(d) = t.bounds.start_latest
+    {
+        options.push((ConstraintKind::Snlt, d));
+    }
+    if let Some(d) = t.bounds.start_earliest {
+        options.push((ConstraintKind::Snet, d));
+    }
+    if let Some(d) = t.bounds.finish_earliest {
+        options.push((ConstraintKind::Fnet, d));
+    }
+    if t.constraint.kind != ConstraintKind::Asap && constraint_matches_bounds(t) {
+        if options.len() > 1 {
+            note("a task already had a constraint, so its other date bounds were exported only as Planner fields");
+        }
+        return NativeConstraint { kind: t.constraint.kind, date: t.constraint.date.filter(|_| t.constraint.kind.needs_date()), deadline };
+    }
+    if t.constraint.kind != ConstraintKind::Asap {
+        note("a stored constraint no longer matched the date bounds, so the bounds were exported as the constraint");
+    }
+    let Some((kind, date)) = options.first().copied() else {
+        return NativeConstraint { kind: ConstraintKind::Asap, date: None, deadline };
+    };
+    if options.len() > 1 {
+        note(
+            "a task has several date bounds; one became the Microsoft Project constraint and the others were exported only as Planner fields",
+        );
+    }
+    NativeConstraint { kind, date: Some(date), deadline }
+}
+
+fn constraint_matches_bounds(t: &Task) -> bool {
+    if t.constraint.kind == ConstraintKind::Alap {
+        return true;
+    }
+    let Some(date) = t.constraint.date.filter(|_| t.constraint.kind.needs_date()) else { return false };
+    let same = |bound: Option<DateTime>| bound.is_some_and(|d| d == date);
+    if matches!(t.constraint.kind, ConstraintKind::Snet | ConstraintKind::Mso | ConstraintKind::Snlt) {
+        same(t.bounds.start_earliest) || same(t.bounds.start_latest)
+    } else {
+        same(t.bounds.finish_earliest) || same(t.bounds.finish_latest)
+    }
+}
+
+fn progress_minutes(t: &Task, duration: Minutes) -> (Minutes, Minutes) {
+    if t.sched.is_summary {
+        return t.duration_progress();
+    }
+    if t.is_milestone() {
+        return (0, 0);
+    }
+    let done = duration.saturating_mul(Minutes::from(t.percent_complete.min(100))) / 100;
+    (done, duration.saturating_sub(done))
+}
+
+fn used_planner_fields(p: &Project) -> Vec<codes::PlannerField> {
+    codes::PlannerField::ALL
+        .into_iter()
+        .filter(|field| p.tasks.iter().any(|t| planner_entries(t).iter().any(|(f, _)| f == field)))
+        .collect()
+}
+
+fn planner_entries(t: &Task) -> Vec<(codes::PlannerField, String)> {
+    let mut out = Vec::new();
+    let date = |d: DateTime| codes::datetime_text(d);
+    if let Some(d) = t.bounds.start_earliest {
+        out.push((codes::PlannerField::StartEarliest, date(d)));
+    }
+    if let Some(d) = t.bounds.start_latest {
+        out.push((codes::PlannerField::StartLatest, date(d)));
+    }
+    if let Some(d) = t.bounds.finish_earliest {
+        out.push((codes::PlannerField::FinishEarliest, date(d)));
+    }
+    if let Some(d) = t.bounds.finish_latest {
+        out.push((codes::PlannerField::FinishLatest, date(d)));
+    }
+    if t.bounds.start_latest_fixed {
+        out.push((codes::PlannerField::StartLatestFixed, "1".into()));
+    }
+    if t.bounds.finish_latest_fixed {
+        out.push((codes::PlannerField::FinishLatestFixed, "1".into()));
+    }
+    if t.fills_group {
+        out.push((codes::PlannerField::FillsGroup, "1".into()));
+    }
+    if let Some(pct) = t.duration_percent.filter(|n| n.is_finite()) {
+        out.push((codes::PlannerField::PercentOfGroup, pct.to_string()));
+    }
+    if let Some(mark) = t.row_mark {
+        out.push((codes::PlannerField::RowMark, mark.token().into()));
+    }
+    if t.status != TaskStatus::NotStarted {
+        out.push((codes::PlannerField::Status, t.status.token().into()));
+    }
+    out
+}
+
 fn task(
     w: &mut Writer,
     p: &Project,
@@ -434,7 +585,9 @@ fn task(
     if let Some(v) = t.sched.finish {
         w.leaf("Finish", codes::datetime_text(v));
     }
-    let duration = if t.sched.is_summary { t.sched.duration } else { t.duration };
+    // The resolved duration. A leaf's stored duration is only the fallback; exporting it next to
+    // the scheduled start and finish makes Microsoft Project collapse stretched tasks on recalc.
+    let duration = if t.is_milestone() { 0 } else { t.sched.duration.max(0) };
     w.leaf("Duration", codes::duration_text(duration));
     w.leaf("DurationFormat", codes::format_code(s.duration_unit, t.elapsed && !t.sched.is_summary, t.estimated));
     w.leaf("Work", codes::duration_text(t.sched.work));
@@ -461,16 +614,17 @@ fn task(
     if let Some(v) = t.actual_finish {
         w.leaf("ActualFinish", codes::datetime_text(v));
     }
-    let (done, left) = t.duration_progress();
+    let (done, left) = progress_minutes(t, duration);
     w.leaf("ActualDuration", codes::duration_text(done));
     w.leaf("ActualWork", codes::duration_text(t.sched.actual_work));
     w.leaf("RemainingDuration", codes::duration_text(left));
-    w.leaf("ConstraintType", codes::constraint_code(t.constraint.kind));
+    let native = native_constraint(t, note);
+    w.leaf("ConstraintType", codes::constraint_code(native.kind));
     w.leaf("CalendarUID", t.calendar.map_or(-1, |c| i64::from(c.0)));
-    if let Some(d) = t.constraint.date.filter(|_| t.constraint.kind.needs_date()) {
+    if let Some(d) = native.date.filter(|_| native.kind.needs_date()) {
         w.leaf("ConstraintDate", codes::datetime_text(d));
     }
-    if let Some(d) = t.deadline {
+    if let Some(d) = native.deadline {
         w.leaf("Deadline", codes::datetime_text(d));
     }
     if t.leveling_delay > 0 {
@@ -534,6 +688,13 @@ fn task(
         if *kind == CustomFieldKind::Duration {
             w.leaf("DurationFormat", codes::format_code(s.duration_unit, false, false));
         }
+        w.close("ExtendedAttribute");
+    }
+    for (field, value) in planner_entries(t) {
+        let Some(fid) = codes::field_id(field.slot()) else { continue };
+        w.open("ExtendedAttribute");
+        w.leaf("FieldID", fid);
+        w.leaf("Value", value);
         w.close("ExtendedAttribute");
     }
     for (n, i) in &t.interim {

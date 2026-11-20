@@ -231,6 +231,7 @@ fn export_pdf(ctx: &Ctx, a: &Args) -> ToolResult {
             to,
             printed: plancraft_core::dates::now(),
             palette: print::layout::Palette::default(),
+            legend: print::LegendWords::english(),
         });
         (print::pdf::write(&out), out.pages.len(), out.truncated)
     };

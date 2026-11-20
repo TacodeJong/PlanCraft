@@ -31,6 +31,7 @@ pub struct ProjectInfo {
     new_auto: bool,
     use_res_cal: bool,
     progress_from_time: bool,
+    rules_on: bool,
     critical_slack: String,
     ev_baseline: u8,
     error: Option<String>,
@@ -58,6 +59,7 @@ impl ProjectInfo {
             new_auto: s.new_tasks_auto,
             use_res_cal: s.use_resource_calendars,
             progress_from_time: s.progress_from_time,
+            rules_on: s.rules.enabled(),
             critical_slack: p.format_duration(s.critical_slack, false),
             ev_baseline: s.earned_value_baseline,
             error: None,
@@ -129,6 +131,10 @@ impl ProjectInfo {
         }
         if self.progress_from_time != o.progress_from_time {
             s.progress_from_time = self.progress_from_time;
+        }
+        if self.rules_on != o.rules_on {
+            s.rules.stretch = self.rules_on;
+            s.rules.span = self.rules_on;
         }
         // Re-read with the new hours per day (or week, month), as typed: "1 day" stays one day.
         let time_changed =
@@ -229,6 +235,7 @@ impl ProjectInfo {
                         ui.checkbox(&mut self.new_auto, "New tasks are auto scheduled");
                         ui.checkbox(&mut self.use_res_cal, "Schedule assigned tasks on their resources' calendars (time off delays work)");
                         ui.checkbox(&mut self.progress_from_time, "Derive % complete from tracked time");
+                        ui.checkbox(&mut self.rules_on, "Stretch and percent-of-group (scheduling ruleset)");
                     },
                 );
                 if let Some(e) = &self.error {

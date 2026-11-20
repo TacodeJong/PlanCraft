@@ -17,7 +17,7 @@ mod subset;
 use serde::{Deserialize, Serialize};
 
 pub use canvas::{CanvasJob, layout_canvas};
-pub use layout::{Align, ChartOptions, PrintCell, PrintColumn, PrintJob, PrintRow, RowKind, Sheet, layout, task_sheet};
+pub use layout::{Align, ChartOptions, LegendWords, PrintCell, PrintColumn, PrintJob, PrintRow, RowKind, Sheet, layout, task_sheet};
 
 /// An RGB colour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]

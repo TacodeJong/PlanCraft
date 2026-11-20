@@ -6,7 +6,7 @@ use plancraft_core::report;
 
 use crate::format;
 use crate::theme;
-use crate::widgets::grid::{Cell, ColumnDef};
+use crate::widgets::grid::{Cell, ColumnDef, Glyph};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TaskCol {
@@ -130,6 +130,7 @@ impl TaskTable {
         TaskTable::Details,
     ];
 
+    /// English name stored with a custom column layout. Display uses [`Self::title`].
     pub fn label(self) -> &'static str {
         match self {
             TaskTable::Entry => "Entry",
@@ -142,6 +143,20 @@ impl TaskTable {
             TaskTable::Summary => "Summary",
             TaskTable::Details => "Details",
         }
+    }
+
+    pub fn title(self) -> &'static str {
+        crate::lang::text(match self {
+            TaskTable::Entry => "table.entry",
+            TaskTable::Schedule => "table.schedule",
+            TaskTable::Tracking => "table.tracking",
+            TaskTable::Work => "table.work",
+            TaskTable::Cost => "table.cost",
+            TaskTable::Estimates => "table.estimates",
+            TaskTable::Variance => "table.variance",
+            TaskTable::Summary => "table.summary",
+            TaskTable::Details => "table.details",
+        })
     }
 
     pub fn columns(self) -> Vec<TaskCol> {
@@ -206,21 +221,21 @@ impl TaskCol {
         let _ = p;
         match self {
             Indicators => ColumnDef::new("ℹ", 34.0).read_only().center(),
-            Mode => ColumnDef::new("Mode", 46.0).center().choice(&["Auto Scheduled", "Manually Scheduled"]),
-            Wbs => ColumnDef::new("WBS", 50.0).read_only(),
-            Name => ColumnDef::new("Task Name", 230.0),
-            Duration => ColumnDef::new("Duration", 76.0).right(),
-            Start => ColumnDef::new("Start", 96.0),
-            Finish => ColumnDef::new("Finish", 96.0),
-            Predecessors => ColumnDef::new("Predecessors", 96.0),
-            Successors => ColumnDef::new("Successors", 96.0).read_only(),
-            Resources => ColumnDef::new("Resource Names", 160.0),
-            PercentComplete => ColumnDef::new("% Comp.", 62.0).right(),
-            Work => ColumnDef::new("Work", 70.0).right(),
-            ActualWork => ColumnDef::new("Act. Work", 72.0).right().read_only(),
-            RemainingWork => ColumnDef::new("Rem. Work", 72.0).right().read_only(),
-            Cost => ColumnDef::new("Total Cost", 90.0).right().read_only(),
-            FixedCost => ColumnDef::new("Fixed Cost", 86.0).right(),
+            Mode => ColumnDef::new(ct("col.mode"), 46.0).center().choice(&["Auto Scheduled", "Manually Scheduled"]),
+            Wbs => ColumnDef::new(ct("col.wbs"), 50.0).read_only(),
+            Name => ColumnDef::new(ct("col.name"), 230.0),
+            Duration => ColumnDef::new(ct("col.duration"), 76.0).right(),
+            Start => ColumnDef::new(ct("col.start"), 96.0),
+            Finish => ColumnDef::new(ct("col.finish"), 96.0),
+            Predecessors => ColumnDef::new(ct("col.predecessors"), 96.0),
+            Successors => ColumnDef::new(ct("col.successors"), 96.0).read_only(),
+            Resources => ColumnDef::new(ct("col.resources"), 160.0),
+            PercentComplete => ColumnDef::new(ct("col.percent"), 62.0).right(),
+            Work => ColumnDef::new(ct("col.work"), 70.0).right(),
+            ActualWork => ColumnDef::new(ct("col.actual_work"), 72.0).right().read_only(),
+            RemainingWork => ColumnDef::new(ct("col.remaining_work"), 72.0).right().read_only(),
+            Cost => ColumnDef::new(ct("col.cost"), 90.0).right().read_only(),
+            FixedCost => ColumnDef::new(ct("col.fixed_cost"), 86.0).right(),
             Baseline(n, f) => {
                 let title = format!("{} {}", PlanSlot::Baseline(n).name(), f.label());
                 match f {
@@ -229,45 +244,49 @@ impl TaskCol {
                 }
             }
             Interim(n, finish) => ColumnDef::new(format!("{}{n}", if finish { "Finish" } else { "Start" }), 96.0).read_only(),
-            StartVariance => ColumnDef::new("Start Var.", 76.0).right().read_only(),
-            FinishVariance => ColumnDef::new("Finish Var.", 76.0).right().read_only(),
-            WorkVariance => ColumnDef::new("Work Var.", 72.0).right().read_only(),
-            CostVariance => ColumnDef::new("Cost Var.", 86.0).right().read_only(),
-            ActualStart => ColumnDef::new("Actual Start", 100.0),
-            ActualFinish => ColumnDef::new("Actual Finish", 100.0),
-            ActualDuration => ColumnDef::new("Act. Dur.", 76.0).right(),
-            RemainingDuration => ColumnDef::new("Rem. Dur.", 76.0).right(),
-            Stop => ColumnDef::new("Stop", 100.0).read_only(),
-            Resume => ColumnDef::new("Resume", 100.0),
-            EarlyStart => ColumnDef::new("Early Start", 100.0).read_only(),
-            EarlyFinish => ColumnDef::new("Early Finish", 100.0).read_only(),
-            LateStart => ColumnDef::new("Late Start", 100.0).read_only(),
-            LateFinish => ColumnDef::new("Late Finish", 100.0).read_only(),
-            FreeSlack => ColumnDef::new("Free Slack", 76.0).right().read_only(),
-            TotalSlack => ColumnDef::new("Total Slack", 76.0).right().read_only(),
-            ConstraintType => ColumnDef::new("Constraint", 150.0).choice(&ConstraintKind::ALL.map(|c| c.label())),
-            ConstraintDate => ColumnDef::new("Constraint Date", 104.0),
-            Deadline => ColumnDef::new("Deadline", 100.0),
-            Priority => ColumnDef::new("Priority", 60.0).right(),
-            TaskType => ColumnDef::new("Type", 100.0).choice(&["Fixed Units", "Fixed Duration", "Fixed Work"]),
-            EstimateMethod => ColumnDef::new("Estimate", 96.0).choice(&["None", "Complexity", "Three-point", "Work"]),
-            Points => ColumnDef::new("Points", 58.0).right(),
-            Optimistic => ColumnDef::new("Optimistic", 80.0).right(),
-            MostLikely => ColumnDef::new("Most Likely", 80.0).right(),
-            Pessimistic => ColumnDef::new("Pessimistic", 80.0).right(),
-            ExpectedWork => ColumnDef::new("Expected Work", 90.0).right().read_only(),
-            Deliverable => ColumnDef::new("Deliverable", 160.0),
-            Milestones => ColumnDef::new("Milestones", 140.0).read_only(),
-            Notes => ColumnDef::new("Notes", 200.0),
-            UniqueId => ColumnDef::new("Unique ID", 64.0).right().read_only(),
-            Recurring => ColumnDef::new("Recurring", 70.0).center().read_only(),
+            StartVariance => ColumnDef::new(ct("col.start_var"), 76.0).right().read_only(),
+            FinishVariance => ColumnDef::new(ct("col.finish_var"), 76.0).right().read_only(),
+            WorkVariance => ColumnDef::new(ct("col.work_var"), 72.0).right().read_only(),
+            CostVariance => ColumnDef::new(ct("col.cost_var"), 86.0).right().read_only(),
+            ActualStart => ColumnDef::new(ct("col.actual_start"), 100.0),
+            ActualFinish => ColumnDef::new(ct("col.actual_finish"), 100.0),
+            ActualDuration => ColumnDef::new(ct("col.actual_duration"), 76.0).right(),
+            RemainingDuration => ColumnDef::new(ct("col.remaining_duration"), 76.0).right(),
+            Stop => ColumnDef::new(ct("col.stop"), 100.0).read_only(),
+            Resume => ColumnDef::new(ct("col.resume"), 100.0),
+            EarlyStart => ColumnDef::new(ct("col.early_start"), 100.0).read_only(),
+            EarlyFinish => ColumnDef::new(ct("col.early_finish"), 100.0).read_only(),
+            LateStart => ColumnDef::new(ct("col.late_start"), 100.0).read_only(),
+            LateFinish => ColumnDef::new(ct("col.late_finish"), 100.0).read_only(),
+            FreeSlack => ColumnDef::new(ct("col.free_slack"), 76.0).right().read_only(),
+            TotalSlack => ColumnDef::new(ct("col.total_slack"), 76.0).right().read_only(),
+            ConstraintType => ColumnDef::new(ct("col.constraint"), 150.0).choice(&ConstraintKind::ALL.map(|c| c.label())),
+            ConstraintDate => ColumnDef::new(ct("col.constraint_date"), 104.0),
+            Deadline => ColumnDef::new(ct("col.deadline"), 100.0),
+            Priority => ColumnDef::new(ct("col.priority"), 60.0).right(),
+            TaskType => ColumnDef::new(ct("col.type"), 100.0).choice(&["Fixed Units", "Fixed Duration", "Fixed Work"]),
+            EstimateMethod => ColumnDef::new(ct("col.estimate"), 96.0).choice(&["None", "Complexity", "Three-point", "Work"]),
+            Points => ColumnDef::new(ct("col.points"), 58.0).right(),
+            Optimistic => ColumnDef::new(ct("col.optimistic"), 80.0).right(),
+            MostLikely => ColumnDef::new(ct("col.likely"), 80.0).right(),
+            Pessimistic => ColumnDef::new(ct("col.pessimistic"), 80.0).right(),
+            ExpectedWork => ColumnDef::new(ct("col.expected"), 90.0).right().read_only(),
+            Deliverable => ColumnDef::new(ct("col.deliverable"), 160.0),
+            Milestones => ColumnDef::new(ct("col.milestones"), 140.0).read_only(),
+            Notes => ColumnDef::new(ct("col.notes"), 200.0),
+            UniqueId => ColumnDef::new(ct("col.unique"), 64.0).right().read_only(),
+            Recurring => ColumnDef::new(ct("col.recurring"), 70.0).center().read_only(),
             BoardStatus => {
                 let names: Vec<&str> = p.board_columns.iter().map(|c| c.name.as_str()).collect();
-                ColumnDef::new("Board Status", 110.0).choice(&names)
+                ColumnDef::new(ct("col.board"), 110.0).choice(&names)
             }
-            ShowOnBoard => ColumnDef::new("Show on Board", 92.0).center().choice(&["Yes", "No"]),
+            ShowOnBoard => ColumnDef::new(ct("col.show_board"), 92.0).center().choice(&["Yes", "No"]),
         }
     }
+}
+
+fn ct(key: &'static str) -> &'static str {
+    crate::lang::text(key)
 }
 
 fn var_text(p: &Project, m: Minutes) -> String {
@@ -281,44 +300,44 @@ pub fn indicators(
     t: &Task,
     overallocated: &dyn Fn(TaskId) -> bool,
     others: Option<&str>,
-) -> Vec<(String, egui::Color32, String)> {
+) -> Vec<(Glyph, egui::Color32, String)> {
     let mut v = Vec::new();
     if let Some(names) = others {
         // A warning, not a lock: they may be changing it right now.
-        v.push(("👥".into(), theme::pal().ACCENT_MID, format!("Also on this task: {names}")));
+        v.push((Glyph::from("👥"), theme::pal().ACCENT_MID, format!("Also on this task: {names}")));
     }
     if t.is_complete() {
-        v.push(("✔".into(), theme::pal().OK, "This task was completed".into()));
+        v.push((Glyph::from("✔"), theme::pal().OK, "This task was completed".into()));
     }
     if !t.sched.warnings.is_empty() {
-        v.push(("⚠".into(), theme::pal().ERROR, t.sched.warnings.join("\n")));
+        v.push((Glyph::from("⚠"), theme::pal().ERROR, t.sched.warnings.join("\n")));
     } else if t.deadline.is_some() {
-        v.push(("⚑".into(), theme::pal().DEADLINE, format!("Deadline: {}", format::date(t.deadline))));
+        v.push((Glyph::from("⚑"), theme::pal().DEADLINE, format!("Deadline: {}", format::date(t.deadline))));
     }
     if t.constraint.kind.needs_date() {
         v.push((
-            "📌".into(),
+            Glyph::from("📌"),
             theme::pal().ACCENT_MID,
             format!("{} constraint on {}", t.constraint.kind.label(), format::date(t.constraint.date)),
         ));
     }
     if overallocated(t.id) {
-        v.push(("👤".into(), theme::pal().ERROR, "A resource assigned to this task is overallocated".into()));
+        v.push((Glyph::from("👤"), theme::pal().ERROR, "A resource assigned to this task is overallocated".into()));
     }
     if t.predecessors.iter().any(|d| matches!(d.predecessor, TaskRef::External { .. }))
         || t.members.iter().any(|m| matches!(m, TaskRef::External { .. }))
     {
-        v.push(("🔗".into(), theme::pal().ACCENT_MID, "Linked to a task in another project".into()));
+        v.push((Glyph::from("🔗"), theme::pal().ACCENT_MID, "Linked to a task in another project".into()));
     }
     if !t.notes.is_empty() {
-        v.push(("📝".into(), theme::pal().TEXT_WEAK, t.notes.clone()));
+        v.push((Glyph::Note, theme::pal().TEXT_WEAK, t.notes.clone()));
     }
     if !t.active {
-        v.push(("⏸".into(), theme::pal().TEXT_WEAK, "Inactive task".into()));
+        v.push((Glyph::from("⏸"), theme::pal().TEXT_WEAK, "Inactive task".into()));
     }
     if t.recurrence.is_some() {
         let n = p.task_index(t.id).map_or(0, |i| p.descendants_range(i).len());
-        v.insert(0, ("🔁".into(), theme::pal().ACCENT_MID, format!("Recurring task with {n} occurrences")));
+        v.insert(0, (Glyph::from("🔁"), theme::pal().ACCENT_MID, format!("Recurring task with {n} occurrences")));
     }
     let _ = p;
     v.truncate(2);
@@ -358,7 +377,28 @@ pub fn cell(col: TaskCol, p: &Project, idx: usize, ctx: &CellCtx) -> Cell {
         Wbs => Cell::weak(p.wbs(idx)),
         Name => {
             let indent = (t.outline_level.saturating_sub(1)) as f32 * 16.0;
-            Cell { text: t.name.clone(), bold: summary, indent, expander: if summary { Some(true) } else { None }, ..Default::default() }
+            let mut icons = Vec::new();
+            if let Some(mark) = t.row_mark {
+                icons.push((Glyph::Dot, theme::row_mark_color(mark), crate::lang::mark_name(mark).into()));
+            }
+            if t.is_milestone() {
+                icons.push((Glyph::Diamond, theme::pal().MILESTONE, crate::lang::text("rpt.milestone").into()));
+            }
+            if summary && let Some(rgb) = t.bar_color {
+                icons.push((Glyph::from("▌"), theme::paint_rgb(rgb), crate::lang::text("prop.group_color").into()));
+            }
+            let mut cell = Cell {
+                text: t.name.clone(),
+                bold: summary,
+                indent,
+                expander: if summary { Some(true) } else { None },
+                icons,
+                ..Default::default()
+            };
+            if summary && let Some(rgb) = t.bar_color {
+                cell.color = Some(theme::paint_rgb(rgb));
+            }
+            cell
         }
         Duration => Cell::text(p.format_task_duration(t)),
         Start => Cell { text: format::date(s.start), edit_text: Some(format::iso_date(s.start)), ..Default::default() },

@@ -153,6 +153,10 @@ pub fn import(text: &str, fallback_name: &str) -> Result<(Project, Vec<String>),
     }
     let fields = definitions(&mut p, &r.definitions, &mut notes);
     let links = tasks(&mut p, &r.tasks, &cals, fields, &mut notes);
+    // The ruleset has no MSPDI home. A plan that carries stretch or percent attributes used them.
+    if p.tasks.iter().any(|t| t.fills_group || t.duration_percent.is_some()) {
+        p.settings.rules = ScheduleRules::on();
+    }
     let resources = resources(&mut p, &r.resources, &cals, &mut notes);
     assignments(&mut p, &r.assignments, &links.ids, &resources, &mut notes);
     predecessors(&mut p, links, &mut notes);
@@ -620,6 +624,8 @@ struct Fields {
     by_id: HashMap<u32, (CustomFieldId, CustomFieldKind)>,
     /// Value lists: field id → value id → text.
     lists: HashMap<u32, HashMap<i64, String>>,
+    /// `Planner …` aliases, restored onto the task instead of becoming custom fields.
+    planner: HashMap<u32, codes::PlannerField>,
 }
 
 fn field_id_of(e: &Element) -> Option<u32> {
@@ -630,6 +636,12 @@ fn definitions(p: &mut Project, defs: &[Element], notes: &mut Notes) -> Fields {
     let mut out = Fields::default();
     for d in defs {
         let Some(fid) = field_id_of(d) else { continue };
+        if let Some(alias) = d.text_of("Alias")
+            && let Some(field) = codes::PlannerField::from_alias(alias)
+        {
+            out.planner.insert(fid, field);
+            continue;
+        }
         let Some(slot) = codes::slot_of(fid) else {
             if codes::interim_of(fid).is_none() {
                 notes.add("custom fields other than task Text, Number, Cost, Date, Duration and Flag fields were not imported");
@@ -663,6 +675,35 @@ fn definitions(p: &mut Project, defs: &[Element], notes: &mut Notes) -> Fields {
         out.lists.insert(fid, list);
     }
     out
+}
+
+fn apply_planner(task: &mut Task, field: codes::PlannerField, raw: &str) -> bool {
+    let date = || codes::datetime_of(raw);
+    let flag = || codes::bool_of(raw);
+    match field {
+        codes::PlannerField::StartEarliest => task.bounds.start_earliest = date(),
+        codes::PlannerField::StartLatest => task.bounds.start_latest = date(),
+        codes::PlannerField::FinishEarliest => task.bounds.finish_earliest = date(),
+        codes::PlannerField::FinishLatest => task.bounds.finish_latest = date(),
+        codes::PlannerField::StartLatestFixed => task.bounds.start_latest_fixed = flag().unwrap_or(false),
+        codes::PlannerField::FinishLatestFixed => task.bounds.finish_latest_fixed = flag().unwrap_or(false),
+        codes::PlannerField::FillsGroup => task.fills_group = flag().unwrap_or(false),
+        codes::PlannerField::PercentOfGroup => task.duration_percent = codes::num_of(raw),
+        codes::PlannerField::RowMark => task.row_mark = RowMark::parse(raw),
+        codes::PlannerField::Status => task.status = TaskStatus::from_token(raw).unwrap_or_default(),
+    }
+    match field {
+        codes::PlannerField::StartEarliest
+        | codes::PlannerField::StartLatest
+        | codes::PlannerField::FinishEarliest
+        | codes::PlannerField::FinishLatest => date().is_some(),
+        codes::PlannerField::StartLatestFixed | codes::PlannerField::FinishLatestFixed | codes::PlannerField::FillsGroup => {
+            flag().is_some()
+        }
+        codes::PlannerField::PercentOfGroup => task.duration_percent.is_some(),
+        codes::PlannerField::RowMark => task.row_mark.is_some(),
+        codes::PlannerField::Status => TaskStatus::from_token(raw).is_some(),
+    }
 }
 
 fn custom_value(kind: CustomFieldKind, raw: &str) -> Option<CustomValue> {
@@ -842,6 +883,13 @@ fn tasks(p: &mut Project, records: &[Element], cals: &Calendars, mut fields: Fie
                     entry.0 = v
                 } else {
                     entry.1 = v
+                }
+                continue;
+            }
+            if let Some(field) = fields.planner.get(&fid).copied() {
+                let raw = ea.text_of("Value").unwrap_or("");
+                if !apply_planner(&mut task, field, raw) {
+                    notes.add(format!("a Planner field ({}) could not be read", field.alias()));
                 }
                 continue;
             }

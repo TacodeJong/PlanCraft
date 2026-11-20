@@ -64,10 +64,11 @@ pub struct TaskInfo {
     duration: String,
     estimated: bool,
     percent: String,
+    status: Option<TaskStatus>,
     priority: String,
     mode: ScheduleMode,
-    start: String,
-    finish: String,
+    start: Option<DateTime>,
+    finish: Option<DateTime>,
     milestone: bool,
     active: bool,
     preds: Vec<PredRow>,
@@ -75,6 +76,14 @@ pub struct TaskInfo {
     constraint: ConstraintKind,
     constraint_date: String,
     deadline: String,
+    start_earliest: Option<DateTime>,
+    start_latest: Option<DateTime>,
+    start_latest_fixed: bool,
+    finish_earliest: Option<DateTime>,
+    finish_latest: Option<DateTime>,
+    finish_latest_fixed: bool,
+    fills_group: bool,
+    group_percent: String,
     task_type: TaskType,
     effort_driven: bool,
     calendar: Option<CalendarId>,
@@ -139,10 +148,11 @@ impl TaskInfo {
             duration: p.format_task_minutes(t, t.sched.duration, t.estimated),
             estimated: t.estimated,
             percent: format!("{}", t.percent_complete),
+            status: Some(t.status),
             priority: t.priority.to_string(),
             mode: t.mode,
-            start: format::iso(t.sched.start),
-            finish: format::iso(t.sched.finish),
+            start: t.sched.start.or(t.manual_start),
+            finish: t.sched.finish.or(t.manual_finish),
             milestone: t.is_milestone(),
             active: t.active,
             preds: t
@@ -157,6 +167,14 @@ impl TaskInfo {
             constraint: t.constraint.kind,
             constraint_date: format::iso(t.constraint.date),
             deadline: format::iso(t.deadline),
+            start_earliest: t.bounds.start_earliest,
+            start_latest: t.bounds.start_latest,
+            start_latest_fixed: t.bounds.start_latest_fixed,
+            finish_earliest: t.bounds.finish_earliest,
+            finish_latest: t.bounds.finish_latest,
+            finish_latest_fixed: t.bounds.finish_latest_fixed,
+            fills_group: t.fills_group,
+            group_percent: t.duration_percent.map(|n| n.to_string()).unwrap_or_default(),
             task_type: t.task_type,
             effort_driven: t.effort_driven,
             calendar: t.calendar,
@@ -214,10 +232,9 @@ impl TaskInfo {
             duration,
             percent,
             priority,
-            start,
-            finish,
             constraint_date,
             deadline,
+            group_percent,
             fixed_cost,
             actual_start,
             actual_finish,
@@ -229,6 +246,27 @@ impl TaskInfo {
             deliverable,
             notes
         );
+        if rest.iter().any(|o| o.status != base.status) {
+            base.status = None;
+        }
+        if rest.iter().any(|o| o.start != base.start) {
+            base.start = None;
+        }
+        if rest.iter().any(|o| o.finish != base.finish) {
+            base.finish = None;
+        }
+        if rest.iter().any(|o| o.start_earliest != base.start_earliest) {
+            base.start_earliest = None;
+        }
+        if rest.iter().any(|o| o.start_latest != base.start_latest) {
+            base.start_latest = None;
+        }
+        if rest.iter().any(|o| o.finish_earliest != base.finish_earliest) {
+            base.finish_earliest = None;
+        }
+        if rest.iter().any(|o| o.finish_latest != base.finish_latest) {
+            base.finish_latest = None;
+        }
         if rest.iter().any(|o| o.resume != base.resume) {
             base.resume = String::new();
             base.resume_orig = String::new();
@@ -281,6 +319,7 @@ impl TaskInfo {
                 duration,
                 estimated,
                 percent,
+                status,
                 priority,
                 mode,
                 start,
@@ -290,6 +329,14 @@ impl TaskInfo {
                 constraint,
                 constraint_date,
                 deadline,
+                start_earliest,
+                start_latest,
+                start_latest_fixed,
+                finish_earliest,
+                finish_latest,
+                finish_latest_fixed,
+                fills_group,
+                group_percent,
                 task_type,
                 effort_driven,
                 calendar,
@@ -364,6 +411,11 @@ impl TaskInfo {
         } else {
             None
         };
+        if self.status != o.status
+            && let Some(status) = self.status
+        {
+            p.set_task_status(id, status).map_err(err)?;
+        }
         if self.mode != o.mode {
             p.set_schedule_mode(&[id], self.mode).map_err(err)?;
         }
@@ -415,15 +467,57 @@ impl TaskInfo {
             let deadline = opt_date(p, &self.deadline, true)?;
             p.task_mut(id).ok_or("task was deleted")?.deadline = deadline;
         }
+        let bounds_changed = self.start_earliest != o.start_earliest
+            || self.start_latest != o.start_latest
+            || self.start_latest_fixed != o.start_latest_fixed
+            || self.finish_earliest != o.finish_earliest
+            || self.finish_latest != o.finish_latest
+            || self.finish_latest_fixed != o.finish_latest_fixed
+            || self.fills_group != o.fills_group
+            || self.group_percent != o.group_percent;
+        if bounds_changed {
+            let percent = if self.group_percent != o.group_percent {
+                Some(if self.group_percent.trim().is_empty() {
+                    None
+                } else {
+                    Some(self.group_percent.trim().parse::<f64>().map_err(|_| "Percent of group must be a number")?)
+                })
+            } else {
+                None
+            };
+            let t = p.task_mut(id).ok_or("task was deleted")?;
+            if self.start_earliest != o.start_earliest {
+                t.bounds.start_earliest = self.start_earliest;
+            }
+            if self.start_latest != o.start_latest {
+                t.bounds.start_latest = self.start_latest;
+            }
+            if self.start_latest_fixed != o.start_latest_fixed {
+                t.bounds.start_latest_fixed = self.start_latest_fixed;
+            }
+            if self.finish_earliest != o.finish_earliest {
+                t.bounds.finish_earliest = self.finish_earliest;
+            }
+            if self.finish_latest != o.finish_latest {
+                t.bounds.finish_latest = self.finish_latest;
+            }
+            if self.finish_latest_fixed != o.finish_latest_fixed {
+                t.bounds.finish_latest_fixed = self.finish_latest_fixed;
+            }
+            if self.fills_group != o.fills_group {
+                t.fills_group = self.fills_group;
+            }
+            if let Some(pct) = percent {
+                t.duration_percent = pct;
+            }
+        }
         if self.mode == ScheduleMode::Manual && (self.start != o.start || self.finish != o.finish) {
-            let start = opt_date(p, &self.start, false)?;
-            let finish = opt_date(p, &self.finish, true)?;
             let t = p.task_mut(id).ok_or("task was deleted")?;
             if self.start != o.start {
-                t.manual_start = start;
+                t.manual_start = self.start;
             }
             if self.finish != o.finish {
-                t.manual_finish = finish;
+                t.manual_finish = self.finish;
             }
         }
         let estimate_changed = self.est_kind != o.est_kind
@@ -653,10 +747,31 @@ impl TaskInfo {
         open && !close
     }
 
+    fn share_fields(&self, p: &Project) -> bool {
+        if !p.settings.rules.enabled() {
+            return false;
+        }
+        std::iter::once(self.id).chain(self.others.iter().copied()).all(|id| {
+            let Some(idx) = p.task_index(id) else { return false };
+            let Some(task) = p.task(id) else { return false };
+            p.parent_index(idx).is_some() && !p.has_children(idx) && !task.is_milestone()
+        })
+    }
+
     fn general(&mut self, ui: &mut Ui, p: &Project) {
         egui::Grid::new("ti_general").num_columns(4).spacing([12.0, 8.0]).show(ui, |ui| {
             ui.label("Percent complete:");
             ui.add(egui::TextEdit::singleline(&mut self.percent).desired_width(60.0));
+            ui.label("Status:");
+            let status_label = self.status.map(TaskStatus::label).unwrap_or("meerdere");
+            egui::ComboBox::from_id_salt("ti_status").width(120.0).selected_text(status_label).show_ui(ui, |ui| {
+                for status in TaskStatus::ALL {
+                    if ui.selectable_label(self.status == Some(status), status.label()).clicked() {
+                        self.status = Some(status);
+                    }
+                }
+            });
+            ui.end_row();
             ui.label("Priority:");
             ui.add(egui::TextEdit::singleline(&mut self.priority).desired_width(60.0));
             ui.end_row();
@@ -669,10 +784,17 @@ impl TaskInfo {
             ui.checkbox(&mut self.on_timeline, "Display on Timeline");
             ui.end_row();
             let manual = self.mode == ScheduleMode::Manual;
+            let start_minute = p.settings.time.default_start_time;
+            let finish_minute = p.settings.time.default_finish_time;
+            let empty = if self.others.is_empty() { "geen" } else { "meerdere" };
             ui.label("Start:");
-            ui.add_enabled(manual, egui::TextEdit::singleline(&mut self.start).desired_width(140.0));
+            if let Some(next) = pick_date(ui, "ti_start", self.start, false, manual, start_minute, empty) {
+                self.start = next;
+            }
             ui.label("Finish:");
-            ui.add_enabled(manual, egui::TextEdit::singleline(&mut self.finish).desired_width(140.0));
+            if let Some(next) = pick_date(ui, "ti_finish", self.finish, false, manual, finish_minute, empty) {
+                self.finish = next;
+            }
             ui.end_row();
             ui.label("Actual start:");
             ui.add(egui::TextEdit::singleline(&mut self.actual_start).desired_width(140.0).hint_text("NA"));
@@ -696,6 +818,45 @@ impl TaskInfo {
             ui.add_enabled(!self.summary, egui::Checkbox::new(&mut self.milestone, "Mark task as milestone"));
             ui.end_row();
         });
+        ui.add_space(8.0);
+        ui.label(RichText::new("No earlier than and no later than").strong());
+        egui::Grid::new("ti_bounds").num_columns(4).spacing([12.0, 8.0]).show(ui, |ui| {
+            let start_minute = p.settings.time.default_start_time;
+            let finish_minute = p.settings.time.default_finish_time;
+            let empty = if self.others.is_empty() { "geen" } else { "meerdere" };
+            ui.label("Start no earlier than:");
+            if let Some(next) = pick_date(ui, "ti_snet", self.start_earliest, true, true, start_minute, empty) {
+                self.start_earliest = next;
+            }
+            ui.label("Start no later than:");
+            if let Some(next) = pick_date(ui, "ti_snlt", self.start_latest, true, true, start_minute, empty) {
+                self.start_latest = next;
+            }
+            ui.end_row();
+            ui.label("");
+            ui.checkbox(&mut self.start_latest_fixed, "Start no later than moves the plan");
+            ui.label("");
+            ui.checkbox(&mut self.finish_latest_fixed, "Finish no later than moves the plan");
+            ui.end_row();
+            ui.label("Finish no earlier than:");
+            if let Some(next) = pick_date(ui, "ti_fnet", self.finish_earliest, true, true, finish_minute, empty) {
+                self.finish_earliest = next;
+            }
+            ui.label("Finish no later than:");
+            if let Some(next) = pick_date(ui, "ti_fnlt", self.finish_latest, true, true, finish_minute, empty) {
+                self.finish_latest = next;
+            }
+            ui.end_row();
+        });
+        let share = self.share_fields(p);
+        if share {
+            ui.add_space(6.0);
+            ui.checkbox(&mut self.fills_group, "Stretch to fill the group");
+            ui.horizontal(|ui| {
+                ui.label("Percent of group:");
+                ui.add(egui::TextEdit::singleline(&mut self.group_percent).desired_width(60.0).hint_text("none"));
+            });
+        }
         if self.mode == ScheduleMode::Auto {
             ui.label(RichText::new("Start and finish of auto-scheduled tasks are calculated from links, constraints and calendars. Set a constraint on the Advanced tab to pin a date.").small().color(theme::pal().TEXT_WEAK));
         }
@@ -794,7 +955,9 @@ impl TaskInfo {
 
     fn resources_tab(&mut self, ui: &mut Ui, p: &Project) {
         if self.summary {
-            ui.label("Resources cannot be assigned to summary tasks.");
+            let names = p.format_resource_names(self.id);
+            ui.label("A group's resources are the resources of its tasks.");
+            ui.label(if names.is_empty() { "geen" } else { names.as_str() });
             return;
         }
         let mut remove = None;
@@ -1023,6 +1186,18 @@ impl TaskInfo {
             }
         });
     }
+}
+
+fn pick_date(
+    ui: &mut egui::Ui,
+    salt: &str,
+    current: Option<DateTime>,
+    clearable: bool,
+    enabled: bool,
+    minute: u32,
+    empty: &str,
+) -> Option<Option<DateTime>> {
+    crate::widgets::date_picker::button(ui, crate::widgets::date_picker::DateField { salt, current, clearable, enabled, minute, empty })
 }
 
 #[cfg(test)]

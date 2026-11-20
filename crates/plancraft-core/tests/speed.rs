@@ -188,6 +188,7 @@ fn printing_10000_linked_tasks_is_fast() {
         to: None,
         printed: p.start,
         palette: print::layout::Palette::default(),
+        legend: print::LegendWords::english(),
     });
     let took = t.elapsed();
     assert!(doc.pages.len() > 100);

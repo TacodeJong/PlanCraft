@@ -29,6 +29,12 @@ pub enum Command {
     ExportPdf,
     /// Save the plan as a Microsoft Project XML (MSPDI) file.
     ExportMspdi,
+    /// Save the Report view's visible rows as an Excel workbook.
+    ExportReport,
+    /// Coloured-cell Gantt workbook of the tasks the current filter leaves visible.
+    ExportGantt,
+    /// The design style, stored on the plan and used for this session.
+    SetChartStyle(plancraft_core::model::ChartStyle),
     Quit,
     StartPage,
     /// Restore a recovery copy (by its stem in the recovery folder).
@@ -87,6 +93,12 @@ pub enum Command {
     RefreshExternal,
     Statistics,
     McpPanel,
+    /// Turn a pasted brief into tasks the user reviews before they are added.
+    Distill,
+    /// Provider, model and API key for Distill.
+    AiSettings,
+    /// The Quick Entry sheet: several lines become tasks in one undo step.
+    QuickEntry,
     // View
     SetView(ViewKind),
     ZoomIn,
@@ -114,8 +126,13 @@ pub enum Command {
     CustomFields,
     CollapseAll,
     ExpandAll,
+    /// Highlight the selected task's predecessor and successor chain (Alt+Ctrl+L).
+    ToggleHighlightPaths,
     History,
     SetTheme(crate::theme::ThemeChoice),
+    SetLang(crate::lang::Lang),
+    SetStartup(crate::settings::Startup),
+    SetOpenOverview(bool),
     About,
 }
 

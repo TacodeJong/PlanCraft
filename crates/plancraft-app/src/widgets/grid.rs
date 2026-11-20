@@ -53,6 +53,39 @@ impl ColumnDef {
     }
 }
 
+/// A mark drawn in a cell. Shapes are painted, so they do not depend on the bundled font.
+#[derive(Clone, Debug)]
+pub enum Glyph {
+    Text(String),
+    Dot,
+    Diamond,
+    Note,
+}
+
+impl From<&str> for Glyph {
+    fn from(text: &str) -> Self {
+        Glyph::Text(text.to_string())
+    }
+}
+
+impl From<String> for Glyph {
+    fn from(text: String) -> Self {
+        Glyph::Text(text)
+    }
+}
+
+/// What Enter or Tab meant in the name column. Other columns use [`NameKey::None`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NameKey {
+    None,
+    /// Commit and open the next row's name.
+    Next,
+    /// Commit and indent the task under the row above.
+    Indent,
+    /// Commit and outdent the task.
+    Outdent,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Cell {
     pub text: String,
@@ -63,8 +96,8 @@ pub struct Cell {
     pub indent: f32,
     /// `Some(expanded)` draws an expand/collapse toggle before the text.
     pub expander: Option<bool>,
-    /// Icon glyphs with color and tooltip.
-    pub icons: Vec<(String, Color32, String)>,
+    /// Marks drawn before the text, with a color and a tooltip.
+    pub icons: Vec<(Glyph, Color32, String)>,
     pub bg: Option<Color32>,
     pub tooltip: Option<String>,
     /// Value placed in the editor when editing starts (defaults to `text`).
@@ -218,6 +251,7 @@ pub enum GridEvent {
         row: usize,
         col: usize,
         text: String,
+        name_key: NameKey,
     },
     ToggleExpand(usize),
     ContextMenu {
@@ -276,6 +310,10 @@ pub struct GridConfig<'a> {
     pub row_key: Option<&'a dyn Fn(usize) -> Option<u64>>,
     /// Rows can be dragged by their row number to move them ([`GridEvent::MoveRows`]).
     pub row_drag: bool,
+    /// Left and right on a cell with an expander collapse or expand it instead of moving the cursor.
+    pub outline_arrows: bool,
+    /// The name column, when Enter should open the next name and Tab should indent.
+    pub quick_name: Option<usize>,
 }
 
 pub struct GridOutput {
@@ -283,6 +321,27 @@ pub struct GridOutput {
 }
 
 pub const ROW_NUM_W: f32 = 34.0;
+
+fn paint_glyph(p: &egui::Painter, center: Pos2, glyph: &Glyph, color: Color32) {
+    match glyph {
+        Glyph::Text(text) => {
+            p.text(center, Align2::CENTER_CENTER, text, FontId::proportional(12.0), color);
+        }
+        Glyph::Dot => {
+            p.circle_filled(center, 4.0, color);
+        }
+        Glyph::Diamond => {
+            let pts = vec![center + vec2(0.0, -5.0), center + vec2(5.0, 0.0), center + vec2(0.0, 5.0), center + vec2(-5.0, 0.0)];
+            p.add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
+        }
+        Glyph::Note => {
+            let r = Rect::from_center_size(center, vec2(8.0, 9.0));
+            p.rect_stroke(r, 1.0, Stroke::new(1.1, color), StrokeKind::Inside);
+            p.hline((r.left() + 1.5)..=(r.right() - 1.5), center.y - 1.5, Stroke::new(1.0, color));
+            p.hline((r.left() + 1.5)..=(r.right() - 1.5), center.y + 1.5, Stroke::new(1.0, color));
+        }
+    }
+}
 const HSCROLL_H: f32 = 12.0;
 const VSCROLL_W: f32 = 12.0;
 
@@ -495,7 +554,7 @@ pub fn show(
             }
             for (glyph, color, tip) in &content.icons {
                 let ir = Rect::from_min_size(pos2(tx, r.top()), vec2(16.0, r.height()));
-                cp.text(ir.center(), Align2::CENTER_CENTER, glyph, FontId::proportional(12.0), *color);
+                paint_glyph(&cp, ir.center(), glyph, *color);
                 if !tip.is_empty() && pointer.is_some_and(|p| ir.intersect(clip).contains(p)) {
                     egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), cfg.id.with(("tip", row, c)), egui::PopupAnchor::Pointer)
                         .show(|ui| {
@@ -701,6 +760,7 @@ pub fn show(
 
     // ---- Editing ----
     let mut finished: Option<(bool, Option<(isize, isize)>)> = None; // (commit, move)
+    let mut name_key = NameKey::None;
     if let Some((r, _, c)) = edit_rect
         && let Some(def) = cfg.columns.get(c)
         && let Some(edit) = state.editing.as_mut()
@@ -780,10 +840,17 @@ pub fn show(
                             i.key_pressed(Key::ArrowDown),
                         )
                     });
+                    let naming = cfg.quick_name == Some(edit.col);
                     if esc {
                         finished = Some((false, None));
                     } else if enter {
+                        if naming {
+                            name_key = NameKey::Next;
+                        }
                         finished = Some((true, Some((1, 0))));
+                    } else if tab && naming {
+                        name_key = if shift { NameKey::Outdent } else { NameKey::Indent };
+                        finished = Some((true, None));
                     } else if tab {
                         finished = Some((true, Some((0, if shift { -1 } else { 1 }))));
                     } else if up && resp.has_focus() {
@@ -805,8 +872,9 @@ pub fn show(
     if let Some((commit, mv)) = finished
         && let Some(e) = state.editing.take()
     {
-        if commit && e.changed() {
-            events.push(GridEvent::Commit { row: e.row, col: e.col, text: e.text.trim().to_string() });
+        let naming = !matches!(name_key, NameKey::None);
+        if commit && (e.changed() || naming) {
+            events.push(GridEvent::Commit { row: e.row, col: e.col, text: e.text.trim().to_string(), name_key });
         }
         if let Some((dr, dc)) = mv {
             let nr = (e.row as isize).saturating_add(dr).clamp(0, total_rows.saturating_sub(1) as isize) as usize;
@@ -858,6 +926,16 @@ pub fn show(
             }
         });
         let (row, col) = state.cursor.unwrap_or((0, 0));
+        if cfg.outline_arrows && dr == 0 && dc != 0 && row < cfg.row_count {
+            let expanded = (0..cfg.columns.len()).find_map(|c| cell(row, c).expander);
+            if let Some(expanded) = expanded {
+                let toggles = (dc < 0 && expanded) || (dc > 0 && !expanded);
+                if toggles {
+                    events.push(GridEvent::ToggleExpand(row));
+                    dc = 0;
+                }
+            }
+        }
         if dr != 0 || dc != 0 {
             let nr = (row as isize).saturating_add(dr).clamp(0, total_rows.saturating_sub(1) as isize) as usize;
             let nc = (col as isize).saturating_add(dc).clamp(0, ncols.saturating_sub(1) as isize) as usize;
@@ -958,6 +1036,8 @@ mod tests {
                     row_height: 22.0,
                     row_key: None,
                     row_drag: false,
+                    outline_arrows: false,
+                    quick_name: None,
                 };
                 let ro = *read_only_row;
                 let mut cell = |r: usize, c: usize| Cell { text: format!("{r}:{c}"), read_only: Some(r) == ro, ..Default::default() };

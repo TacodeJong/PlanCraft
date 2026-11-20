@@ -59,29 +59,36 @@ fn lanes(p: &Project, st: &UiState) -> Vec<Lane> {
     let over: std::collections::HashSet<ResourceId> = plancraft_core::workload::overallocations(p).into_iter().map(|(r, _)| r).collect();
     let mut lanes: Vec<Lane> = Vec::new();
     let shown = |i: &usize| p.tasks.get(*i).is_some_and(|t| t.active && super::task_matches(p, st, t));
-    for r in p.resources.iter().filter(|r| r.kind == ResourceType::Work) {
+    let in_category = |r: &Resource| st.resource_category.is_none_or(|c| r.category == c);
+    for r in p.resources.iter().filter(|r| r.kind == ResourceType::Work && in_category(r)) {
         let idxs: Vec<usize> = p.assignments_for_resource(r.id).filter_map(|a| p.task_index(a.task)).filter(shown).collect();
         let (bars, sublanes) = pack(p, idxs);
         lanes.push(Lane { resource: Some(r.id), name: r.name.clone(), over: over.contains(&r.id), bars, sublanes });
     }
-    let unassigned: Vec<usize> = p
-        .tasks
-        .iter()
-        .enumerate()
-        .filter(|(_, t)| {
-            !t.sched.is_summary
-                && !t.is_milestone()
-                && !p.assignments_for_task(t.id).any(|a| p.resource(a.resource).is_some_and(|r| r.kind == ResourceType::Work))
-        })
-        .map(|(i, _)| i)
-        .filter(shown)
-        .collect();
-    let (bars, sublanes) = pack(p, unassigned);
-    lanes.push(Lane { resource: None, name: "Unassigned Tasks".into(), over: false, bars, sublanes });
+    let filtering = st.resource_category.is_some();
+    if !filtering {
+        let unassigned: Vec<usize> = p
+            .tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| {
+                !t.sched.is_summary
+                    && !t.is_milestone()
+                    && !p.assignments_for_task(t.id).any(|a| p.resource(a.resource).is_some_and(|r| r.kind == ResourceType::Work))
+            })
+            .map(|(i, _)| i)
+            .filter(shown)
+            .collect();
+        let (bars, sublanes) = pack(p, unassigned);
+        lanes.push(Lane { resource: None, name: crate::lang::text("filter.unassigned").into(), over: false, bars, sublanes });
+    }
     lanes
 }
 
 pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: &mut Vec<Command>) {
+    let work = doc.project.resources.iter().filter(|r| r.kind == ResourceType::Work).count();
+    let shown = doc.project.resources.iter().filter(|r| r.kind == ResourceType::Work && super::filter_bar::resource_matches(st, r)).count();
+    let rect = super::filter_bar::resources(ui, rect, st, shown, work);
     let p = &doc.project;
     if st.gantt.initialized_for != Some(p.id) {
         st.gantt.initialized_for = Some(p.id);
@@ -101,7 +108,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
     painter.text(
         pos2(header.left() + 8.0, header.center().y),
         Align2::LEFT_CENTER,
-        "Resource Name",
+        crate::lang::text("team.resource"),
         FontId::proportional(12.5),
         theme::pal().TEXT,
     );

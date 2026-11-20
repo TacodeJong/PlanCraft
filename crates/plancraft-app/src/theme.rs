@@ -4,7 +4,7 @@
 //! is currently shown. The deep-blue brand accent is shared by both themes; the
 //! dark palette uses lighter tints of it where it is drawn on dark surfaces.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use egui::{Color32, CornerRadius, FontFamily, FontId, Stroke, TextStyle, Theme, ThemePreference, Visuals};
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,7 @@ const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
 
 /// Every color the UI paints with. Field names follow the old constant names.
 #[allow(non_snake_case)]
+#[derive(Clone, Copy)]
 pub struct Palette {
     // Brand
     pub ACCENT: Color32,
@@ -237,10 +238,163 @@ pub const DARK: Palette = Palette {
 };
 
 static DARK_ACTIVE: AtomicBool = AtomicBool::new(false);
+static CHART: AtomicU8 = AtomicU8::new(0);
 
-/// The palette of the theme currently on screen.
+const fn paint(
+    mut p: Palette,
+    bar: Color32,
+    edge: Color32,
+    summary: Color32,
+    milestone: Color32,
+    critical: Color32,
+    critical_edge: Color32,
+) -> Palette {
+    p.BAR_TASK = bar;
+    p.BAR_TASK_EDGE = edge;
+    p.BAR_SUMMARY = summary;
+    p.MILESTONE = milestone;
+    p.BAR_CRITICAL = critical;
+    p.BAR_CRITICAL_EDGE = critical_edge;
+    p
+}
+
+const GRAPHITE_L: Palette = paint(
+    LIGHT,
+    rgb(0x6E, 0x74, 0x80),
+    rgb(0x3E, 0x44, 0x50),
+    rgb(0x2C, 0x30, 0x38),
+    rgb(0x5C, 0x63, 0x70),
+    rgb(0xB2, 0x3B, 0x3B),
+    rgb(0x7A, 0x24, 0x24),
+);
+const GRAPHITE_D: Palette = paint(
+    DARK,
+    rgb(0x9A, 0xA1, 0xAD),
+    rgb(0xD5, 0xD8, 0xDE),
+    rgb(0xE6, 0xE8, 0xEC),
+    rgb(0xC5, 0xCA, 0xD3),
+    rgb(0xE0, 0x6A, 0x6A),
+    rgb(0xF0, 0xA0, 0xA0),
+);
+const GREEN_L: Palette = paint(
+    LIGHT,
+    rgb(0x2F, 0x8F, 0x62),
+    rgb(0x1B, 0x5C, 0x3E),
+    rgb(0x16, 0x38, 0x2A),
+    rgb(0x3E, 0x8F, 0x6A),
+    rgb(0xC4, 0x48, 0x48),
+    rgb(0x8E, 0x2E, 0x2E),
+);
+const GREEN_D: Palette = paint(
+    DARK,
+    rgb(0x4C, 0xAF, 0x7D),
+    rgb(0x8E, 0xD4, 0xAE),
+    rgb(0xD5, 0xE8, 0xDE),
+    rgb(0x7D, 0xCC, 0xA0),
+    rgb(0xE0, 0x6A, 0x6A),
+    rgb(0xF0, 0xA0, 0xA0),
+);
+const ORANGE_L: Palette = paint(
+    LIGHT,
+    rgb(0xE0, 0x8A, 0x2F),
+    rgb(0xA8, 0x5E, 0x10),
+    rgb(0x5C, 0x3A, 0x16),
+    rgb(0xE0, 0xA0, 0x20),
+    rgb(0xC4, 0x48, 0x48),
+    rgb(0x8E, 0x2E, 0x2E),
+);
+const ORANGE_D: Palette = paint(
+    DARK,
+    rgb(0xF0, 0xA2, 0x4A),
+    rgb(0xF6, 0xC9, 0x8A),
+    rgb(0xF3, 0xD7, 0xB0),
+    rgb(0xF2, 0xC1, 0x4E),
+    rgb(0xE0, 0x6A, 0x6A),
+    rgb(0xF0, 0xA0, 0xA0),
+);
+const CONTRAST_L: Palette = paint(
+    LIGHT,
+    rgb(0x0B, 0x2E, 0x6B),
+    rgb(0x00, 0x00, 0x00),
+    rgb(0x00, 0x00, 0x00),
+    rgb(0x00, 0x00, 0x00),
+    rgb(0xB0, 0x00, 0x00),
+    rgb(0x00, 0x00, 0x00),
+);
+const CONTRAST_D: Palette = paint(
+    DARK,
+    rgb(0xFF, 0xFF, 0xFF),
+    rgb(0xFF, 0xE1, 0x4A),
+    rgb(0xFF, 0xFF, 0xFF),
+    rgb(0xFF, 0xE1, 0x4A),
+    rgb(0xFF, 0x5A, 0x5A),
+    rgb(0xFF, 0xFF, 0xFF),
+);
+
+/// The palette of the theme and design style currently on screen.
 pub fn pal() -> &'static Palette {
-    if DARK_ACTIVE.load(Ordering::Relaxed) { &DARK } else { &LIGHT }
+    let dark = DARK_ACTIVE.load(Ordering::Relaxed);
+    match (dark, CHART.load(Ordering::Relaxed)) {
+        (false, 0) => &LIGHT,
+        (true, 0) => &DARK,
+        (false, 1) => &GRAPHITE_L,
+        (true, 1) => &GRAPHITE_D,
+        (false, 2) => &GREEN_L,
+        (true, 2) => &GREEN_D,
+        (false, 3) => &ORANGE_L,
+        (true, 3) => &ORANGE_D,
+        (false, 4) => &CONTRAST_L,
+        (true, 4) => &CONTRAST_D,
+        (true, _) => &DARK,
+        (false, _) => &LIGHT,
+    }
+}
+
+/// Remembers the design style for this process. Light and dark stay independent.
+pub fn set_chart_style(style: plancraft_core::model::ChartStyle) {
+    let n = match style {
+        plancraft_core::model::ChartStyle::Blue => 0,
+        plancraft_core::model::ChartStyle::Graphite => 1,
+        plancraft_core::model::ChartStyle::Green => 2,
+        plancraft_core::model::ChartStyle::Orange => 3,
+        plancraft_core::model::ChartStyle::HighContrast => 4,
+    };
+    CHART.store(n, Ordering::Relaxed);
+}
+
+/// Swatches a group can wear. Views paint them through [`paint_rgb`].
+pub const GROUP_SWATCHES: [[u8; 3]; 8] = [
+    [0x5A, 0x86, 0xD6],
+    [0x6E, 0x74, 0x80],
+    [0x3E, 0x8F, 0x6A],
+    [0xE0, 0x8A, 0x2F],
+    [0xD9, 0x4F, 0x4F],
+    [0xF2, 0xB1, 0x1C],
+    [0xC4, 0x4B, 0x8B],
+    [0x6A, 0x4C, 0xC4],
+];
+
+pub fn paint_rgb([r, g, b]: [u8; 3]) -> Color32 {
+    Color32::from_rgb(r, g, b)
+}
+
+/// Amber, blue, pink and green row marks. Light and dark palettes both define these.
+pub fn row_mark_color(mark: plancraft_core::model::RowMark) -> Color32 {
+    match mark {
+        plancraft_core::model::RowMark::Amber => pal().WARN,
+        plancraft_core::model::RowMark::Blue => pal().ACCENT,
+        plancraft_core::model::RowMark::Pink => pal().ERROR,
+        plancraft_core::model::RowMark::Green => pal().CHIP_OK,
+    }
+}
+
+/// Row tint for a task on the highlighted dependency chain. Direct links are stronger.
+pub fn path_row(direct: bool) -> Color32 {
+    let bg = pal().BG;
+    let accent = pal().ACCENT;
+    let t = if direct { 0.22 } else { 0.10 };
+    let mix = |a: u8, b: u8| (f32::from(a) * (1.0 - t) + f32::from(b) * t).round().clamp(0.0, 255.0) as u8;
+    Color32::from_rgb(mix(bg.r(), accent.r()), mix(bg.g(), accent.g()), mix(bg.b(), accent.b()))
 }
 
 /// The user's theme choice.

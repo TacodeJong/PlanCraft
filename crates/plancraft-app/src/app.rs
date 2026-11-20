@@ -419,7 +419,8 @@ impl PlanCraftApp {
         // Find fonts for other scripts (Chinese, Hebrew, ...) while the window opens.
         plancraft_core::print::fallback::warm_up();
         let has_doc = !lock(&ws).docs.is_empty();
-        let st = UiState { table_width: settings.table_width, start_page: !has_doc, ..UiState::default() };
+        let st = UiState { table_width: settings.table_width, start_page: !has_doc, lang: settings.lang, ..UiState::default() };
+        crate::lang::set_current(settings.lang);
         let mut app = Self {
             ws,
             st,
@@ -469,13 +470,32 @@ impl PlanCraftApp {
             app.st.toast(ToastKind::Info, RECOVERY_FOUND);
         }
         if let Ok(v) = std::env::var("PLANCRAFT_TAB")
-            && let Some(tab) = crate::state::MenuTab::ALL.into_iter().find(|t| t.label().eq_ignore_ascii_case(&v))
+            && let Some(tab) = crate::state::MenuTab::ALL.into_iter().find(|t| t.english().eq_ignore_ascii_case(&v))
         {
             app.st.menu_tab = tab;
         }
+        if !has_doc {
+            match crate::settings::launch(false, app.settings.startup, app.settings.recent.first().is_some_and(|p| p.is_file())) {
+                crate::settings::Launch::Keep => {}
+                crate::settings::Launch::OpenRecent => {
+                    if let Some(path) = app.settings.recent.first().cloned() {
+                        app.open_path(path);
+                        if !app.st.start_page && app.settings.open_to_overview {
+                            app.st.view = ViewKind::Overview;
+                        }
+                    }
+                }
+                crate::settings::Launch::Blank => {
+                    let start = plancraft_core::dates::today();
+                    lock(&app.ws).add(Project::new("Project1", start), None);
+                    app.st.start_page = false;
+                    app.st.view = if app.settings.open_to_overview { ViewKind::Overview } else { ViewKind::Gantt };
+                }
+            }
+        }
         if let Ok(v) = std::env::var("PLANCRAFT_VIEW") {
             let key = v.to_lowercase().replace([' ', '_', '-'], "");
-            if let Some(view) = ViewKind::ALL.into_iter().find(|k| k.label().to_lowercase().replace(' ', "") == key) {
+            if let Some(view) = ViewKind::ALL.into_iter().find(|k| k.english().to_lowercase().replace(' ', "") == key) {
                 app.st.view = view;
             }
         }
@@ -528,11 +548,14 @@ impl PlanCraftApp {
             (KeyboardShortcut::new(cmd, Key::X), Command::Cut, false),
             (KeyboardShortcut::new(cmd, Key::V), Command::Paste, false),
             (KeyboardShortcut::new(cmd, Key::D), Command::FillDown, false),
+            (KeyboardShortcut::new(cmd | Modifiers::SHIFT, Key::D), Command::Distill, false),
+            (KeyboardShortcut::new(cmd | Modifiers::ALT, Key::N), Command::QuickEntry, false),
             // Replace: Cmd+H hides the app on a Mac, so Cmd+Option+F there (and everywhere).
             (KeyboardShortcut::new(cmd | Modifiers::ALT, Key::F), Command::Find(true), false),
             (KeyboardShortcut::new(cmd, Key::F), Command::Find(false), false),
             (KeyboardShortcut::new(cmd, Key::H), Command::Find(true), false),
             (KeyboardShortcut::new(Modifiers::NONE, Key::F5), Command::GoTo, false),
+            (KeyboardShortcut::new(cmd | Modifiers::ALT, Key::L), Command::ToggleHighlightPaths, false),
         ];
         for (sc, c, global) in map {
             // New and Open belong on the Start Page; behind a save prompt nothing may act.
@@ -866,6 +889,59 @@ impl PlanCraftApp {
         }
     }
 
+    fn export_gantt(&mut self) {
+        let ganttish = matches!(self.st.view, ViewKind::Gantt | ViewKind::TrackingGantt | ViewKind::MultipleBaselines | ViewKind::Report);
+        if !ganttish {
+            return;
+        }
+        let Some((name, bytes)) = self.with_doc(|doc, st| {
+            let bytes = views::gantt_xlsx::workbook(&doc.project, st);
+            (doc.project.name.clone(), bytes)
+        }) else {
+            return;
+        };
+        let bytes = match bytes {
+            Ok(bytes) => bytes,
+            Err(e) => return self.st.toast(ToastKind::Error, format!("Could not build the workbook: {e}")),
+        };
+        let file = format!("{}-gantt.xlsx", file_stem(&name));
+        let Some(path) = rfd::FileDialog::new().add_filter("Excel", &["xlsx"]).set_file_name(file).save_file() else { return };
+        let path = match export_path(path, "xlsx", "an Excel workbook") {
+            Ok(p) => p,
+            Err(why) => return self.st.toast(ToastKind::Warning, why),
+        };
+        match plancraft_core::io::write_atomic(&path, &bytes, plancraft_core::io::Privacy::KeepExisting) {
+            Ok(()) => self.set_status(format!("Exported {}", path.display())),
+            Err(e) => self.st.toast(ToastKind::Error, format!("Could not save the workbook: {e}")),
+        }
+    }
+
+    fn export_report(&mut self) {
+        if self.st.view != ViewKind::Report {
+            return;
+        }
+        let Some((name, bytes)) = self.with_doc(|doc, st| {
+            let bytes = views::report::workbook(&doc.project, st);
+            (doc.project.name.clone(), bytes)
+        }) else {
+            return;
+        };
+        let bytes = match bytes {
+            Ok(bytes) => bytes,
+            Err(e) => return self.st.toast(ToastKind::Error, format!("Could not build the workbook: {e}")),
+        };
+        let file = format!("{}-report.xlsx", file_stem(&name));
+        let Some(path) = rfd::FileDialog::new().add_filter("Excel", &["xlsx"]).set_file_name(file).save_file() else { return };
+        let path = match export_path(path, "xlsx", "an Excel workbook") {
+            Ok(p) => p,
+            Err(why) => return self.st.toast(ToastKind::Warning, why),
+        };
+        match plancraft_core::io::write_atomic(&path, &bytes, plancraft_core::io::Privacy::KeepExisting) {
+            Ok(()) => self.set_status(format!("Exported {}", path.display())),
+            Err(e) => self.st.toast(ToastKind::Error, format!("Could not save the workbook: {e}")),
+        }
+    }
+
     fn export_csv(&mut self, table: plancraft_core::tabular::CsvTable) {
         let Some((name, csv)) =
             self.with_doc(|doc, _| (doc.project.name.clone(), plancraft_core::tabular::table_to_csv(&doc.project, table)))
@@ -908,10 +984,11 @@ impl PlanCraftApp {
             Command::Open => {
                 let xml = plancraft_core::mspdi::EXTENSION;
                 let sheets = spreadsheet_extensions();
-                let all: Vec<&str> = [FILE_EXTENSION, xml].into_iter().chain(sheets.iter().copied()).collect();
+                let all: Vec<&str> = [FILE_EXTENSION, xml, "json"].into_iter().chain(sheets.iter().copied()).collect();
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("Plans and task lists", &all)
                     .add_filter("PlanCraft project", &[FILE_EXTENSION])
+                    .add_filter("Project Planner", &["json"])
                     .add_filter("Microsoft Project XML", &[xml])
                     .add_filter("Excel, CSV and other spreadsheets", &sheets)
                     .pick_file()
@@ -966,9 +1043,52 @@ impl PlanCraftApp {
             }
             Command::ExportPdf => self.export_pdf(),
             Command::ExportMspdi => self.export_mspdi(),
+            Command::ExportReport => self.export_report(),
+            Command::ExportGantt => self.export_gantt(),
+            Command::SetChartStyle(style) => {
+                self.st.chart_style = style;
+                theme::set_chart_style(style);
+                self.with_doc(|doc, st| {
+                    if let Err(e) = doc.edit("Design style", |p| p.settings.chart_style = style) {
+                        st.toast(ToastKind::Error, e.to_string());
+                    }
+                });
+            }
             Command::McpPanel => {
                 self.dialogs.mcp = true;
                 self.st.start_page = false;
+            }
+            Command::AiSettings => {
+                self.dialogs.ai_open = true;
+                self.dialogs.ai.reload();
+            }
+            Command::QuickEntry => {
+                let opened = {
+                    let ws = lock(&self.ws);
+                    ws.active_doc().map(|doc| Bound::new(doc, dialogs::quick_entry::QuickEntry::default()))
+                };
+                match opened {
+                    Some(dialog) if self.dialogs.quick.is_none() => {
+                        self.dialogs.quick = Some(dialog);
+                        self.st.start_page = false;
+                    }
+                    Some(_) => self.st.start_page = false,
+                    None => self.st.toast(ToastKind::Info, crate::lang::text("qe.need_doc")),
+                }
+            }
+            Command::Distill => {
+                let opened = {
+                    let ws = lock(&self.ws);
+                    ws.active_doc().map(|doc| Bound::new(doc, dialogs::distill::Distill::default()))
+                };
+                match opened {
+                    Some(dialog) if self.dialogs.distill.is_none() => {
+                        self.dialogs.distill = Some(dialog);
+                        self.st.start_page = false;
+                    }
+                    Some(_) => self.st.start_page = false,
+                    None => self.st.toast(ToastKind::Info, crate::lang::text("distill.need_doc")),
+                }
             }
             Command::OpenFromServer => {
                 if self.server_dialog.is_none() {
@@ -992,6 +1112,20 @@ impl PlanCraftApp {
                 self.settings.theme = t;
                 self.settings.save();
                 theme::set_choice(ctx, t);
+            }
+            Command::SetLang(lang) => {
+                self.settings.lang = lang;
+                self.settings.save();
+                self.st.lang = lang;
+                crate::lang::set_current(lang);
+            }
+            Command::SetStartup(startup) => {
+                self.settings.startup = startup;
+                self.settings.save();
+            }
+            Command::SetOpenOverview(on) => {
+                self.settings.open_to_overview = on;
+                self.settings.save();
             }
             other => {
                 let ws = self.ws.clone();
@@ -1407,8 +1541,14 @@ impl PlanCraftApp {
                 }
             }
             Command::DeleteResources => {
-                let ids: Vec<ResourceId> = st.sel.resources.iter().copied().collect();
-                if !ids.is_empty() {
+                let ids: Vec<ResourceId> = st.sel.resources.iter().copied().filter(|id| doc.project.resource(*id).is_some()).collect();
+                if ids.is_empty() {
+                    return;
+                }
+                let assigned = ids.iter().any(|id| doc.project.assignments_for_resource(*id).next().is_some());
+                if assigned {
+                    self.dialogs.resource_delete = Some(Bound::new(doc, dialogs::resource_delete::ResourceDelete::new(&doc.project, ids)));
+                } else {
                     let r = doc.try_edit("Delete Resource", ChangeSource::User, |p| p.delete_resources(&ids));
                     report(st, r);
                     st.sel.resources.clear();
@@ -1503,6 +1643,7 @@ impl PlanCraftApp {
                 }
             }
             Command::ExpandAll => st.collapsed.clear(),
+            Command::ToggleHighlightPaths => st.gantt.show_paths = !st.gantt.show_paths,
             Command::InsertColumn { .. } | Command::HideColumn(_) | Command::MoveColumn { .. } | Command::ResetColumns => {
                 let table = st.table;
                 let before = crate::fields::table_fields(&doc.project, table);
@@ -1662,7 +1803,11 @@ impl PlanCraftApp {
                 }
                 if self.st.filter != crate::state::TaskFilter::All {
                     ui.separator();
-                    ui.label(RichText::new(format!("Filter: {}", self.st.filter.label())).size(12.0).color(theme::pal().ACCENT_MID));
+                    ui.label(
+                        RichText::new(format!("{}: {}", self.st.t("status_bar.filter"), self.st.filter.label()))
+                            .size(12.0)
+                            .color(theme::pal().ACCENT_MID),
+                    );
                 }
                 let warnings = doc.project.sched.warnings.len();
                 if warnings > 0 {
@@ -2520,6 +2665,7 @@ impl PlanCraftApp {
     /// Everything drawn in one frame (run behind the frame guard).
     fn frame(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        crate::lang::set_current(self.st.lang);
         theme::sync(&ctx);
         self.screenshot_hook(&ctx);
         if std::mem::take(&mut self.inject_panic) {
@@ -2626,8 +2772,12 @@ impl PlanCraftApp {
             }
             // Each document keeps its own sort and grouping.
             let st = &mut self.st;
-            let leaving =
-                ViewOrder { sort: st.sort.take(), group: st.group.take(), collapsed_groups: std::mem::take(&mut st.collapsed_groups) };
+            let leaving = ViewOrder {
+                sort: st.sort.take(),
+                group: st.group.take(),
+                collapsed_groups: std::mem::take(&mut st.collapsed_groups),
+                notes_open: std::mem::take(&mut st.notes_open),
+            };
             if let Some(old) = self.last_active {
                 st.view_orders.insert(old, leaving);
             }
@@ -2637,6 +2787,7 @@ impl PlanCraftApp {
                 st.sort = order.sort;
                 st.group = order.group;
                 st.collapsed_groups = order.collapsed_groups;
+                st.notes_open = order.notes_open;
             }
             self.last_active = active;
         }
@@ -2651,10 +2802,7 @@ impl PlanCraftApp {
             // tasks the filter leaves out of the others: those stay.
             let filtered_view =
                 !matches!(self.st.view, ViewKind::ResourceSheet | ViewKind::ResourceUsage | ViewKind::Workload | ViewKind::Timesheet);
-            if filtered_view
-                && (self.st.filter != crate::state::TaskFilter::All || !self.st.search.trim().is_empty())
-                && !self.st.sel.tasks.is_empty()
-            {
+            if filtered_view && views::criteria_active(&self.st) && !self.st.sel.tasks.is_empty() {
                 let shown: HashSet<TaskId> =
                     views::search_order(p, &mut self.st).into_iter().filter_map(|i| p.tasks.get(i).map(|t| t.id)).collect();
                 self.st.sel.tasks.retain(|id| shown.contains(id));
@@ -2667,6 +2815,14 @@ impl PlanCraftApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.last_title = title;
         }
+
+        if let Some(doc) = ws.active_doc()
+            && self.st.style_doc != Some(doc.handle)
+        {
+            self.st.chart_style = doc.project.settings.chart_style;
+            self.st.style_doc = Some(doc.handle);
+        }
+        theme::set_chart_style(self.st.chart_style);
 
         let info = self.menu_info(&ws);
         let start_open = self.st.start_page;
@@ -2723,6 +2879,7 @@ impl PlanCraftApp {
                     views::timeline::show(ui, tl, &doc.project, &shown, &mut st.gantt, chart_w);
                     rect = Rect::from_min_max(pos2(rect.left(), tl.bottom()), rect.max);
                 }
+                let rect = views::properties::dock(ui, rect, doc, st);
                 match st.view {
                     ViewKind::Gantt => views::gantt::show(ui, rect, doc, st, views::gantt_chart::ChartKind::Gantt, &mut out),
                     ViewKind::TrackingGantt => views::gantt::show(ui, rect, doc, st, views::gantt_chart::ChartKind::Tracking, &mut out),
@@ -2733,6 +2890,9 @@ impl PlanCraftApp {
                     ViewKind::NetworkDiagram => views::network::show(ui, rect, doc, st, &mut out),
                     ViewKind::TaskUsage => views::task_usage::show(ui, rect, doc, st, &mut out),
                     ViewKind::Milestones => views::milestones::show(ui, rect, doc, st, &mut out),
+                    ViewKind::Overview => views::overview::show(ui, rect, doc, st, &mut out),
+                    ViewKind::Deliveries => views::deliveries::show(ui, rect, doc, st, &mut out),
+                    ViewKind::Report => views::report::show(ui, rect, doc, st, &mut out),
                     ViewKind::Calendar => views::calendar::show(ui, rect, doc, st, &mut out),
                     ViewKind::ResourceSheet => views::resource_sheet::show(ui, rect, doc, st, &mut out),
                     ViewKind::ResourceUsage => views::resource_usage::show(ui, rect, doc, st, &mut out),
@@ -2810,6 +2970,8 @@ impl PlanCraftApp {
             let mut toasts = Vec::new();
             let sel = &self.st.sel;
             dialogs::show_bound(&mut self.dialogs.assign, &mut ws, |d, doc| d.show(&ctx, doc, sel, &mut toasts));
+            let sel = &mut self.st.sel;
+            dialogs::show_bound(&mut self.dialogs.resource_delete, &mut ws, |d, doc| d.show(&ctx, doc, sel, &mut toasts));
             for (k, t) in toasts {
                 self.st.toast(k, t);
             }
@@ -2822,7 +2984,29 @@ impl PlanCraftApp {
                 dialogs::misc::history(&ctx, doc, &mut self.dialogs.history);
             }
         }
+        let mut picked = None;
+        let at = ws.active_doc().and_then(|doc| {
+            views::selected_in_order(&doc.project, &self.st.sel).first().copied().and_then(|id| doc.project.task_index(id))
+        });
+        dialogs::show_bound(&mut self.dialogs.quick, &mut ws, |d, doc| d.show(&ctx, doc, at, &mut picked));
+        if let Some(id) = picked {
+            self.st.sel.select_task(id);
+        }
+        let mut open_ai = false;
+        let mut distill_notes = Vec::new();
+        let ai = self.settings.ai.clone();
+        dialogs::show_bound(&mut self.dialogs.distill, &mut ws, |d, doc| d.show(&ctx, doc, &ai, &mut open_ai, &mut distill_notes));
         drop(ws);
+        for note in distill_notes {
+            self.st.toast(ToastKind::Error, note);
+        }
+        if open_ai {
+            self.dialogs.ai_open = true;
+            self.dialogs.ai.reload();
+        }
+        if self.dialogs.ai_open {
+            dialogs::ai::show(&ctx, &mut self.dialogs.ai_open, &mut self.dialogs.ai, &mut self.settings);
+        }
         if self.dialogs.about {
             dialogs::misc::about(&ctx, &mut self.dialogs.about);
         }
@@ -3034,6 +3218,53 @@ mod ui_tests {
         h
     }
 
+    #[test]
+    fn highlight_paths_sits_next_to_the_critical_path_toggle() {
+        let mut h = harness();
+        let ctx = h.ctx.clone();
+        h.state_mut().st.menu_tab = crate::state::MenuTab::Format;
+        h.state_mut().exec(&ctx, Command::ToggleHighlightPaths);
+        assert!(h.state().st.gantt.show_paths);
+        h.run_steps(2);
+        h.state_mut().exec(&ctx, Command::ToggleHighlightPaths);
+        assert!(!h.state().st.gantt.show_paths);
+    }
+
+    #[test]
+    fn deleting_an_assigned_resource_waits_for_a_choice() {
+        let mut h = harness();
+        let ctx = h.ctx.clone();
+        let (rid, before) = {
+            let ws = h.state().ws.lock().unwrap();
+            let p = &ws.active_doc().unwrap().project;
+            let rid = p.resources.iter().find(|r| p.assignments_for_resource(r.id).next().is_some()).unwrap().id;
+            (rid, p.resources.len())
+        };
+        h.state_mut().st.sel.select_resource(rid);
+        h.state_mut().exec(&ctx, Command::DeleteResources);
+        h.run_steps(2);
+        assert!(h.state().dialogs.resource_delete.is_some(), "the prompt stays open until a choice");
+        {
+            let ws = h.state().ws.lock().unwrap();
+            let p = &ws.active_doc().unwrap().project;
+            assert_eq!(p.resources.len(), before);
+            assert!(p.resource(rid).is_some());
+            assert!(p.assignments_for_resource(rid).next().is_some());
+        }
+        let dialog = h.state_mut().dialogs.resource_delete.take().unwrap().dialog;
+        {
+            let mut ws = h.state().ws.lock().unwrap();
+            let doc = ws.active_doc_mut().unwrap();
+            dialog.replace(doc).unwrap();
+            assert!(doc.project.resource(rid).is_none());
+        }
+        h.state_mut().exec(&ctx, Command::Undo);
+        let ws = h.state().ws.lock().unwrap();
+        let p = &ws.active_doc().unwrap().project;
+        assert!(p.resource(rid).is_some(), "replace is one undo step");
+        assert!(p.assignments_for_resource(rid).next().is_some());
+    }
+
     /// Regression: CSV export wrote over whatever file was chosen (the open plan included), and
     /// suggested names with path separators in them.
     #[test]
@@ -3096,9 +3327,69 @@ mod ui_tests {
         assert_eq!(names.len(), n + 1, "{names:?}");
         assert_eq!(names.last().unwrap(), "Write release notes");
 
+        // Enter leaves the next name ready to type, so close that editor before undoing the task.
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
         h.key_press_modifiers(Modifiers::COMMAND, egui::Key::Z);
         h.run_steps(3);
         assert_eq!(tasks(&h).len(), n);
+    }
+
+    /// Enter on a typed name opens the next sibling. Tab indents that new task, Shift-Tab
+    /// outdents it, and Escape drops an empty name. Each of those is one undo step.
+    #[test]
+    fn quick_entry_enter_tab_and_escape() {
+        let mut h = harness();
+        let n = tasks(&h).len();
+        let level = |h: &Harness<'static, PlanCraftApp>, i: usize| {
+            h.state().ws.lock().unwrap().active_doc().unwrap().project.tasks[i].outline_level
+        };
+        h.state_mut().st.task_grid.cursor = Some((n, 2));
+        focus_task_grid(&mut h);
+        h.event(egui::Event::Text("Alpha".into()));
+        h.run_steps(2);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        h.event(egui::Event::Text("Beta".into()));
+        h.run_steps(2);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        let names = tasks(&h);
+        assert_eq!(&names[n..], ["Alpha", "Beta"], "{names:?}");
+        assert_eq!(level(&h, n), level(&h, n + 1));
+
+        h.event(egui::Event::Text("Child".into()));
+        h.run_steps(2);
+        h.key_press(egui::Key::Tab);
+        h.run_steps(3);
+        assert_eq!(tasks(&h).last().map(String::as_str), Some("Child"));
+        assert_eq!(level(&h, n + 2), level(&h, n + 1).saturating_add(1));
+        h.key_press_modifiers(Modifiers::SHIFT, egui::Key::Tab);
+        h.run_steps(3);
+        assert_eq!(level(&h, n + 2), level(&h, n + 1));
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        h.key_press_modifiers(Modifiers::COMMAND, egui::Key::Z);
+        h.run_steps(2);
+        assert_eq!(level(&h, n + 2), level(&h, n + 1).saturating_add(1), "outdent undoes on its own");
+        h.key_press_modifiers(Modifiers::COMMAND, egui::Key::Z);
+        h.run_steps(2);
+        assert_eq!(tasks(&h).len(), n + 2, "creating and indenting is one undo step");
+
+        let before = tasks(&h).len();
+        h.state_mut().st.task_grid.begin_edit(before, 2, String::new());
+        h.run_steps(2);
+        h.event(egui::Event::Text("Nope".into()));
+        h.run_steps(2);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert_eq!(tasks(&h).len(), before, "escape cancels the empty row");
+
+        h.state_mut().st.task_grid.begin_edit(before, 2, String::new());
+        h.run_steps(2);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        assert_eq!(tasks(&h).len(), before, "enter on an empty name creates nothing");
     }
 
     #[test]
@@ -4329,7 +4620,8 @@ mod ui_tests {
             let ws = lock(&h.state().ws);
             let doc = ws.active_doc().unwrap();
             assert!(ids.iter().all(|id| doc.project.task(*id).unwrap().duration == first_duration));
-            assert_eq!(doc.undo_label(), Some("Fill Down Duration"));
+            let expected = format!("Fill Down {}", crate::lang::text("col.duration"));
+            assert_eq!(doc.undo_label(), Some(expected.as_str()));
         }
         // Finish fills like a typed date; one row has nothing below it to fill.
         h.state_mut().st.task_grid.cursor = Some((1, finish_col));
@@ -4786,7 +5078,8 @@ mod ui_tests {
     }
 
     /// Regression (found in review, also on main): the key that ended an edit was handled twice,
-    /// so Enter moved two rows down and Tab two columns right.
+    /// so Enter moved two rows down and Tab two columns right. Tab in the name column indents
+    /// instead of changing columns.
     #[test]
     fn enter_and_tab_after_an_edit_move_one_cell() {
         let mut h = harness();
@@ -4798,11 +5091,16 @@ mod ui_tests {
         h.key_press(egui::Key::Enter);
         h.run_steps(3);
         assert_eq!(h.state().st.task_grid.cursor, Some((3, col)));
+        h.key_press(egui::Key::Escape);
+        h.run_steps(1);
+        let other = column_of(&h, crate::columns::TaskCol::Duration);
+        h.state_mut().st.task_grid.cursor = Some((3, other));
+        focus_task_grid(&mut h);
         h.key_press(egui::Key::F2);
         h.run_steps(2);
         h.key_press(egui::Key::Tab);
         h.run_steps(3);
-        assert_eq!(h.state().st.task_grid.cursor, Some((3, col + 1)));
+        assert_eq!(h.state().st.task_grid.cursor, Some((3, other + 1)));
     }
 
     /// Regression (review): in a sorted view, typing a new task into a blank row and leaving it
@@ -4990,6 +5288,11 @@ mod ui_tests {
         for v in ViewKind::ALL {
             h.state_mut().st.view = v;
             h.run_steps(2);
+        }
+        h.state_mut().st.properties_visible = true;
+        for v in ViewKind::ALL {
+            h.state_mut().st.view = v;
+            h.run_steps(1);
         }
         h.state_mut().st.start_page = true;
         h.run_steps(2);

@@ -234,6 +234,7 @@ proptest! {
                 to,
                 printed: start().and_hms_opt(9, 0, 0).unwrap(),
                 palette: plancraft_core::print::layout::Palette::default(),
+                legend: plancraft_core::print::LegendWords::english(),
             });
             prop_assert!(!out.pages.is_empty() && out.pages.len() <= plancraft_core::print::layout::MAX_PAGES);
             prop_assert!(plancraft_core::print::pdf::write(&out).starts_with(b"%PDF"));

@@ -349,6 +349,86 @@ fn table(kind: CustomFieldKind) -> &'static [u32] {
     }
 }
 
+/// How many of a kind are left for user custom fields. PlanCraft reserves the last slots
+/// (Text30 downwards, Date10 downwards, Flag20 downwards, Number20) for its own fields.
+pub fn user_slot_limit(kind: CustomFieldKind) -> usize {
+    let reserved = match kind {
+        CustomFieldKind::Text => 2,
+        CustomFieldKind::Date => 4,
+        CustomFieldKind::Flag => 3,
+        CustomFieldKind::Number => 1,
+        CustomFieldKind::Cost | CustomFieldKind::Duration => 0,
+    };
+    slots(kind).saturating_sub(reserved)
+}
+
+/// A PlanCraft field carried in a reserved extended attribute. The alias always starts with
+/// `Planner `, the same convention as the Swift app's `Planner Given Work (hours)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlannerField {
+    StartEarliest,
+    StartLatest,
+    FinishEarliest,
+    FinishLatest,
+    StartLatestFixed,
+    FinishLatestFixed,
+    FillsGroup,
+    PercentOfGroup,
+    RowMark,
+    Status,
+}
+
+impl PlannerField {
+    pub const ALL: [PlannerField; 10] = [
+        PlannerField::StartEarliest,
+        PlannerField::StartLatest,
+        PlannerField::FinishEarliest,
+        PlannerField::FinishLatest,
+        PlannerField::StartLatestFixed,
+        PlannerField::FinishLatestFixed,
+        PlannerField::FillsGroup,
+        PlannerField::PercentOfGroup,
+        PlannerField::RowMark,
+        PlannerField::Status,
+    ];
+
+    pub fn alias(self) -> &'static str {
+        match self {
+            PlannerField::StartEarliest => "Planner Start Earliest",
+            PlannerField::StartLatest => "Planner Start Latest",
+            PlannerField::FinishEarliest => "Planner Finish Earliest",
+            PlannerField::FinishLatest => "Planner Finish Latest",
+            PlannerField::StartLatestFixed => "Planner Start Latest Fixed",
+            PlannerField::FinishLatestFixed => "Planner Finish Latest Fixed",
+            PlannerField::FillsGroup => "Planner Fills Group",
+            PlannerField::PercentOfGroup => "Planner Percent Of Group",
+            PlannerField::RowMark => "Planner Row Mark",
+            PlannerField::Status => "Planner Status",
+        }
+    }
+
+    /// The reserved slot: the top of the kind's range, counting downwards.
+    pub fn slot(self) -> Slot {
+        let (kind, number) = match self {
+            PlannerField::StartEarliest => (CustomFieldKind::Date, 10),
+            PlannerField::StartLatest => (CustomFieldKind::Date, 9),
+            PlannerField::FinishEarliest => (CustomFieldKind::Date, 8),
+            PlannerField::FinishLatest => (CustomFieldKind::Date, 7),
+            PlannerField::StartLatestFixed => (CustomFieldKind::Flag, 20),
+            PlannerField::FinishLatestFixed => (CustomFieldKind::Flag, 19),
+            PlannerField::FillsGroup => (CustomFieldKind::Flag, 18),
+            PlannerField::PercentOfGroup => (CustomFieldKind::Number, 20),
+            PlannerField::RowMark => (CustomFieldKind::Text, 30),
+            PlannerField::Status => (CustomFieldKind::Text, 29),
+        };
+        Slot { kind, number }
+    }
+
+    pub fn from_alias(alias: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|field| field.alias() == alias.trim())
+    }
+}
+
 /// The field id of a custom field slot (`None` past the last one of its kind).
 pub fn field_id(slot: Slot) -> Option<u32> {
     slot.number.checked_sub(1).and_then(|i| table(slot.kind).get(i)).copied()
@@ -474,6 +554,18 @@ mod tests {
         }
         assert_eq!(interim_ids(0), None);
         assert_eq!(interim_ids(11), None);
+    }
+
+    #[test]
+    fn planner_slots_are_the_top_of_each_range() {
+        for field in PlannerField::ALL {
+            let id = field_id(field.slot()).unwrap();
+            assert_eq!(slot_of(id), Some(field.slot()));
+            assert!(field.alias().starts_with("Planner "));
+            assert_eq!(PlannerField::from_alias(field.alias()), Some(field));
+            assert!(field.slot().number > user_slot_limit(field.slot().kind));
+        }
+        assert_eq!(field_id(Slot { kind: CustomFieldKind::Text, number: 30 }), Some(188744016));
     }
 
     #[test]

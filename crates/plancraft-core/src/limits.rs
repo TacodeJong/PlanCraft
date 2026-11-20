@@ -521,6 +521,19 @@ impl Fixer {
         self.minutes(&mut t.duration, "a duration is longer than the maximum of 5 years");
         self.minutes(&mut t.leveling_delay, "a leveling delay is out of range");
         self.opt_datetime(&mut t.constraint.date);
+        self.opt_datetime(&mut t.bounds.start_earliest);
+        self.opt_datetime(&mut t.bounds.start_latest);
+        self.opt_datetime(&mut t.bounds.finish_earliest);
+        self.opt_datetime(&mut t.bounds.finish_latest);
+        if let Some(pct) = t.duration_percent {
+            if !pct.is_finite() {
+                t.duration_percent = None;
+                self.note("a percent of group is out of range");
+            } else if !(0.0..=1000.0).contains(&pct) {
+                t.duration_percent = Some(pct.clamp(0.0, 1000.0));
+                self.note("a percent of group is out of range");
+            }
+        }
         self.opt_datetime(&mut t.deadline);
         self.opt_datetime(&mut t.actual_start);
         self.opt_datetime(&mut t.actual_finish);

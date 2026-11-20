@@ -1,6 +1,6 @@
 //! Gantt Chart / Tracking Gantt view: task table on the left, chart on the right.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use egui::{CursorIcon, Rect, Sense, Stroke, Ui, pos2, vec2};
 use plancraft_core::dates::prelude::*;
@@ -22,7 +22,7 @@ pub const BLANK_ROWS: usize = 20;
 
 /// Blank rows below the tasks (for typing new tasks), only in the plain outline.
 pub fn blank_rows(st: &UiState) -> usize {
-    if st.filter == crate::state::TaskFilter::All && st.search.is_empty() && st.group.is_none() { BLANK_ROWS } else { 0 }
+    if !super::criteria_active(st) && st.group.is_none() && st.page_group == crate::state::PageGroup::None { BLANK_ROWS } else { 0 }
 }
 
 /// The cell of a group header row: the value and count under the name column, the span and
@@ -56,6 +56,7 @@ pub fn task_table(
     st: &mut UiState,
     rows: &[Row],
     show_vscroll: bool,
+    path: Option<&HashMap<TaskId, PathRole>>,
     out: &mut Vec<Command>,
 ) -> grid::GridOutput {
     let fields: Vec<Field> = fields::table_fields(&doc.project, st.table);
@@ -75,6 +76,7 @@ pub fn task_table(
     let blank = blank_rows(st);
     // Rows are dragged in the outline order only (not sorted or grouped).
     let row_drag = st.sort.is_none() && st.group.is_none();
+    let quick_name = if row_drag { fields.iter().position(|f| *f == Field::Builtin(TaskCol::Name)) } else { None };
     let output = {
         let p = &doc.project;
         // Rows show the task's row number (what predecessors refer to), also when sorted or grouped.
@@ -94,9 +96,12 @@ pub fn task_table(
             row_height: theme::ROW_HEIGHT,
             row_key: Some(&row_key),
             row_drag,
+            outline_arrows: st.group.is_none(),
+            quick_name,
         };
         let sel = &st.sel;
         let collapsed = &st.collapsed;
+        let notes_open = &st.notes_open;
         let is_over = |id: TaskId| over_tasks.contains(&id);
         let ctx = CellCtx { overallocated: &is_over, others_on: Some(&st.others_on) };
         let is_selected = |r: usize| match rows.get(r) {
@@ -106,10 +111,16 @@ pub fn task_table(
             _ => super::task_at(p, rows, r).is_some_and(|t| sel.tasks.contains(&t.id)),
         };
         let grouped = st.group.is_some();
+        let context: HashSet<TaskId> = if super::criteria_active(st) {
+            p.tasks.iter().filter(|t| !super::task_matches(p, st, t)).map(|t| t.id).collect()
+        } else {
+            HashSet::new()
+        };
         let mut cell = |r: usize, c: usize| {
             let (Some(row), Some(&field)) = (rows.get(r), fields.get(c)) else { return grid::Cell::default() };
             let idx = match row {
                 Row::Group(g) => return group_cell(field, p, g),
+                Row::Notes(idx) => return notes_cell(field, p, *idx),
                 Row::Task(idx) => *idx,
             };
             let mut cell = field.cell(p, idx, &ctx);
@@ -120,8 +131,29 @@ pub fn task_table(
                     cell.expander = None;
                 } else if cell.expander.is_some() {
                     cell.expander = Some(!p.tasks.get(idx).is_some_and(|t| collapsed.contains(&t.id)));
+                } else if p.tasks.get(idx).is_some_and(|t| !t.notes.trim().is_empty()) {
+                    let id = p.tasks.get(idx).map(|t| t.id);
+                    cell.icons.push((grid::Glyph::Note, theme::pal().TEXT_WEAK, crate::lang::text("common.notes").into()));
+                    cell.expander = Some(id.is_some_and(|id| notes_open.contains(&id)));
                 } else {
                     cell.indent += 14.0;
+                }
+            }
+            if let Some(id) = p.tasks.get(idx).map(|t| t.id)
+                && context.contains(&id)
+                && cell.color.is_none()
+            {
+                cell.color = Some(theme::pal().TEXT_WEAK);
+            }
+            if let Some(map) = path
+                && let Some(id) = p.tasks.get(idx).map(|t| t.id)
+            {
+                let selected = sel.tasks.contains(&id);
+                match map.get(&id) {
+                    Some(PathRole::Direct) if !selected => cell.bg = Some(theme::path_row(true)),
+                    Some(PathRole::Indirect) if !selected => cell.bg = Some(theme::path_row(false)),
+                    None if cell.color.is_none() => cell.color = Some(theme::pal().TEXT_WEAK),
+                    _ => {}
                 }
             }
             cell
@@ -134,7 +166,13 @@ pub fn task_table(
 
     for ev in output.events.clone() {
         match ev {
-            GridEvent::Select { row, shift, ctrl } => super::select_row(&mut st.sel, &doc.project, rows, row, shift, ctrl),
+            GridEvent::Select { row, shift, ctrl } => {
+                if let Some(id) = notes_task(&doc.project, rows, row) {
+                    st.sel.select_task(id);
+                } else {
+                    super::select_row(&mut st.sel, &doc.project, rows, row, shift, ctrl);
+                }
+            }
             GridEvent::CursorRow { row, shift } => {
                 // Arrowing onto a group header selects nothing (a click selects the group), so a
                 // key pressed next can't act on the whole group by surprise.
@@ -142,12 +180,19 @@ pub fn task_table(
                     if !shift {
                         st.sel.tasks.clear();
                     }
+                } else if let Some(id) = notes_task(&doc.project, rows, row) {
+                    if !shift {
+                        st.sel.select_task(id);
+                    }
                 } else {
                     super::select_row(&mut st.sel, &doc.project, rows, row, shift, false);
                 }
             }
             GridEvent::Activate { row, .. } => {
-                if super::task_at(&doc.project, rows, row).is_some() {
+                if let Some(id) = notes_task(&doc.project, rows, row) {
+                    st.sel.select_task(id);
+                    out.push(Command::TaskNotes);
+                } else if super::task_at(&doc.project, rows, row).is_some() {
                     super::select_row(&mut st.sel, &doc.project, rows, row, false, false);
                     out.push(Command::TaskInfo);
                 }
@@ -158,15 +203,29 @@ pub fn task_table(
                         st.collapsed_groups.insert(g.label.clone());
                     }
                 }
+                Some(Row::Notes(idx)) => {
+                    if let Some(id) = doc.project.tasks.get(*idx).map(|t| t.id) {
+                        st.notes_open.remove(&id);
+                    }
+                }
                 _ => {
                     let Some(id) = super::task_at(&doc.project, rows, row).map(|t| t.id) else { continue };
-                    if !st.collapsed.remove(&id) {
-                        st.collapsed.insert(id);
+                    let summary = doc.project.task_index(id).is_some_and(|i| doc.project.has_children(i));
+                    if summary {
+                        if !st.collapsed.remove(&id) {
+                            st.collapsed.insert(id);
+                        }
+                    } else if !st.notes_open.remove(&id) {
+                        st.notes_open.insert(id);
                     }
                 }
             },
-            GridEvent::Commit { row, col, text } => {
+            GridEvent::Commit { row, col, text, name_key } => {
                 let (Some(&field), Some(def)) = (fields.get(col), defs.get(col)) else { continue };
+                if name_key != grid::NameKey::None {
+                    apply_name_key(doc, st, rows, field, def, row, col, &text, name_key);
+                    continue;
+                }
                 if row < rows.len() {
                     let Some(id) = super::task_at(&doc.project, rows, row).map(|t| t.id) else { continue };
                     let label = format!("Edit {}", def.title);
@@ -200,6 +259,7 @@ pub fn task_table(
                     // Blank rows have nothing to delete.
                     _ if row >= rows.len() => {}
                     // The row number, the task name or a group header: delete the selected tasks.
+                    _ if matches!(rows.get(row), Some(Row::Notes(_))) => {}
                     None | Some((Field::Builtin(TaskCol::Name), _)) => out.push(Command::DeleteSelection),
                     _ if !matches!(rows.get(row), Some(Row::Task(_))) => out.push(Command::DeleteSelection),
                     // Any other cell: clear that field of the selected tasks.
@@ -270,6 +330,100 @@ fn clear_field(doc: &mut Document, st: &mut UiState, rows: &[Row], row: usize, f
     if let Err(e) = r {
         st.toast(ToastKind::Info, format!("{} can't be cleared: {e}. {hint}", def.title));
     }
+}
+
+/// Enter opens the next name. Tab indents the task being named; Shift-Tab outdents it.
+/// Each of those is one undo step. Escape closes an empty name without creating a task.
+fn apply_name_key(
+    doc: &mut Document,
+    st: &mut UiState,
+    rows: &[Row],
+    field: Field,
+    def: &grid::ColumnDef,
+    row: usize,
+    col: usize,
+    text: &str,
+    key: grid::NameKey,
+) {
+    let existing = if row < rows.len() { super::task_at(&doc.project, rows, row).map(|t| t.id) } else { None };
+    match key {
+        grid::NameKey::None => {}
+        grid::NameKey::Next => {
+            let changed = match existing {
+                Some(id) => doc.project.task(id).is_none_or(|t| t.name != text),
+                None => !text.is_empty(),
+            };
+            if changed && !text.is_empty() {
+                let saved = if let Some(id) = existing {
+                    doc.edit_msg(&format!("Edit {}", def.title), |p| {
+                        field.commit(p, id, text)?;
+                        Ok(id)
+                    })
+                } else {
+                    doc.edit_msg(st.t("qe.new"), |p| Ok(p.add_task(text.to_string(), None)))
+                };
+                match saved {
+                    Ok(id) => {
+                        st.sel.select_task(id);
+                        if existing.is_none() {
+                            st.task_grid.typed_row_added(row, u64::from(id.0), rows.len());
+                        }
+                    }
+                    Err(e) => {
+                        st.toast(ToastKind::Error, e);
+                        return;
+                    }
+                }
+            }
+            if let Some(next) = next_name_row(rows, row, blank_rows(st)) {
+                let name =
+                    rows.get(next).and_then(Row::task).and_then(|i| doc.project.tasks.get(i)).map(|t| t.name.clone()).unwrap_or_default();
+                st.task_grid.begin_edit(next, col, name);
+                st.task_grid.scroll_to = Some(next);
+            }
+        }
+        grid::NameKey::Indent => {
+            if text.is_empty() && existing.is_none() {
+                return;
+            }
+            let created = existing.is_none();
+            match doc.edit_msg(st.t("qe.indent"), |p| {
+                let id = if let Some(id) = existing {
+                    field.commit(p, id, text)?;
+                    id
+                } else {
+                    p.add_task(text.to_string(), None)
+                };
+                p.indent(id).map_err(|e| e.to_string())?;
+                Ok(id)
+            }) {
+                Ok(id) => {
+                    st.sel.select_task(id);
+                    if created {
+                        st.task_grid.typed_row_added(row, u64::from(id.0), rows.len());
+                    }
+                    st.task_grid.begin_edit(row, col, text.to_string());
+                }
+                Err(e) => st.toast(ToastKind::Warning, e),
+            }
+        }
+        grid::NameKey::Outdent => {
+            let Some(id) = existing else { return };
+            match doc.edit_msg(st.t("qe.outdent"), |p| {
+                field.commit(p, id, text)?;
+                p.outdent(id).map_err(|e| e.to_string())?;
+                Ok(())
+            }) {
+                Ok(()) => st.task_grid.begin_edit(row, col, text.to_string()),
+                Err(e) => st.toast(ToastKind::Warning, e),
+            }
+        }
+    }
+}
+
+fn next_name_row(rows: &[Row], from: usize, blanks: usize) -> Option<usize> {
+    let last = rows.len().saturating_add(blanks);
+    (from.saturating_add(1)..last).find(|&r| r >= rows.len() || matches!(rows.get(r), Some(Row::Task(_))))
 }
 
 fn st_context_menu(ui: &Ui, pos: egui::Pos2) {
@@ -427,13 +581,65 @@ pub fn splitter(ui: &mut Ui, x: f32, rect: Rect, width: &mut f32) {
     ui.painter().vline(x + 2.0, rect.y_range(), Stroke::new(1.0, theme::pal().GRID_LINE_STRONG));
 }
 
+fn notes_task(p: &Project, rows: &[Row], row: usize) -> Option<TaskId> {
+    let idx = match rows.get(row) {
+        Some(Row::Notes(idx)) => *idx,
+        _ => return None,
+    };
+    p.tasks.get(idx).map(|t| t.id)
+}
+
+fn notes_cell(field: Field, p: &Project, idx: usize) -> grid::Cell {
+    if field != Field::Builtin(TaskCol::Name) {
+        return grid::Cell { read_only: true, ..Default::default() };
+    }
+    let Some(t) = p.tasks.get(idx) else { return grid::Cell::default() };
+    let indent = f32::from(t.outline_level) * 16.0;
+    grid::Cell {
+        text: t.notes.split_whitespace().collect::<Vec<_>>().join(" "),
+        color: Some(theme::pal().TEXT_WEAK),
+        indent,
+        read_only: true,
+        tooltip: Some(t.notes.clone()),
+        ..Default::default()
+    }
+}
+
+/// The outline plus a notes row under each expanded leaf that has notes. Groups never get one.
+pub fn outline_with_notes(rows: &[Row], p: &Project, open: &HashSet<TaskId>) -> Vec<Row> {
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        out.push(row.clone());
+        let Row::Task(idx) = row else { continue };
+        if p.has_children(*idx) {
+            continue;
+        }
+        let Some(t) = p.tasks.get(*idx) else { continue };
+        if t.notes.trim().is_empty() || !open.contains(&t.id) {
+            continue;
+        }
+        out.push(Row::Notes(*idx));
+    }
+    out
+}
+
+fn highlight_path(p: &Project, st: &UiState) -> Option<HashMap<TaskId, PathRole>> {
+    if !st.gantt.show_paths || !st.sel.resources.is_empty() || st.sel.tasks.is_empty() {
+        return None;
+    }
+    let ids: Vec<TaskId> = st.sel.tasks.iter().copied().collect();
+    Some(p.path_roles(&ids))
+}
+
 pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, kind: ChartKind, out: &mut Vec<Command>) {
-    let rows = super::visible_rows(&doc.project, st);
+    let rect = super::filter_bar::task(ui, rect, &doc.project, st);
+    let rows = outline_with_notes(&super::visible_rows(&doc.project, st), &doc.project, &st.notes_open);
+    let path = highlight_path(&doc.project, st);
     let table_w = st.table_width.min(rect.width() - 160.0).max(120.0);
     let table_rect = Rect::from_min_size(rect.min, vec2(table_w, rect.height()));
     let chart_rect = Rect::from_min_max(pos2(rect.left() + table_w + 4.0, rect.top()), rect.max);
 
-    task_table(ui, table_rect, doc, st, &rows, false, out);
+    task_table(ui, table_rect, doc, st, &rows, false, path.as_ref(), out);
     splitter(ui, rect.left() + table_w + 2.0, rect, &mut st.table_width);
 
     let blank = blank_rows(st);
@@ -448,6 +654,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, kind:
             row_height: theme::ROW_HEIGHT,
             header_height: theme::HEADER_HEIGHT,
             blank_rows: blank,
+            path: path.as_ref(),
         };
         gantt_chart::show(ui, chart_rect, &mut st.gantt, &mut st.task_grid.scroll_y, &input)
     };

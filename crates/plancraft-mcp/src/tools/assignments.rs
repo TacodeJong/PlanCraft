@@ -32,7 +32,7 @@ pub fn tools() -> Vec<Tool> {
         Tool::new(
             "assign_resource",
             "Assign a resource",
-            "Assign a resource to a task (or update the existing assignment). Units default to 100%. Without 'work', work follows the task duration, or the task's estimate for the first assignment of an estimated task. Effort-driven tasks redistribute work among resources.",
+            "Assign a resource to a task (or update the existing assignment). A summary task is refused: a group's resources are the resources of its tasks. Units default to 100%. Without 'work', work follows the task duration, or the task's estimate for the first assignment of an estimated task. Effort-driven tasks redistribute work among resources.",
             schema(
                 json!({
                     "task": task_ref("Task."),

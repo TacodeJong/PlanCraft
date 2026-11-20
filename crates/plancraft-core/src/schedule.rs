@@ -365,7 +365,7 @@ fn unapply_lag(cal: &WorkCal, base: DateTime, lag: Lag, pred_duration: Minutes) 
 }
 
 /// Index of each task's parent summary, computed in one pass.
-fn parents(p: &Project) -> Vec<Option<usize>> {
+pub(crate) fn parents(p: &Project) -> Vec<Option<usize>> {
     let mut stack: Vec<(usize, u16)> = Vec::new();
     p.tasks
         .iter()
@@ -408,6 +408,8 @@ struct Engine<'a> {
     inherited: Vec<Inherited>,
     /// The dates of each manually scheduled summary (see [`manual_summary_dates`]).
     manual_summary: Vec<Option<(DateTime, DateTime)>>,
+    /// Working minutes resolved from stretch and percent-of-group. `None` uses the stored duration.
+    resolved: Vec<Option<Minutes>>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -427,17 +429,65 @@ fn inherited_from_summaries(p: &Project, parent: &[Option<usize>], manual_summar
         let Some(pi) = parent.get(i).copied().flatten() else { continue };
         let (Some(par), Some(up)) = (p.tasks.get(pi), out.get(pi).copied()) else { continue };
         // An inactive summary passes on what its own summaries set, not its own date or deadline.
+        let bound_snet = par.bounds.start_earliest.filter(|_| par.active);
         let own_snet = match manual_summary.get(pi).copied().flatten() {
             Some((start, _)) => par.active.then_some(start),
-            None => par.constraint.date.filter(|_| par.active && par.constraint.kind == ConstraintKind::Snet),
+            None => par.constraint.date.filter(|_| par.active && par.constraint.kind == ConstraintKind::Snet).max(bound_snet),
         };
-        let own_deadline = par.deadline.filter(|_| par.active);
+        // An unfixed latest finish limits late dates the way a deadline does. A fixed one moves the plan instead.
+        let bound_deadline = par.bounds.finish_latest.filter(|_| par.active && !par.bounds.finish_latest_fixed);
+        let own_deadline = min_opt(par.deadline.filter(|_| par.active), bound_deadline);
         let v = Inherited { snet: up.snet.max(own_snet), deadline: min_opt(up.deadline, own_deadline) };
         if let Some(slot) = out.get_mut(i) {
             *slot = v;
         }
     }
     out
+}
+
+/// Applies both bounds on one task. Empty bounds leave `es` unchanged.
+fn apply_date_bounds(
+    t: &Task,
+    mut es: DateTime,
+    dur: Minutes,
+    along: &dyn Fn(DateTime, bool) -> DateTime,
+    warn: bool,
+    warnings: &mut Vec<String>,
+) -> DateTime {
+    if let Some(date) = t.bounds.start_earliest {
+        es = es.max(date);
+    }
+    if let Some(date) = t.bounds.finish_earliest {
+        let shifted = if dur > 0 { along(date, false) } else { date };
+        es = es.max(shifted);
+    }
+    if t.bounds.start_latest_fixed
+        && let Some(date) = t.bounds.start_latest
+        && es > date
+    {
+        if warn {
+            warnings.push(format!("'{}' cannot start by its fixed no-later-than date", t.name));
+        }
+        es = match t.bounds.start_earliest {
+            Some(floor) => date.max(floor),
+            None => date,
+        };
+    }
+    if t.bounds.finish_latest_fixed
+        && let Some(date) = t.bounds.finish_latest
+    {
+        let s = if dur > 0 { along(date, false) } else { date };
+        if es > s {
+            if warn {
+                warnings.push(format!("'{}' cannot finish by its fixed no-later-than date", t.name));
+            }
+            es = match t.bounds.start_earliest {
+                Some(floor) => s.max(floor),
+                None => s,
+            };
+        }
+    }
+    es
 }
 
 fn min_opt(a: Option<DateTime>, b: Option<DateTime>) -> Option<DateTime> {
@@ -490,6 +540,7 @@ impl<'a> Engine<'a> {
             segments: HashMap::new(),
             inherited,
             manual_summary,
+            resolved: vec![None; n],
         }
     }
 
@@ -755,7 +806,7 @@ impl<'a> Engine<'a> {
         match src {
             PredSource::Leaf(i) => {
                 let d = self.date(*i);
-                Some((d.es?, d.ef?, self.task(*i)?.duration))
+                Some((d.es?, d.ef?, self.duration_of(*i)))
             }
             PredSource::SummaryStart(v) => {
                 let start = v.iter().filter_map(|i| self.date(*i).es).min()?;
@@ -767,6 +818,9 @@ impl<'a> Engine<'a> {
     }
 
     fn duration_of(&self, i: usize) -> Minutes {
+        if let Some(minutes) = self.resolved.get(i).copied().flatten() {
+            return minutes.max(0);
+        }
         match self.task(i) {
             Some(t) if !t.is_milestone() => t.duration.max(0),
             _ => 0,
@@ -895,6 +949,8 @@ impl<'a> Engine<'a> {
                 }
             }
 
+            es = apply_date_bounds(t, es, dur, &along, warn, &mut warnings);
+
             if let Some(pin) = alap_pins.get(&i) {
                 es = es.max(*pin);
             }
@@ -981,6 +1037,13 @@ impl<'a> Engine<'a> {
             // reduce total slack; they don't move the task.
             if let Some(d) = min_opt(t.deadline, self.inherited(i).deadline) {
                 lf = lf.min(d);
+            }
+            if let Some(d) = t.bounds.finish_latest {
+                lf = lf.min(d);
+            }
+            if let Some(d) = t.bounds.start_latest {
+                let implied = if dur > 0 { along(d, true) } else { d };
+                lf = lf.min(implied);
             }
             for &e in self.outgoing(i) {
                 let Some(edge) = self.edges.get(e) else { continue };
@@ -1154,8 +1217,11 @@ fn calculate(p: &mut Project) -> ScheduleReport {
     }
     rollup_tracking(p);
 
+    let share = if p.settings.rules.enabled() { crate::shares::resolve(p) } else { crate::shares::SharePlan::default() };
+
     let (dates, order_warn, total_slack, free_slack, mut segments) = {
         let mut eng = Engine::new(p);
+        eng.resolved.clone_from(&share.durations);
         eng.build_edges();
         eng.topo_sort();
         eng.forward(&HashMap::new(), false);
@@ -1199,7 +1265,7 @@ fn calculate(p: &mut Project) -> ScheduleReport {
         t.sched.parts = segments.remove(&i).unwrap_or_default();
         t.sched.total_slack = ts;
         t.sched.free_slack = free_slack.get(i).copied().unwrap_or(0);
-        t.sched.duration = if t.is_milestone() { 0 } else { t.duration };
+        t.sched.duration = if t.is_milestone() { 0 } else { share.durations.get(i).copied().flatten().unwrap_or(t.duration) };
         t.sched.rollup_start = None;
         t.sched.rollup_finish = None;
         t.sched.critical = t.active && !t.is_complete() && t.mode == ScheduleMode::Auto && ts <= crit;
@@ -1208,12 +1274,18 @@ fn calculate(p: &mut Project) -> ScheduleReport {
         {
             warnings.push(format!("Finishes after its deadline ({})", dl.format("%Y-%m-%d")));
         }
+        if let (Some(latest), Some(f)) = (t.bounds.finish_latest, d.ef)
+            && f > latest
+            && t.deadline != Some(latest)
+        {
+            warnings.push(format!("Finishes after its no-later-than date ({})", latest.format("%Y-%m-%d")));
+        }
         t.sched.warnings = warnings;
     }
 
     // Summaries' own fixed costs and assignments (active summaries only), counted once at the
     // project level on top of the leaves.
-    let own = rollup_summaries(p);
+    let own = rollup_summaries(p, &share.group_min);
 
     // Project-level rollup.
     let leaves: Vec<&Task> = p.tasks.iter().filter(|t| !t.sched.is_summary && t.active).collect();
@@ -1235,6 +1307,7 @@ fn calculate(p: &mut Project) -> ScheduleReport {
             report.warnings.push(format!("{}: {}", t.name, w));
         }
     }
+    report.warnings.extend(share.notes.iter().cloned());
     report.start = start;
     report.finish = finish;
     report.critical_tasks = p.tasks.iter().filter(|t| t.sched.critical && !t.sched.is_summary).map(|t| t.id).collect();
@@ -1317,7 +1390,7 @@ fn rollup_of(p: &Project, children: &[usize], own: Own, weights: &[(f64, f64)]) 
 
 /// Rolls subtasks up into their summaries. Returns the summaries' own work and cost (fixed costs
 /// and assignments on summary rows), totalled over active summaries for the project level.
-fn rollup_summaries(p: &mut Project) -> Own {
+fn rollup_summaries(p: &mut Project, group_min: &[Option<Minutes>]) -> Own {
     let parent = parents(p);
     let mut total_own = Own::default();
     // Leaves weigh themselves; summaries get the sum of their children below.
@@ -1356,14 +1429,24 @@ fn rollup_summaries(p: &mut Project) -> Own {
         }
         // A manually scheduled summary keeps its own dates; its subtasks' span is kept apart.
         let manual = manual_summary_dates(t, true, &pc);
-        let (start, finish) = match manual {
+        let (start, mut finish) = match manual {
             Some((s, f)) => (Some(s), Some(f)),
             None => (r.start, r.finish),
         };
-        let duration = match (start, finish) {
+        let mut duration = match (start, finish) {
             (Some(s), Some(f)) => pc.between(s, f),
             _ => 0,
         };
+        // A nested group that stretches is at least as long as its share, even when its children are shorter.
+        if manual.is_none()
+            && let Some(min) = group_min.get(i).copied().flatten()
+            && duration < min
+            && let Some(s) = start
+        {
+            let f = pc.add(s, min);
+            duration = pc.between(s, f);
+            finish = Some(f);
+        }
         let Some(t) = p.tasks.get_mut(i) else { continue };
         t.sched.start = start;
         t.sched.finish = finish;

@@ -2,10 +2,16 @@
 
 pub mod board;
 pub mod calendar;
+pub mod deliveries;
+pub mod filter_bar;
 pub mod gantt;
 pub mod gantt_chart;
+pub mod gantt_xlsx;
 pub mod milestones;
 pub mod network;
+pub mod overview;
+pub mod properties;
+pub mod report;
 pub mod resource_sheet;
 pub mod resource_usage;
 pub mod task_usage;
@@ -20,13 +26,15 @@ use plancraft_core::prelude::*;
 
 use crate::columns;
 use crate::fields::{Field, SortKey};
-use crate::state::{Selection, TaskFilter, UiState};
+use crate::state::{DateWindow, FocusScope, PageGroup, Selection, TaskFilter, TaskKindFilter, UiState};
 
-/// One row of a task view: a task, or the header of a group when tasks are grouped by a field.
+/// One row of a task view: a task, the header of a group, or the notes of an expanded task.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Row {
     Task(usize),
     Group(GroupRow),
+    /// Notes of the task at this index. Read-only; groups never get one.
+    Notes(usize),
 }
 
 /// A group header: the shared value and the tasks under it (task indices, in display order).
@@ -42,7 +50,7 @@ impl Row {
     pub fn task(&self) -> Option<usize> {
         match self {
             Row::Task(i) => Some(*i),
-            Row::Group(_) => None,
+            Row::Group(_) | Row::Notes(_) => None,
         }
     }
 }
@@ -70,10 +78,142 @@ fn matches_filter(p: &Project, t: &Task, f: TaskFilter) -> bool {
     }
 }
 
-/// Whether a task passes the view's filter and search text.
+/// Whether a task passes the view's filter, the activity focus and the other strip criteria.
+/// The text matches the task name or an assigned resource name.
 pub fn task_matches(p: &Project, st: &UiState, t: &Task) -> bool {
-    let search = st.search.trim().to_lowercase();
-    matches_filter(p, t, st.filter) && (search.is_empty() || t.name.to_lowercase().contains(&search))
+    matches_filter(p, t, st.filter)
+        && text_hit(p, t, &st.search.trim().to_lowercase())
+        && focus_hit(p, st, t)
+        && status_hit(p, st, t)
+        && kind_hit(p, st, t)
+        && date_hit(p, st, t)
+        && resource_hit(p, st, t)
+}
+
+/// True when task views are hiding something. Ancestors of a match stay visible as context.
+pub fn criteria_active(st: &UiState) -> bool {
+    st.filter != TaskFilter::All
+        || !st.search.trim().is_empty()
+        || st.focus.is_some()
+        || st.status_filter.is_some()
+        || st.kind_filter != TaskKindFilter::All
+        || st.date_window != DateWindow::All
+        || !st.filter_resources.is_empty()
+}
+
+fn focus_hit(p: &Project, st: &UiState, t: &Task) -> bool {
+    let Some(focus) = st.focus else { return true };
+    let Some(root) = p.task_index(focus.task) else { return false };
+    let Some(idx) = p.task_index(t.id) else { return false };
+    match focus.scope {
+        FocusScope::Subtree => in_subtree(p, root, idx),
+        FocusScope::Path => p.path_roles(&[focus.task]).contains_key(&t.id),
+    }
+}
+
+fn in_subtree(p: &Project, root: usize, idx: usize) -> bool {
+    let mut at = Some(idx);
+    while let Some(i) = at {
+        if i == root {
+            return true;
+        }
+        at = p.parent_index(i);
+    }
+    false
+}
+
+fn status_hit(p: &Project, st: &UiState, t: &Task) -> bool {
+    let Some(want) = st.status_filter else { return true };
+    p.task_index(t.id).is_some_and(|i| p.displayed_status(i) == want)
+}
+
+fn kind_hit(p: &Project, st: &UiState, t: &Task) -> bool {
+    let Some(idx) = p.task_index(t.id) else { return false };
+    match st.kind_filter {
+        TaskKindFilter::All => true,
+        TaskKindFilter::Tasks => !t.is_milestone() && !p.has_children(idx),
+        TaskKindFilter::Milestones => t.is_milestone(),
+        TaskKindFilter::Groups => p.has_children(idx),
+    }
+}
+
+fn date_hit(p: &Project, st: &UiState, t: &Task) -> bool {
+    match st.date_window {
+        DateWindow::All => true,
+        DateWindow::Overdue => columns::is_late(p, t),
+        DateWindow::ThisWeek => {
+            let today = plancraft_core::dates::today();
+            let back = i64::from(plancraft_core::dates::weekday_index(today.weekday()));
+            let monday = plancraft_core::dates::shift_days(today, -back);
+            overlaps(t, monday, plancraft_core::dates::shift_days(monday, 6))
+        }
+        DateWindow::NextTwoWeeks => {
+            let today = plancraft_core::dates::today();
+            let back = i64::from(plancraft_core::dates::weekday_index(today.weekday()));
+            let monday = plancraft_core::dates::shift_days(today, -back);
+            let start = plancraft_core::dates::shift_days(monday, 7);
+            overlaps(t, start, plancraft_core::dates::shift_days(start, 13))
+        }
+        DateWindow::Range => {
+            if st.date_from.is_none() && st.date_to.is_none() {
+                return true;
+            }
+            let today = plancraft_core::dates::today();
+            let from = st.date_from.unwrap_or_else(|| plancraft_core::dates::ymd(1900, 1, 1).unwrap_or(today));
+            let to = st.date_to.unwrap_or_else(|| plancraft_core::dates::ymd(2300, 1, 1).unwrap_or(today));
+            overlaps(t, from, to)
+        }
+    }
+}
+
+fn overlaps(t: &Task, from: plancraft_core::dates::Date, to: plancraft_core::dates::Date) -> bool {
+    let start = t.sched.start.or(t.manual_start).map(|d| d.date());
+    let finish = t.sched.finish.or(t.manual_finish).map(|d| d.date());
+    match (start, finish) {
+        (Some(s), Some(f)) => s <= to && f >= from,
+        _ => false,
+    }
+}
+
+fn resource_hit(p: &Project, st: &UiState, t: &Task) -> bool {
+    if st.filter_resources.is_empty() {
+        return true;
+    }
+    p.assignments_for_task(t.id).any(|a| st.filter_resources.contains(&a.resource))
+}
+
+fn text_hit(p: &Project, t: &Task, search: &str) -> bool {
+    if search.is_empty() {
+        return true;
+    }
+    t.name.to_lowercase().contains(search) || p.format_resource_names(t.id).to_lowercase().contains(search)
+}
+
+fn page_label(group: PageGroup, p: &Project, idx: usize) -> String {
+    let Some(t) = p.tasks.get(idx) else { return "No value".into() };
+    match group {
+        PageGroup::None => String::new(),
+        PageGroup::Milestones => {
+            if t.is_milestone() {
+                "Milestones".into()
+            } else {
+                "Activities".into()
+            }
+        }
+        PageGroup::Critical => {
+            if t.sched.critical {
+                "On critical path".into()
+            } else {
+                "Not on critical path".into()
+            }
+        }
+        PageGroup::Priority => format!("Priority {}", t.priority),
+        PageGroup::Resources => {
+            let names = p.format_resource_names(t.id);
+            if names.trim().is_empty() { "Unassigned".into() } else { names }
+        }
+        PageGroup::Status => crate::lang::status_name(p.displayed_status(idx)).into(),
+    }
 }
 
 /// Orders task indices by the sort field (ties keep outline order; empty values stay last in
@@ -97,56 +237,70 @@ fn sort_indices(p: &Project, items: &mut [usize], field: &Field, descending: boo
 /// subtasks stay under their summary), grouping (subtasks under group headers) and collapsed
 /// summaries and groups.
 pub fn visible_rows(p: &Project, st: &UiState) -> Vec<Row> {
-    let search = st.search.trim().to_lowercase();
-    let filtering = st.filter != TaskFilter::All || !search.is_empty();
-    let matches = |t: &Task| matches_filter(p, t, st.filter) && (search.is_empty() || t.name.to_lowercase().contains(&search));
+    let filtering = criteria_active(st);
+    let matches = |t: &Task| task_matches(p, st, t);
     let sort = st.sort.as_ref().and_then(|(k, desc)| Field::from_key(p, k).map(|f| (f, *desc)));
 
+    if st.page_group != PageGroup::None {
+        let group = st.page_group;
+        return grouped(p, st, filtering, &sort, &matches, &|i| page_label(group, p, i), &|i| {
+            SortKey::Text(page_label(group, p, i).to_lowercase())
+        });
+    }
     if let Some(group) = st.group.as_ref().and_then(|k| Field::from_key(p, k)) {
-        // Grouped: subtasks only, under one header per value.
-        let mut tasks: Vec<usize> =
-            p.tasks.iter().enumerate().filter(|(_, t)| !t.sched.is_summary && (!filtering || matches(t))).map(|(i, _)| i).collect();
-        if let Some((field, desc)) = &sort {
-            sort_indices(p, &mut tasks, field, *desc);
-        }
-        let mut groups: Vec<(SortKey, GroupRow)> = Vec::new();
-        let mut by_label: HashMap<String, usize> = HashMap::new();
-        for i in tasks {
-            let label = group.group_label(p, i);
-            let key = group.sort_key(p, i);
-            let slot = *by_label.entry(label.clone()).or_insert_with(|| {
-                groups.push((
-                    key.clone(),
-                    GroupRow { label: label.clone(), tasks: Vec::new(), collapsed: st.collapsed_groups.contains(&label) },
-                ));
-                groups.len().saturating_sub(1)
-            });
-            if let Some((k, g)) = groups.get_mut(slot) {
-                if key.cmp(k) == std::cmp::Ordering::Less {
-                    *k = key;
-                }
-                g.tasks.push(i);
-            }
-        }
-        groups.sort_by(|(ka, a), (kb, b)| ka.cmp(kb).then_with(|| a.label.cmp(&b.label)));
-        let mut rows = Vec::new();
-        for (_, g) in groups {
-            let shown = if g.collapsed { Vec::new() } else { g.tasks.clone() };
-            rows.push(Row::Group(g));
-            rows.extend(shown.into_iter().map(Row::Task));
-        }
-        return rows;
+        return grouped(p, st, filtering, &sort, &matches, &|i| group.group_label(p, i), &|i| group.sort_key(p, i));
     }
 
     outline_rows(p, st)
 }
 
+/// Subtasks under one header per label. Summaries stay out; the filter and search still apply.
+fn grouped(
+    p: &Project,
+    st: &UiState,
+    filtering: bool,
+    sort: &Option<(Field, bool)>,
+    matches: &dyn Fn(&Task) -> bool,
+    label_of: &dyn Fn(usize) -> String,
+    key_of: &dyn Fn(usize) -> SortKey,
+) -> Vec<Row> {
+    let mut tasks: Vec<usize> =
+        p.tasks.iter().enumerate().filter(|(_, t)| !t.sched.is_summary && (!filtering || matches(t))).map(|(i, _)| i).collect();
+    if let Some((field, desc)) = sort {
+        sort_indices(p, &mut tasks, field, *desc);
+    }
+    let mut groups: Vec<(SortKey, GroupRow)> = Vec::new();
+    let mut by_label: HashMap<String, usize> = HashMap::new();
+    for i in tasks {
+        let label = label_of(i);
+        let key = key_of(i);
+        let slot = *by_label.entry(label.clone()).or_insert_with(|| {
+            groups
+                .push((key.clone(), GroupRow { label: label.clone(), tasks: Vec::new(), collapsed: st.collapsed_groups.contains(&label) }));
+            groups.len().saturating_sub(1)
+        });
+        if let Some((k, g)) = groups.get_mut(slot) {
+            if key.cmp(k) == std::cmp::Ordering::Less {
+                *k = key;
+            }
+            g.tasks.push(i);
+        }
+    }
+    groups.sort_by(|(ka, a), (kb, b)| ka.cmp(kb).then_with(|| a.label.cmp(&b.label)));
+    let mut rows = Vec::new();
+    for (_, g) in groups {
+        let shown = if g.collapsed { Vec::new() } else { g.tasks.clone() };
+        rows.push(Row::Group(g));
+        rows.extend(shown.into_iter().map(Row::Task));
+    }
+    rows
+}
+
 /// Rows of the outline (no grouping), honoring the filter and search text, the sort within the
 /// outline and collapsed summaries.
 pub fn outline_rows(p: &Project, st: &UiState) -> Vec<Row> {
-    let search = st.search.trim().to_lowercase();
-    let filtering = st.filter != TaskFilter::All || !search.is_empty();
-    let matches = |t: &Task| matches_filter(p, t, st.filter) && (search.is_empty() || t.name.to_lowercase().contains(&search));
+    let filtering = criteria_active(st);
+    let matches = |t: &Task| task_matches(p, st, t);
     let sort = st.sort.as_ref().and_then(|(k, desc)| Field::from_key(p, k).map(|f| (f, *desc)));
     let mut keep: Vec<bool> = vec![!filtering; p.tasks.len()];
     if filtering {
@@ -266,7 +420,9 @@ pub fn reveal_task(p: &Project, st: &mut UiState, id: TaskId, col: Option<usize>
         }
         a = p.parent_index(ai);
     }
-    if let Some(group) = st.group.as_ref().and_then(|k| Field::from_key(p, k)) {
+    if st.page_group != PageGroup::None {
+        st.collapsed_groups.remove(&page_label(st.page_group, p, idx));
+    } else if let Some(group) = st.group.as_ref().and_then(|k| Field::from_key(p, k)) {
         st.collapsed_groups.remove(&group.group_label(p, idx));
     }
     let rows = visible_rows(p, st);
@@ -419,5 +575,46 @@ mod tests {
         p.task_mut(leaf).unwrap().active = false;
         plancraft_core::schedule::recalculate(&mut p);
         assert_eq!(on_calendar(&p, &st).len(), all.len() - 1);
+    }
+
+    #[test]
+    fn subtree_filter_shows_the_group_its_descendants_and_its_ancestors() {
+        let mut p = Project::new("Tree", plancraft_core::dates::ymd(2026, 10, 19).unwrap());
+        let phase = p.add_task("Phase", None);
+        let design = p.add_task("Design", None);
+        let wire = p.add_task("Wireframe", None);
+        let sibling = p.add_task("Sibling", None);
+        p.indent(design).unwrap();
+        p.indent(wire).unwrap();
+        p.indent(wire).unwrap();
+        let st = UiState {
+            focus: Some(crate::state::ActivityFocus { task: design, scope: crate::state::FocusScope::Subtree }),
+            ..UiState::default()
+        };
+        let names: Vec<&str> = outline_rows(&p, &st).iter().filter_map(Row::task).map(|i| p.tasks[i].name.as_str()).collect();
+        assert_eq!(names, ["Phase", "Design", "Wireframe"]);
+        assert!(!names.contains(&"Sibling"));
+        let bytes = report::workbook(&p, &st).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("Phase") && text.contains("Design") && text.contains("Wireframe"));
+        assert!(!text.contains("Sibling"), "the export keeps the same subtree");
+        let _ = (phase, sibling);
+    }
+
+    #[test]
+    fn notes_rows_open_under_a_leaf_and_never_under_a_group() {
+        let mut p = demo();
+        let summary = p.tasks.iter().position(|t| t.sched.is_summary).unwrap();
+        let leaf = p.tasks.iter().position(|t| !t.sched.is_summary).unwrap();
+        p.tasks[summary].notes = "group notes stay in the pane".into();
+        p.tasks[leaf].notes = "bring the brief".into();
+        let mut open = std::collections::HashSet::new();
+        open.insert(p.tasks[summary].id);
+        open.insert(p.tasks[leaf].id);
+        let rows = gantt::outline_with_notes(&visible_rows(&p, &UiState::default()), &p, &open);
+        let notes: Vec<usize> = rows.iter().filter_map(|r| if let Row::Notes(i) = r { Some(*i) } else { None }).collect();
+        assert_eq!(notes, vec![leaf]);
+        assert!(rows.iter().any(|r| matches!(r, Row::Notes(i) if *i == leaf)));
+        assert!(rows.iter().all(|r| !matches!(r, Row::Notes(i) if *i == summary)));
     }
 }

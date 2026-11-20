@@ -12,6 +12,9 @@ use crate::theme;
 use crate::views::resource_usage::{period_label, period_toolbar, step};
 
 pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState) {
+    let total = doc.project.resources.len();
+    let shown = doc.project.resources.iter().filter(|r| super::filter_bar::resource_matches(st, r)).count();
+    let rect = super::filter_bar::resources(ui, rect, st, shown, total);
     let mut toolbar =
         ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(rect.min + vec2(8.0, 4.0), vec2(rect.width() - 16.0, 24.0))));
     let from = period_toolbar(&mut toolbar, st, &doc.project);
@@ -57,6 +60,9 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState) {
             }
             ui.end_row();
             for (r, rl) in p.resources.iter().zip(&report.resources) {
+                if !super::filter_bar::resource_matches(st, r) {
+                    continue;
+                }
                 let selected = st.sel.resources.contains(&r.id);
                 if ui.selectable_label(selected, &r.name).clicked() {
                     st.sel.select_resource(r.id);

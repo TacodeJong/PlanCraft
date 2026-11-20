@@ -1,0 +1,550 @@
+//! English and Dutch labels. Two columns of one table; [`tr`] picks a side.
+//!
+//! Dates stay `dd-mm-yyyy` in both languages. A missing key comes back as the key itself.
+
+use std::sync::atomic::{AtomicU8, Ordering};
+
+use plancraft_core::model::{ChartStyle, ResourceCategory, RowMark, TaskStatus};
+use serde::{Deserialize, Serialize};
+
+/// The interface language. Dutch is the default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Lang {
+    #[default]
+    Nl,
+    En,
+}
+
+impl Lang {
+    pub const ALL: [Lang; 2] = [Lang::Nl, Lang::En];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Lang::Nl => "Nederlands",
+            Lang::En => "English",
+        }
+    }
+}
+
+static CURRENT: AtomicU8 = AtomicU8::new(0);
+
+pub fn set_current(lang: Lang) {
+    CURRENT.store(if lang == Lang::En { 1 } else { 0 }, Ordering::Relaxed);
+}
+
+pub fn current() -> Lang {
+    if CURRENT.load(Ordering::Relaxed) == 1 { Lang::En } else { Lang::Nl }
+}
+
+/// The label for `key` in the language currently on screen.
+pub fn text(key: &'static str) -> &'static str {
+    tr(current(), key)
+}
+
+/// The label for `key` in `lang`.
+pub fn tr(lang: Lang, key: &'static str) -> &'static str {
+    match pair(key) {
+        Some((en, nl)) => match lang {
+            Lang::En => en,
+            Lang::Nl => nl,
+        },
+        None => key,
+    }
+}
+
+fn pair(key: &str) -> Option<(&'static str, &'static str)> {
+    Some(match key {
+        "menu.file" => ("File", "Bestand"),
+        "menu.new" => ("New Project", "Nieuw project"),
+        "menu.sample" => ("New from Sample", "Nieuw uit voorbeeld"),
+        "menu.open" => ("Open…", "Openen…"),
+        "menu.open_server" => ("Open from Server…", "Openen van server…"),
+        "menu.recent" => ("Open Recent", "Recent geopend"),
+        "menu.no_recent" => ("No recent projects", "Geen recente projecten"),
+        "menu.save" => ("Save", "Opslaan"),
+        "menu.save_as" => ("Save As…", "Opslaan als…"),
+        "menu.print" => ("Print…", "Afdrukken…"),
+        "menu.export_pdf" => ("Export PDF…", "Exporteer PDF…"),
+        "menu.import" => ("Import Excel or CSV…", "Importeer Excel of CSV…"),
+        "menu.export_csv" => ("Export CSV", "Exporteer CSV"),
+        "menu.export_xml" => ("Export Microsoft Project XML…", "Exporteer Microsoft Project XML…"),
+        "menu.export_report" => ("Export Report to Excel…", "Exporteer rapport naar Excel…"),
+        "menu.export_gantt" => ("Export Gantt to Excel…", "Exporteer Gantt naar Excel…"),
+        "menu.project_info" => ("Project Information…", "Projectgegevens…"),
+        "menu.start" => ("Start Page", "Startpagina"),
+        "menu.close" => ("Close Project", "Project sluiten"),
+        "menu.mcp" => ("AI Agents (MCP)…", "AI-agenten (MCP)…"),
+        "menu.distill" => ("Distill Plan…", "Planning uit tekst…"),
+        "menu.quick" => ("Quick Entry…", "Snelle invoer…"),
+        "menu.ai" => ("AI Settings…", "AI-instellingen…"),
+        "menu.about" => ("About PlanCraft", "Over PlanCraft"),
+        "menu.exit" => ("Exit", "Afsluiten"),
+        "tab.task" => ("Task", "Taak"),
+        "tab.resource" => ("Resource", "Resource"),
+        "tab.report" => ("Report", "Rapport"),
+        "tab.project" => ("Project", "Project"),
+        "tab.view" => ("View", "Beeld"),
+        "tab.format" => ("Format", "Opmaak"),
+        "view.gantt" => ("Gantt Chart", "Gantt-diagram"),
+        "view.tracking" => ("Tracking Gantt", "Voortgangs-Gantt"),
+        "view.baselines" => ("Multiple Baselines Gantt", "Meerdere basislijnen"),
+        "view.network" => ("Network Diagram", "Netwerkdiagram"),
+        "view.board" => ("Task Board", "Takenbord"),
+        "view.task_usage" => ("Task Usage", "Taakgebruik"),
+        "view.milestones" => ("Milestones", "Mijlpalen"),
+        "view.overview" => ("Overview", "Overzicht"),
+        "view.deliveries" => ("Deliveries", "Leveringen"),
+        "view.report" => ("Report", "Rapport"),
+        "view.resources" => ("Resource Sheet", "Resourceblad"),
+        "view.resource_usage" => ("Resource Usage", "Resourcegebruik"),
+        "view.workload" => ("Workload", "Werkbelasting"),
+        "view.team" => ("Team Planner", "Teamplanner"),
+        "view.timesheet" => ("Timesheet", "Urenstaat"),
+        "view.calendar" => ("Calendar", "Kalender"),
+        "view.task_views" => ("Task views", "Taakweergaven"),
+        "view.resource_views" => ("Resource views", "Resourceweergaven"),
+        "filter.all" => ("All Tasks", "Alle taken"),
+        "filter.critical" => ("Critical", "Kritiek"),
+        "filter.incomplete" => ("Incomplete Tasks", "Onvoltooide taken"),
+        "filter.completed" => ("Completed Tasks", "Voltooide taken"),
+        "filter.milestones" => ("Milestones", "Mijlpalen"),
+        "filter.late" => ("Late Tasks", "Te late taken"),
+        "filter.unassigned" => ("Unassigned Tasks", "Niet-toegewezen taken"),
+        "filter.summary" => ("Summary Tasks", "Overzichtstaken"),
+        "group.none" => ("No grouping", "Geen groepering"),
+        "group.milestones" => ("Milestones", "Mijlpalen"),
+        "group.critical" => ("On critical path", "Op het kritieke pad"),
+        "group.priority" => ("Priority", "Prioriteit"),
+        "group.resources" => ("Resources", "Resources"),
+        "group.status" => ("Status", "Status"),
+        "status.not_started" => ("Not started", "Niet gestart"),
+        "status.started" => ("Started", "Gestart"),
+        "status.busy" => ("In progress", "Bezig"),
+        "status.done" => ("Done", "Gereed"),
+        "table.entry" => ("Entry", "Invoer"),
+        "table.schedule" => ("Schedule", "Planning"),
+        "table.tracking" => ("Tracking", "Voortgang"),
+        "table.work" => ("Work", "Werk"),
+        "table.cost" => ("Cost", "Kosten"),
+        "table.estimates" => ("Estimates", "Schattingen"),
+        "table.variance" => ("Variance", "Afwijking"),
+        "table.summary" => ("Summary", "Overzicht"),
+        "table.details" => ("Details", "Details"),
+        "col.mode" => ("Mode", "Modus"),
+        "col.wbs" => ("WBS", "WBS"),
+        "col.name" => ("Task Name", "Taaknaam"),
+        "col.duration" => ("Duration", "Duur"),
+        "col.start" => ("Start", "Begin"),
+        "col.finish" => ("Finish", "Einde"),
+        "col.predecessors" => ("Predecessors", "Voorgangers"),
+        "col.successors" => ("Successors", "Opvolgers"),
+        "col.resources" => ("Resource Names", "Resourcenamen"),
+        "col.percent" => ("% Comp.", "% Voltooid"),
+        "col.work" => ("Work", "Werk"),
+        "col.actual_work" => ("Act. Work", "Werkelijk werk"),
+        "col.remaining_work" => ("Rem. Work", "Resterend werk"),
+        "col.cost" => ("Total Cost", "Totale kosten"),
+        "col.fixed_cost" => ("Fixed Cost", "Vaste kosten"),
+        "col.start_var" => ("Start Var.", "Begin-afw."),
+        "col.finish_var" => ("Finish Var.", "Einde-afw."),
+        "col.work_var" => ("Work Var.", "Werk-afw."),
+        "col.cost_var" => ("Cost Var.", "Kosten-afw."),
+        "col.actual_start" => ("Actual Start", "Werkelijk begin"),
+        "col.actual_finish" => ("Actual Finish", "Werkelijk einde"),
+        "col.actual_duration" => ("Act. Dur.", "Werkelijke duur"),
+        "col.remaining_duration" => ("Rem. Dur.", "Resterende duur"),
+        "col.stop" => ("Stop", "Stop"),
+        "col.resume" => ("Resume", "Hervatten"),
+        "col.early_start" => ("Early Start", "Vroegste begin"),
+        "col.early_finish" => ("Early Finish", "Vroegste einde"),
+        "col.late_start" => ("Late Start", "Uiterste begin"),
+        "col.late_finish" => ("Late Finish", "Uiterste einde"),
+        "col.free_slack" => ("Free Slack", "Vrije marge"),
+        "col.total_slack" => ("Total Slack", "Totale marge"),
+        "col.constraint" => ("Constraint", "Beperking"),
+        "col.constraint_date" => ("Constraint Date", "Beperkingsdatum"),
+        "col.deadline" => ("Deadline", "Deadline"),
+        "col.priority" => ("Priority", "Prioriteit"),
+        "col.type" => ("Type", "Type"),
+        "col.estimate" => ("Estimate", "Schatting"),
+        "col.points" => ("Points", "Punten"),
+        "col.optimistic" => ("Optimistic", "Optimistisch"),
+        "col.likely" => ("Most Likely", "Meest waarschijnlijk"),
+        "col.pessimistic" => ("Pessimistic", "Pessimistisch"),
+        "col.expected" => ("Expected Work", "Verwacht werk"),
+        "col.deliverable" => ("Deliverable", "Oplevering"),
+        "col.milestones" => ("Milestones", "Mijlpalen"),
+        "col.notes" => ("Notes", "Notities"),
+        "col.unique" => ("Unique ID", "Uniek ID"),
+        "col.recurring" => ("Recurring", "Terugkerend"),
+        "col.board" => ("Board Status", "Bordstatus"),
+        "col.show_board" => ("Show on Board", "Toon op bord"),
+        "tb.task" => ("Task", "Taak"),
+        "tb.milestone" => ("Milestone", "Mijlpaal"),
+        "tb.summary" => ("Summary", "Overzicht"),
+        "tb.recurring" => ("Recurring", "Terugkerend"),
+        "tb.link" => ("Link", "Koppelen"),
+        "tb.unlink" => ("Unlink", "Ontkoppelen"),
+        "tb.split" => ("Split", "Splitsen"),
+        "tb.on_track" => ("On Track", "Op schema"),
+        "tb.information" => ("Information", "Gegevens"),
+        "tb.assign" => ("Assign Resources", "Resources toewijzen"),
+        "tb.add_resource" => ("Add Resource", "Resource toevoegen"),
+        "tb.level" => ("Level All", "Alles herverdelen"),
+        "tb.clear_level" => ("Clear Leveling", "Herverdeling wissen"),
+        "tb.timesheet" => ("Timesheet", "Urenstaat"),
+        "tb.update_progress" => ("Update Progress", "Voortgang bijwerken"),
+        "tb.project_info" => ("Project Information", "Projectgegevens"),
+        "tb.working_time" => ("Working Time", "Werktijd"),
+        "tb.links" => ("Links Between Projects", "Koppelingen tussen projecten"),
+        "tb.custom" => ("Custom Fields", "Aangepaste velden"),
+        "tb.update" => ("Update Project", "Project bijwerken"),
+        "tb.baseline" => ("Set Baseline", "Basislijn instellen"),
+        "tb.agents" => ("AI Agents", "AI-agenten"),
+        "tb.statistics" => ("Statistics", "Statistieken"),
+        "tb.workload" => ("Workload", "Werkbelasting"),
+        "tb.tracking" => ("Tracking Gantt", "Voortgangs-Gantt"),
+        "tb.baselines" => ("Baselines", "Basislijnen"),
+        "tb.print" => ("Print", "Afdrukken"),
+        "tb.export_pdf" => ("Export PDF", "Exporteer PDF"),
+        "tb.export_csv" => ("Export CSV", "Exporteer CSV"),
+        "tb.export_xml" => ("Export XML", "Exporteer XML"),
+        "tb.filter" => ("Filter", "Filter"),
+        "tb.table" => ("Table", "Tabel"),
+        "tb.sort" => ("Sort", "Sorteren"),
+        "tb.group" => ("Group", "Groeperen"),
+        "tb.outline" => ("Outline", "Overzicht"),
+        "tb.no_sort" => ("Outline (no sort)", "Overzicht (niet sorteren)"),
+        "tb.asc" => ("ascending", "oplopend"),
+        "tb.desc" => ("descending", "aflopend"),
+        "tb.no_group" => ("No Group", "Geen groep"),
+        "tb.search" => ("🔍 Search tasks", "🔍 Taken zoeken"),
+        "tb.entire" => ("Entire Project", "Heel project"),
+        "tb.selected" => ("Selected", "Selectie"),
+        "tb.timeline" => ("Timeline", "Tijdlijn"),
+        "tb.properties" => ("Properties", "Eigenschappen"),
+        "tb.history" => ("History", "Geschiedenis"),
+        "tb.theme" => ("Theme", "Thema"),
+        "tb.style" => ("Style", "Stijl"),
+        "tb.language" => ("Language", "Taal"),
+        "tb.fit" => ("Fit", "Passend"),
+        "tb.milestones" => ("Milestones", "Mijlpalen"),
+        "tb.export_gantt" => ("Export Gantt", "Exporteer Gantt"),
+        "fmt.critical" => ("Critical Path", "Kritiek pad"),
+        "fmt.paths" => ("Highlight Paths", "Pad markeren"),
+        "fmt.slack" => ("Slack", "Marge"),
+        "fmt.baseline" => ("Baseline", "Basislijn"),
+        "fmt.progress" => ("Progress", "Voortgang"),
+        "fmt.links" => ("Links", "Koppelingen"),
+        "fmt.names" => ("Resource Names", "Resourcenamen"),
+        "fmt.summary" => ("Project Summary", "Projectoverzicht"),
+        "fmt.critical_first" => ("Critical First", "Kritiek eerst"),
+        "fmt.summaries" => ("Summary Tasks", "Overzichtstaken"),
+        "fmt.link_labels" => ("Link Labels", "Koppellabels"),
+        "fmt.marks" => ("Progress Marks", "Voortgangstekens"),
+        "fmt.ids" => ("IDs Only", "Alleen ID's"),
+        "fmt.fit" => ("Fit", "Passend"),
+        "fmt.bars_of" => ("Bars of", "Balken van"),
+        "bar.filters" => ("Filters", "Filters"),
+        "bar.reset" => ("Reset groupings", "Groepering wissen"),
+        "bar.all_categories" => ("All categories", "Alle categorieën"),
+        "bar.of" => ("of", "van"),
+        "prop.duration" => ("Duration", "Duur"),
+        "prop.start" => ("Start", "Begin"),
+        "prop.finish" => ("Finish", "Einde"),
+        "prop.start_earliest" => ("Start no earlier than", "Niet eerder beginnen dan"),
+        "prop.start_latest" => ("Start no later than", "Niet later beginnen dan"),
+        "prop.finish_earliest" => ("Finish no earlier than", "Niet eerder eindigen dan"),
+        "prop.finish_latest" => ("Finish no later than", "Niet later eindigen dan"),
+        "prop.start_fixed" => ("Start no later than moves the plan", "Niet later beginnen dan verplaatst het plan"),
+        "prop.finish_fixed" => ("Finish no later than moves the plan", "Niet later eindigen dan verplaatst het plan"),
+        "prop.stretch" => ("Stretch to fill the group", "Rek uit tot de groep"),
+        "prop.percent_group" => ("Percent of group", "Percentage van groep"),
+        "prop.predecessors" => ("Predecessors", "Voorgangers"),
+        "prop.resources" => ("Resources", "Resources"),
+        "prop.status" => ("Status", "Status"),
+        "prop.percent" => ("Percent complete", "Percentage voltooid"),
+        "prop.mark" => ("Row mark", "Markering"),
+        "prop.notes" => ("Notes", "Notities"),
+        "prop.group_resources" => {
+            ("A group's resources are the resources of its tasks", "De resources van een groep zijn de resources van haar taken")
+        }
+        "common.multiple" => ("Multiple", "Meerdere"),
+        "common.none" => ("None", "Geen"),
+        "common.notes" => ("Notes", "Notities"),
+        "theme.system" => ("System", "Systeem"),
+        "theme.light" => ("Light", "Licht"),
+        "theme.dark" => ("Dark", "Donker"),
+        "style.blue" => ("Blue", "Blauw"),
+        "style.graphite" => ("Graphite", "Grafiet"),
+        "style.green" => ("Green", "Groen"),
+        "style.orange" => ("Orange", "Oranje"),
+        "style.contrast" => ("High Contrast", "Hoog contrast"),
+        "mark.amber" => ("Amber", "Amber"),
+        "mark.blue" => ("Blue", "Blauw"),
+        "mark.pink" => ("Pink", "Roze"),
+        "mark.green" => ("Green", "Groen"),
+        "cat.member" => ("Team member", "Teamlid"),
+        "cat.team" => ("Team", "Team"),
+        "cat.partner" => ("Partner company", "Partnerbedrijf"),
+        "cat.vendor" => ("Vendor", "Leverancier"),
+        "cat.contractor" => ("Contractor", "Aannemer"),
+        "cat.equipment" => ("Equipment", "Materieel"),
+        "cat.facility" => ("Facility", "Locatie"),
+        "cat.other" => ("Other", "Overig"),
+        "rpt.wbs" => ("WBS", "WBS"),
+        "rpt.name" => ("Name", "Naam"),
+        "rpt.milestone" => ("Milestone", "Mijlpaal"),
+        "rpt.start" => ("Start", "Begin"),
+        "rpt.finish" => ("Finish", "Einde"),
+        "rpt.duration" => ("Duration", "Duur"),
+        "rpt.resources" => ("Resources", "Resources"),
+        "rpt.predecessors" => ("Predecessors", "Voorgangers"),
+        "rpt.percent" => ("% Complete", "% Voltooid"),
+        "rpt.status" => ("Status", "Status"),
+        "status_bar.filter" => ("Filter", "Filter"),
+        "filter.show_selection" => ("Show selection", "Toon selectie"),
+        "filter.clear_activity" => ("Clear activity", "Activiteit wissen"),
+        "filter.subtree" => ("Task and subtasks", "Taak en subtaken"),
+        "filter.path" => ("Dependency path", "Afhankelijkheidspad"),
+        "filter.status_all" => ("All statuses", "Alle statussen"),
+        "filter.type_all" => ("All types", "Alle types"),
+        "filter.tasks" => ("Tasks", "Taken"),
+        "filter.groups" => ("Groups", "Groepen"),
+        "filter.dates_all" => ("All dates", "Alle datums"),
+        "filter.overdue" => ("Overdue", "Te laat"),
+        "filter.this_week" => ("This week", "Deze week"),
+        "filter.next_two" => ("Next 2 weeks", "Komende 2 weken"),
+        "filter.date_range" => ("Date range", "Datumbereik"),
+        "filter.from" => ("From", "Van"),
+        "filter.to" => ("To", "Tot"),
+        "filter.everyone" => ("Everyone", "Iedereen"),
+        "filter.resources" => ("resources", "resources"),
+        "filter.reset" => ("Reset filters", "Filters wissen"),
+        "filter.all_recipients" => ("All recipients", "Alle ontvangers"),
+        "filter.recipient" => ("Recipient", "Ontvanger"),
+        "prop.name" => ("Name", "Naam"),
+        "prop.group_color" => ("Group color", "Groepskleur"),
+        "common.yes" => ("Yes", "Ja"),
+        "qe.new" => ("New Task", "Nieuwe taak"),
+        "qe.indent" => ("Indent Task", "Taak inspringen"),
+        "qe.outdent" => ("Outdent Task", "Taak uitspringen"),
+        "ov.around" => ("Tasks around the status date.", "Taken rond de statusdatum."),
+        "ov.overdue" => ("Overdue", "Te laat"),
+        "ov.this_week" => ("Due this week", "Deze week"),
+        "ov.milestones" => ("Milestones, next 30 days", "Mijlpalen, komende 30 dagen"),
+        "ov.waiting" => ("Waiting on deliveries", "Wacht op opleveringen"),
+        "ov.starting" => ("starting", "starten"),
+        "ov.due" => ("due", "klaar"),
+        "ov.today" => ("Today", "Vandaag"),
+        "ov.upcoming" => ("Upcoming milestones", "Komende mijlpalen"),
+        "ov.none" => ("None", "Geen"),
+        "startup.last" => ("Last saved project", "Laatst opgeslagen project"),
+        "startup.blank" => ("Blank document", "Leeg document"),
+        "startup.page" => ("Start page", "Startpagina"),
+        "startup.overview" => ("Open on Overview", "Openen op Overzicht"),
+        "tb.startup" => ("Startup", "Opstarten"),
+        "print.due" => ("Due", "Vervalt"),
+        "print.unassigned" => ("Unassigned", "Niet toegewezen"),
+        "print.no_columns" => ("No columns", "Geen kolommen"),
+        "print.project" => ("Project", "Project"),
+        "print.date" => ("Date", "Datum"),
+        "print.task" => ("Task", "Taak"),
+        "print.milestone" => ("Milestone", "Mijlpaal"),
+        "print.summary" => ("Summary", "Samenvatting"),
+        "print.manual" => ("Manual Task", "Handmatige taak"),
+        "print.inactive" => ("Inactive Task", "Inactieve taak"),
+        "print.deadline" => ("Deadline", "Deadline"),
+        "print.critical" => ("Critical Task", "Kritieke taak"),
+        "print.progress" => ("Progress", "Voortgang"),
+        "print.slack" => ("Slack", "Speling"),
+        "team.resource" => ("Resource Name", "Resourcenaam"),
+        "rpt.level" => ("Level", "Niveau"),
+        "rpt.task_wbs" => ("Task (WBS)", "Taak (WBS)"),
+        "rpt.duration_days" => ("Duration days", "Duur (dagen)"),
+        "distill.title" => ("Distill a plan", "Plan uit tekst"),
+        "distill.explain" => (
+            "The text is sent to the AI chosen in Settings and is not saved in the project.",
+            "De tekst gaat naar de AI uit Instellingen en wordt niet in het project bewaard.",
+        ),
+        "distill.ai" => ("AI Settings…", "AI-instellingen…"),
+        "distill.drop" => ("Drop a text or Markdown file here", "Sleep een tekst- of Markdown-bestand hierheen"),
+        "distill.choose" => ("Choose File…", "Kies bestand…"),
+        "distill.notes" => ("Paste a mail, a brief or a list of work.", "Plak een mail, een briefing of een lijst werk."),
+        "distill.analyze" => ("Analyze", "Analyseren"),
+        "distill.stop" => ("Stop", "Stoppen"),
+        "distill.working" => ("Asking the model…", "Bezig met het model…"),
+        "distill.check_all" => ("Check All", "Alles aan"),
+        "distill.uncheck_all" => ("Uncheck All", "Alles uit"),
+        "distill.chain" => ("Chain undated activities", "Ongedateerde activiteiten koppelen"),
+        "distill.add_to" => ("Add to this project", "Toevoegen aan dit project"),
+        "distill.replace" => ("Replace the plan", "Plan vervangen"),
+        "distill.add" => ("Add", "Toevoegen"),
+        "distill.cancel" => ("Cancel", "Annuleren"),
+        "distill.group" => ("Group", "Groep"),
+        "distill.milestone" => ("Milestone", "Mijlpaal"),
+        "distill.day" => ("d", "d"),
+        "distill.need_doc" => ("Open or create a project first.", "Open of maak eerst een project."),
+        "distill.need_key" => ("Add an API key in AI Settings.", "Voeg een API-sleutel toe in AI-instellingen."),
+        "distill.need_text" => ("Paste or open a text first.", "Plak of open eerst een tekst."),
+        "distill.need_text_file" => ("Choose a text or Markdown file.", "Kies een tekst- of Markdown-bestand."),
+        "distill.need_model" => ("Choose a model in AI Settings.", "Kies een model in AI-instellingen."),
+        "distill.need_url" => ("Enter the API address.", "Vul het API-adres in."),
+        "distill.bad_url" => ("The API address must be an http or https URL.", "Het API-adres moet een http- of https-adres zijn."),
+        "distill.no_office" => (
+            "PDF and Word files are not read yet. Use text or Markdown.",
+            "PDF- en Word-bestanden worden nog niet gelezen. Gebruik tekst of Markdown.",
+        ),
+        "distill.not_text" => ("That file is not text.", "Dat bestand is geen tekst."),
+        "distill.too_large" => ("That is larger than the limit.", "Dat is groter dan de limiet."),
+        "distill.undo" => ("Distill Plan", "Planning uit tekst"),
+        "distill.bad" => ("The model did not return a usable plan.", "Het model gaf geen bruikbaar plan terug."),
+        "distill.none" => ("Select at least one activity.", "Selecteer minstens één activiteit."),
+        "distill.empty" => ("The model reply was empty.", "Het antwoord van het model was leeg."),
+        "distill.not_json" => ("The model reply was not JSON.", "Het antwoord van het model was geen JSON."),
+        "distill.offline" => (
+            "Could not reach the service. Check the key and the network.",
+            "De dienst is niet bereikbaar. Controleer de sleutel en het netwerk.",
+        ),
+        "distill.saved" => ("API key saved", "API-sleutel bewaard"),
+        "distill.paste" => ("Paste the key", "Plak de sleutel"),
+        "distill.save" => ("Save", "Bewaren"),
+        "distill.change" => ("Change", "Wijzigen"),
+        "distill.remove" => ("Remove", "Verwijderen"),
+        "distill.service" => ("Service", "Dienst"),
+        "distill.model" => ("Model", "Model"),
+        "distill.address" => ("API address", "API-adres"),
+        "distill.address_hint" => (
+            "For example https://example.com/v1. A local http address is allowed.",
+            "Bijvoorbeeld https://example.com/v1. Een lokaal http-adres mag.",
+        ),
+        "distill.key_where" => (
+            "The key is stored in the system key store on this computer, not in the project.",
+            "De sleutel staat in de sleutelbos van deze computer, niet in het project.",
+        ),
+        "distill.key_rejected" => ("That key cannot be stored.", "Die sleutel kan niet worden bewaard."),
+        "distill.provider.openai" => ("OpenAI", "OpenAI"),
+        "distill.provider.anthropic" => ("Anthropic", "Anthropic"),
+        "distill.provider.xai" => ("xAI", "xAI"),
+        "distill.provider.custom" => ("OpenAI-compatible", "OpenAI-compatibel"),
+        "qe.title" => ("Quick Entry", "Snelle invoer"),
+        "qe.hint" => ("Type one task per line, or paste a list.", "Typ één taak per regel, of plak een lijst."),
+        "qe.sample" => ("Kick-off meeting 1d", "Kick-off 1d"),
+        "qe.shorthand" => (
+            "Indent with >, tabs, two spaces or dots. 3d, 2w and 4h set the duration. ! marks a milestone. ^ links to the line above, ^3 or ^1.2 to that ticket. @Name assigns a resource.",
+            "Spring in met >, tabs, twee spaties of punten. 3d, 2w en 4h zetten de duur. ! is een mijlpaal. ^ koppelt aan de regel erboven, ^3 of ^1.2 aan dat ticket. @Naam wijst een resource toe.",
+        ),
+        "qe.keys" => (
+            "Insert adds every line at the selected task, as one undo step.",
+            "Invoegen zet alle regels bij de geselecteerde taak, in één stap die ongedaan te maken is.",
+        ),
+        "qe.insert" => ("Insert", "Invoegen"),
+        "qe.cancel" => ("Cancel", "Annuleren"),
+        "qe.group" => ("Group", "Groep"),
+        "qe.milestone" => ("Milestone", "Mijlpaal"),
+        "qe.tickets" => ("tickets", "tickets"),
+        "qe.groups" => ("groups", "groepen"),
+        "qe.links" => ("links", "koppelingen"),
+        "qe.after" => ("after", "na"),
+        "qe.above" => ("the line above", "de regel erboven"),
+        "qe.unavailable" => ("(unavailable)", "(niet beschikbaar)"),
+        "qe.loop" => ("Links form a loop.", "De koppelingen vormen een lus."),
+        "qe.need_name" => ("This line needs a name.", "Deze regel heeft een naam nodig."),
+        "qe.bad_token" => ("That shorthand is not a ticket number.", "Die verkorting is geen ticketnummer."),
+        "qe.skip" => ("The indent skips a level.", "De inspringing slaat een niveau over."),
+        "qe.group_milestone" => ("A group cannot be a milestone.", "Een groep kan geen mijlpaal zijn."),
+        "qe.group_resource" => ("A group takes its resources from its tasks.", "Een groep krijgt de resources van zijn taken."),
+        "qe.empty" => ("The preview appears as you type.", "Het voorbeeld verschijnt terwijl u typt."),
+        "qe.blocked" => ("Fix the marked lines first.", "Herstel eerst de gemarkeerde regels."),
+        "qe.need_doc" => ("Open or create a project first.", "Open of maak eerst een project."),
+        "qe.undo" => ("Quick Entry", "Snelle invoer"),
+        _ => return None,
+    })
+}
+
+pub fn status_name(status: TaskStatus) -> &'static str {
+    text(match status {
+        TaskStatus::NotStarted => "status.not_started",
+        TaskStatus::Started => "status.started",
+        TaskStatus::Busy => "status.busy",
+        TaskStatus::Done => "status.done",
+    })
+}
+
+pub fn category_name(cat: ResourceCategory) -> &'static str {
+    text(match cat {
+        ResourceCategory::TeamMember => "cat.member",
+        ResourceCategory::Team => "cat.team",
+        ResourceCategory::PartnerCompany => "cat.partner",
+        ResourceCategory::Vendor => "cat.vendor",
+        ResourceCategory::Contractor => "cat.contractor",
+        ResourceCategory::Equipment => "cat.equipment",
+        ResourceCategory::Facility => "cat.facility",
+        ResourceCategory::Other => "cat.other",
+    })
+}
+
+pub fn mark_name(mark: RowMark) -> &'static str {
+    text(match mark {
+        RowMark::Amber => "mark.amber",
+        RowMark::Blue => "mark.blue",
+        RowMark::Pink => "mark.pink",
+        RowMark::Green => "mark.green",
+    })
+}
+
+pub fn style_name(style: ChartStyle) -> &'static str {
+    text(match style {
+        ChartStyle::Blue => "style.blue",
+        ChartStyle::Graphite => "style.graphite",
+        ChartStyle::Green => "style.green",
+        ChartStyle::Orange => "style.orange",
+        ChartStyle::HighContrast => "style.contrast",
+    })
+}
+
+pub fn theme_name(theme: crate::theme::ThemeChoice) -> &'static str {
+    text(match theme {
+        crate::theme::ThemeChoice::System => "theme.system",
+        crate::theme::ThemeChoice::Light => "theme.light",
+        crate::theme::ThemeChoice::Dark => "theme.dark",
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dutch_is_the_default_and_both_languages_cover_the_same_keys() {
+        assert_eq!(Lang::default(), Lang::Nl);
+        let keys = [
+            "menu.file",
+            "view.gantt",
+            "view.overview",
+            "view.deliveries",
+            "status.not_started",
+            "status.started",
+            "status.busy",
+            "status.done",
+            "filter.all",
+            "col.name",
+            "prop.duration",
+            "fmt.critical",
+            "rpt.status",
+            "menu.export_gantt",
+        ];
+        for key in keys {
+            let en = tr(Lang::En, key);
+            let nl = tr(Lang::Nl, key);
+            assert_ne!(en, key, "{key} has no English label");
+            assert_ne!(nl, key, "{key} has no Dutch label");
+        }
+        assert_eq!(tr(Lang::En, "status.not_started"), "Not started");
+        assert_eq!(tr(Lang::En, "status.busy"), "In progress");
+        assert_eq!(tr(Lang::Nl, "status.not_started"), "Niet gestart");
+        assert_eq!(tr(Lang::Nl, "status.done"), "Gereed");
+        assert_eq!(tr(Lang::En, "missing.key"), "missing.key");
+    }
+}

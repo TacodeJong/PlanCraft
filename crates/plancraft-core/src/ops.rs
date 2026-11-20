@@ -50,6 +50,17 @@ impl From<crate::guard::Panicked> for PlanError {
 
 pub type PlanResult<T> = Result<T, PlanError>;
 
+/// How a task sits on the dependency chain of the selected tasks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PathRole {
+    /// One of the tasks the chain was asked for.
+    Selected,
+    /// A direct predecessor or successor of a selected task.
+    Direct,
+    /// Further along the chain, either way.
+    Indirect,
+}
+
 /// How "Update work as complete through" sets progress.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ProgressUpdate {
@@ -927,6 +938,51 @@ impl Project {
         id
     }
 
+    /// The predecessor and successor chain of `ids`, both ways.
+    ///
+    /// A task already counted as selected stays selected. A direct link wins over a longer path.
+    pub fn path_roles(&self, ids: &[TaskId]) -> HashMap<TaskId, PathRole> {
+        let mut pred: HashMap<TaskId, Vec<TaskId>> = HashMap::new();
+        let mut succ: HashMap<TaskId, Vec<TaskId>> = HashMap::new();
+        for t in &self.tasks {
+            for d in &t.predecessors {
+                let Some(pid) = d.predecessor.local() else { continue };
+                succ.entry(pid).or_default().push(t.id);
+                pred.entry(t.id).or_default().push(pid);
+            }
+        }
+        let mut roles = HashMap::new();
+        let mut queue = std::collections::VecDeque::new();
+        for id in ids {
+            if self.task(*id).is_none() || roles.contains_key(id) {
+                continue;
+            }
+            roles.insert(*id, PathRole::Selected);
+            queue.push_back(*id);
+        }
+        while let Some(id) = queue.pop_front() {
+            let next = match roles.get(&id).copied().unwrap_or(PathRole::Indirect) {
+                PathRole::Selected => PathRole::Direct,
+                PathRole::Direct | PathRole::Indirect => PathRole::Indirect,
+            };
+            let mut neighbors = Vec::new();
+            if let Some(list) = pred.get(&id) {
+                neighbors.extend(list.iter().copied());
+            }
+            if let Some(list) = succ.get(&id) {
+                neighbors.extend(list.iter().copied());
+            }
+            for nid in neighbors {
+                if roles.contains_key(&nid) || self.task(nid).is_none() {
+                    continue;
+                }
+                roles.insert(nid, next);
+                queue.push_back(nid);
+            }
+        }
+        roles
+    }
+
     /// Deletes resources and their assignments and time entries.
     pub fn delete_resources(&mut self, ids: &[ResourceId]) -> PlanResult<()> {
         for id in ids {
@@ -936,6 +992,31 @@ impl Project {
         self.assignments.retain(|a| !ids.contains(&a.resource));
         self.time_entries.retain(|e| !ids.contains(&e.resource));
         Ok(())
+    }
+
+    /// Gives `to` every assignment and time entry of `from`, then deletes `from`.
+    ///
+    /// A task that already has `to` keeps that assignment and drops `from`'s. One call is one
+    /// undo step for the caller.
+    pub fn replace_resource(&mut self, from: ResourceId, to: ResourceId) -> PlanResult<()> {
+        if from == to {
+            return invalid("choose a different resource to replace this one");
+        }
+        self.resource(from).ok_or(PlanError::ResourceNotFound(from))?;
+        self.resource(to).ok_or(PlanError::ResourceNotFound(to))?;
+        let taken: HashSet<TaskId> = self.assignments.iter().filter(|a| a.resource == to).map(|a| a.task).collect();
+        self.assignments.retain(|a| !(a.resource == from && taken.contains(&a.task)));
+        for a in &mut self.assignments {
+            if a.resource == from {
+                a.resource = to;
+            }
+        }
+        for e in &mut self.time_entries {
+            if e.resource == from {
+                e.resource = to;
+            }
+        }
+        self.delete_resources(&[from])
     }
 
     /// Spreads `total` work over the task's work assignments in proportion to their units.
@@ -982,7 +1063,7 @@ impl Project {
             return first.ok_or_else(|| PlanError::Invalid("this recurring task has no occurrences with work to assign".into()));
         }
         if self.has_children(ti) {
-            return invalid("resources cannot be assigned to summary tasks");
+            return invalid("resources cannot be assigned to summary tasks; a group's resources are the resources of its tasks");
         }
         let kind = self.resource(resource).ok_or(PlanError::ResourceNotFound(resource))?.kind;
         let units = clamp_f64(units.unwrap_or(1.0), 0.0, MAX_UNITS);
@@ -1111,23 +1192,49 @@ impl Project {
         Ok(())
     }
 
-    /// Resource names assigned to a task, e.g. `"Ana[50%],Build Co"`.
+    /// Resource names for a task, e.g. `"Ana[50%],Build Co"`.
+    ///
+    /// A summary has no assignments of its own. Its names are the resources of its tasks, in
+    /// outline order, each resource once (the first task that uses it supplies the units).
     pub fn format_resource_names(&self, task: TaskId) -> String {
-        self.assignments_for_task(task)
-            .filter_map(|a| {
-                let r = self.resource(a.resource)?;
-                Some(match r.kind {
-                    ResourceType::Work if (a.units - 1.0).abs() > 1e-6 => {
-                        format!("{}[{}%]", r.name, (a.units * 100.0).round())
-                    }
-                    ResourceType::Material => {
-                        format!("{}[{} {}]", r.name, trim_f(a.units), r.material_label)
-                    }
-                    _ => r.name.clone(),
-                })
-            })
-            .collect::<Vec<_>>()
-            .join(",")
+        let mut seen = Vec::new();
+        let mut parts = Vec::new();
+        for (rid, units) in self.resource_rows(task) {
+            if seen.contains(&rid) {
+                continue;
+            }
+            seen.push(rid);
+            if let Some(text) = self.format_named(rid, units) {
+                parts.push(text);
+            }
+        }
+        parts.join(",")
+    }
+
+    /// `(resource, units)` in outline order. A summary contributes its leaf descendants only.
+    fn resource_rows(&self, task: TaskId) -> Vec<(ResourceId, f64)> {
+        let Some(idx) = self.task_index(task) else {
+            return Vec::new();
+        };
+        let ids: Vec<TaskId> = if self.has_children(idx) {
+            self.descendants_range(idx).filter(|&i| !self.has_children(i)).filter_map(|i| self.tasks.get(i).map(|t| t.id)).collect()
+        } else {
+            vec![task]
+        };
+        let mut rows = Vec::new();
+        for id in ids {
+            rows.extend(self.assignments_for_task(id).map(|a| (a.resource, a.units)));
+        }
+        rows
+    }
+
+    fn format_named(&self, resource: ResourceId, units: f64) -> Option<String> {
+        let r = self.resource(resource)?;
+        Some(match r.kind {
+            ResourceType::Work if (units - 1.0).abs() > 1e-6 => format!("{}[{}%]", r.name, (units * 100.0).round()),
+            ResourceType::Material => format!("{}[{} {}]", r.name, trim_f(units), r.material_label),
+            _ => r.name.clone(),
+        })
     }
 
     /// Applies resource-name text like `"Ana[50%], Bob"`; unknown names create new resources.
@@ -1174,6 +1281,36 @@ impl Project {
     // ------------------------------------------------------------------
     // Progress & time tracking
     // ------------------------------------------------------------------
+
+    /// Sets the workflow status and applies it to every descendant. Done sets percent complete to 100
+    /// and not started sets it to 0. Started and in progress leave the percent alone.
+    pub fn set_task_status(&mut self, id: TaskId, status: TaskStatus) -> PlanResult<()> {
+        let idx = self.require_task(id)?;
+        let mut ids = vec![id];
+        ids.extend(self.descendants_range(idx).filter_map(|i| self.tasks.get(i).map(|t| t.id)));
+        for tid in &ids {
+            if let Some(t) = self.task_mut(*tid) {
+                t.status = status;
+            }
+        }
+        match status {
+            TaskStatus::Done => self.set_percent_complete(id, 100)?,
+            TaskStatus::NotStarted => self.set_percent_complete(id, 0)?,
+            TaskStatus::Started | TaskStatus::Busy => {}
+        }
+        if matches!(status, TaskStatus::Done | TaskStatus::NotStarted) {
+            let pct = if status == TaskStatus::Done { 100 } else { 0 };
+            for tid in &ids {
+                if let Some(i) = self.task_index(*tid)
+                    && self.has_children(i)
+                    && let Some(t) = self.task_mut(*tid)
+                {
+                    t.percent_complete = pct;
+                }
+            }
+        }
+        Ok(())
+    }
 
     /// Sets % complete, maintaining actual start/finish like Microsoft Project.
     pub fn set_percent_complete(&mut self, id: TaskId, pct: u8) -> PlanResult<()> {
@@ -1614,12 +1751,20 @@ impl Project {
     /// Dates without time use the start (or end when `finish` is set) of the project's working day.
     pub fn parse_datetime(&self, text: &str, finish: bool) -> Option<DateTime> {
         let t = text.trim();
-        for f in ["%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%m/%d/%y %H:%M", "%m/%d/%Y %H:%M"] {
+        for f in [
+            "%Y-%m-%d %H:%M",
+            "%Y-%m-%dT%H:%M",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M:%S",
+            "%d-%m-%Y %H:%M",
+            "%m/%d/%y %H:%M",
+            "%m/%d/%Y %H:%M",
+        ] {
             if let Ok(dt) = DateTime::parse_from_str(t, f) {
                 return Some(dt);
             }
         }
-        let date = ["%Y-%m-%d", "%m/%d/%y", "%m/%d/%Y", "%a %m/%d/%y", "%d %b %Y", "%b %d %Y", "%b %d, %Y"]
+        let date = ["%Y-%m-%d", "%d-%m-%Y", "%m/%d/%y", "%m/%d/%Y", "%a %m/%d/%y", "%d %b %Y", "%b %d %Y", "%b %d, %Y"]
             .iter()
             .find_map(|f| Date::parse_from_str(t, f).ok())?;
         let wc = crate::calendar::WorkCal::single(self.base_calendar());
@@ -1695,4 +1840,65 @@ fn percent_of(part: Minutes, whole: Minutes) -> u8 {
     }
     let pct = part.saturating_mul(100).saturating_add(whole / 2) / whole.max(1);
     u8::try_from(pct.clamp(1, 99)).unwrap_or(99)
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    #[test]
+    fn status_cascades_and_rolls_up() {
+        let mut p = Project::new("Status", crate::dates::ymd(2026, 1, 5).unwrap());
+        let g = p.add_task("Group", None);
+        let a = p.add_task("A", None);
+        let b = p.add_task("B", None);
+        p.task_mut(a).unwrap().outline_level = 2;
+        p.task_mut(b).unwrap().outline_level = 2;
+        p.task_mut(a).unwrap().percent_complete = 40;
+        p.set_task_status(g, TaskStatus::Done).unwrap();
+        assert_eq!(p.task(a).unwrap().status, TaskStatus::Done);
+        assert_eq!(p.task(b).unwrap().percent_complete, 100);
+        assert_eq!(p.task(g).unwrap().percent_complete, 100);
+        let gi = p.task_index(g).unwrap();
+        assert_eq!(p.displayed_status(gi), TaskStatus::Done);
+
+        p.set_task_status(a, TaskStatus::Started).unwrap();
+        assert_eq!(p.task(a).unwrap().percent_complete, 100, "started leaves the percent alone");
+        assert_eq!(p.displayed_status(gi), TaskStatus::Busy);
+
+        p.set_task_status(g, TaskStatus::NotStarted).unwrap();
+        assert_eq!(p.task(a).unwrap().status, TaskStatus::NotStarted);
+        assert_eq!(p.task(b).unwrap().percent_complete, 0);
+        assert_eq!(p.displayed_status(gi), TaskStatus::NotStarted);
+
+        p.set_task_status(a, TaskStatus::Started).unwrap();
+        p.set_task_status(b, TaskStatus::Started).unwrap();
+        assert_eq!(p.displayed_status(gi), TaskStatus::Started);
+    }
+
+    #[test]
+    fn a_missing_status_loads_as_not_started() {
+        let mut p = Project::new("Old", crate::dates::ymd(2026, 1, 5).unwrap());
+        p.add_task("A", None);
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(!json.contains("\"status\""), "{json}");
+        let back: Project = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.tasks.first().unwrap().status, TaskStatus::NotStarted);
+    }
+}
+
+#[cfg(test)]
+mod dutch_dates {
+    use super::*;
+
+    #[test]
+    fn day_first_dates_parse() {
+        let p = Project::new("Dates", crate::dates::ymd(2026, 1, 5).unwrap());
+        let start = p.parse_datetime("15-10-2026", false).unwrap();
+        assert_eq!(start.date(), crate::dates::ymd(2026, 10, 15).unwrap());
+        assert_eq!(start.hour(), 8);
+        let finish = p.parse_datetime("30-11-2026 17:00", true).unwrap();
+        assert_eq!(finish.date(), crate::dates::ymd(2026, 11, 30).unwrap());
+        assert_eq!((finish.hour(), finish.minute()), (17, 0));
+    }
 }

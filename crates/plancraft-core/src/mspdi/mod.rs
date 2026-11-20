@@ -11,6 +11,18 @@
 //! and interim plans, task custom fields (Text, Number, Cost, Date, Duration, Flag), resources
 //! (work, material, cost; rates, availability, personal calendars) and assignments.
 //! What does not is listed in the notes each direction returns.
+//!
+//! Leaf durations are the resolved schedule (`sched.duration`), so a stretched or percent task
+//! does not export a duration that contradicts its start and finish. When a task has date bounds,
+//! the single Microsoft Project constraint and the deadline are derived from those bounds at
+//! export time (start-no-earlier, start-no-later, finish-no-earlier, finish-no-later; an unfixed
+//! latest finish is a deadline). A stored constraint that is not "as soon as possible" and whose
+//! date still matches a bound is kept, because that is the must-start, must-finish or as-late
+//! choice the bounds cannot express alone. Every bound, the fixed flags, stretch, percent of
+//! group, row mark and workflow status also travel in extended attributes aliased `Planner …`
+//! (the same prefix as the Swift app's `Planner Given Work`). Reading those aliases restores the
+//! fields, and a plan that carries Fills Group or Percent Of Group turns the scheduling ruleset
+//! back on.
 
 pub mod codes;
 mod read;

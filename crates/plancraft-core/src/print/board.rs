@@ -25,8 +25,27 @@ pub struct BoardColumnPrint {
     pub rows: Vec<usize>,
 }
 
-/// The board's items and its size in points.
+/// Words on a printed card. English unless the app passes its language.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CardWords {
+    pub due: &'static str,
+    pub unassigned: &'static str,
+    pub empty: &'static str,
+}
+
+impl Default for CardWords {
+    fn default() -> Self {
+        Self { due: "Due", unassigned: "Unassigned", empty: "No columns" }
+    }
+}
+
+/// The board's items and its size in points. Card captions stay English.
 pub fn items(p: &Project, columns: &[BoardColumnPrint], pal: &Palette) -> (Vec<Item>, f32, f32) {
+    items_labeled(p, columns, pal, &CardWords::default())
+}
+
+/// The board's items, with the card captions the caller supplies.
+pub fn items_labeled(p: &Project, columns: &[BoardColumnPrint], pal: &Palette, words: &CardWords) -> (Vec<Item>, f32, f32) {
     let mut out = Vec::new();
     let status = crate::report::status_moment(p);
     let most = columns.iter().map(|c| c.rows.len()).max().unwrap_or(0) as f32;
@@ -69,11 +88,11 @@ pub fn items(p: &Project, columns: &[BoardColumnPrint], pal: &Palette) -> (Vec<I
         for (n, &i) in col.rows.iter().enumerate() {
             let Some(t) = p.tasks.get(i) else { continue };
             let r = Rect::new(x + PAD, top + HEAD_H + PAD + n as f32 * (CARD_H + CARD_GAP), COL_W - 2.0 * PAD, CARD_H);
-            card(&mut out, r, p, t, crate::report::is_late(t, status, p), pal);
+            card(&mut out, r, p, t, crate::report::is_late(t, status, p), pal, words);
         }
     }
     if columns.is_empty() {
-        centred_text(&mut out, pt(COL_W / 2.0 + GAP, top + HEAD_H / 2.0), "No columns", 14.0, pal.text_weak, false);
+        centred_text(&mut out, pt(COL_W / 2.0 + GAP, top + HEAD_H / 2.0), words.empty, 14.0, pal.text_weak, false);
     }
     let w = GAP + (columns.len().max(1) as f32) * (COL_W + GAP);
     let h = col_h + GAP;
@@ -84,7 +103,7 @@ pub fn items(p: &Project, columns: &[BoardColumnPrint], pal: &Palette) -> (Vec<I
 }
 
 /// One card: name, resources, finish date and progress; a coloured edge for critical tasks.
-fn card(out: &mut Vec<Item>, r: Rect, p: &Project, t: &crate::model::Task, late: bool, pal: &Palette) {
+fn card(out: &mut Vec<Item>, r: Rect, p: &Project, t: &crate::model::Task, late: bool, pal: &Palette, words: &CardWords) {
     out.push(Item::Rect { rect: r, fill: Some(pal.white), stroke: Some(super::Stroke::new(1.0, pal.grid_strong)) });
     let stripe = if t.sched.critical {
         pal.bar_critical
@@ -104,8 +123,8 @@ fn card(out: &mut Vec<Item>, r: Rect, p: &Project, t: &crate::model::Task, late:
     let name_color = if done { pal.text_weak } else { pal.text };
     line_text(out, x, r.y + 8.0, &format!("{mark}{}", t.name), 13.5, name_color, false, r.w - 20.0);
     let who = p.format_resource_names(t.id);
-    line_text(out, x, r.y + 29.0, if who.is_empty() { "Unassigned" } else { &who }, 11.5, pal.text_weak, false, r.w - 122.0);
-    let due = format!("Due {}", date(t.sched.finish));
+    line_text(out, x, r.y + 29.0, if who.is_empty() { words.unassigned } else { &who }, 11.5, pal.text_weak, false, r.w - 122.0);
+    let due = format!("{} {}", words.due, date(t.sched.finish));
     let w = font::width(&due, 11.5, false);
     let cap = font::metrics().cap_height;
     out.push(Item::Text {

@@ -14,12 +14,14 @@
 //! assert!(p.task(b).unwrap().sched.start > p.task(a).unwrap().sched.start);
 //! ```
 
+pub mod agenda;
 pub mod baseline;
 pub mod bidi;
 pub mod board;
 pub mod calendar;
 pub mod custom;
 pub mod dates;
+pub mod deliveries;
 pub mod duration;
 pub mod guard;
 pub mod ids;
@@ -32,11 +34,14 @@ pub mod mspdi;
 pub mod network;
 pub mod ops;
 pub mod paths;
+pub mod pivot_xlsx;
+pub mod planner_json;
 pub mod print;
 pub mod recurring;
 pub mod report;
 pub mod sample;
 pub mod schedule;
+pub mod shares;
 pub mod split;
 pub mod sync;
 pub mod tabular;
@@ -44,6 +49,8 @@ pub mod timescale;
 pub mod watch;
 pub mod workload;
 pub mod workspace;
+pub mod xlsx_gantt;
+pub mod xlsx_out;
 
 pub mod prelude {
     pub use crate::baseline::{PlanSlot, Scope};
@@ -56,7 +63,7 @@ pub mod prelude {
     };
     pub use crate::ids::*;
     pub use crate::model::*;
-    pub use crate::ops::{PlanError, PlanResult, ProgressUpdate, TrackingReport};
+    pub use crate::ops::{PathRole, PlanError, PlanResult, ProgressUpdate, TrackingReport};
     pub use crate::schedule::{ScheduleReport, recalculate};
     pub use crate::workload::{Granularity, WorkloadReport, workload};
 }
