@@ -2,7 +2,7 @@
 
 Sanitized integration notes for PlanCraft → Microsoft Planner. Derived from a tenant probe (2026-11-20). **No credentials, client secrets, refresh tokens, or private keys belong in this file or in git.**
 
-Status: MVP implemented in `plancraft-app` (`planner_export` module, File → Export to Microsoft Planner). Auth uses device code + local settings / keyring. **No tenant id, client id, secret, or token in git.**
+Status: MVP implemented in `plancraft-app` (`planner_export` module, File → Export to Microsoft Planner). Auth uses device code + keyring. A **public** multi-tenant client id may ship in `DEFAULT_CLIENT_ID`; **secrets and tokens never** go in git.
 
 ---
 
@@ -87,69 +87,41 @@ Basic board-only (non-MVP): group membership → plan → buckets → tasks/assi
 
 ---
 
-## Sign in on this computer (end-user path)
+## Sign in (end-user path)
 
-PlanCraft uses the **device-code** flow. **No tenant id, client id, org URL, secret, or token belongs in git or in the project file.** PlanCraft does **not** ship a baked-in Entra client id.
+PlanCraft uses the **device-code** flow with a **public multi-tenant client**. Secrets and tokens never go in git or the project file. A public client id **may** ship in `DEFAULT_CLIENT_ID` (`planner_export/defaults.rs`).
 
-On the machine where Microsoft login works in a browser:
+1. **File → Export to Microsoft Planner…**
+2. **Sign in with Microsoft…** → open the device-login page → enter the code → finish with your work account.
+3. For Plan 1+: set the Dataverse org URL → **Export**. (Basic board: pick an M365 group.)
 
-1. **File → Export to Microsoft Planner**
-2. Open **Connection on this computer** and paste (once) the **Directory (tenant) id** and **Application (client) id** you got from IT (or an existing public client). Optionally set the Dataverse org URL for Plan 1+.
-3. Click **Sign in with Microsoft…** → open the device-login page → enter the code → finish with your work account.
-4. Choose target (Plan 1+ or basic board) → **Export**.
+Default tenant authority is `organizations`. Override tenant/client under **Advanced connection** only if needed.
 
-Connection ids are written only to this computer’s PlanCraft `settings.json` (app config directory). Refresh tokens and optional client secrets go to the OS keyring.
+If `DEFAULT_CLIENT_ID` is still empty, open Advanced once and paste the public client id from your admin (or set the constant / `PLANCRAFT_ENTRA_CLIENT_ID` at build time). You still do **not** register an Entra app from this dialog.
 
-Tenant field accepts a Directory (tenant) GUID, or the special host segment `organizations` when IT gave you a multi-tenant public client.
-
-### Run on another machine
-
-If this Mac cannot complete Microsoft login, build (or copy) PlanCraft where login works:
-
-```bash
-cd plancraft
-cargo build --release -p plancraft-app
-# binary: target/release/plancraft  (links only to system frameworks on macOS)
-```
-
-Copy `target/release/plancraft` to the other Mac (same architecture / recent macOS), or clone and `cargo build --release` there. Paste connection ids and **Sign in with Microsoft…** only on that machine. Do not copy `settings.json` or keychain items into the repo.
-
-### What IT must provide (once per organisation)
-
-End users should not register Entra apps from PlanCraft. An admin (or someone with Application Developer) creates **one** public client and sends the two identifiers:
+### One-time: create the public client (maintainer / admin)
 
 Portal: [Entra → App registrations](https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade)
 
-1. **New registration** — single-tenant is enough for one company; leave **Redirect URI blank** (device code).
+1. **New registration** — *Accounts in any organizational directory* (multi-tenant); **Redirect URI blank**.
 2. **Authentication** → **Allow public client flows** = **Yes**.
-3. **API permissions** (all **Delegated**):
-
-   | API | Permission | Why |
-   | --- | --- | --- |
-   | Microsoft Graph | `Tasks.ReadWrite` | Planner tasks (basic board) |
-   | Microsoft Graph | `Group.ReadWrite.All` | Plans owned by an M365 group |
-   | Microsoft Graph | `User.Read` | Usually already present |
-   | Dynamics CRM / Dataverse | `user_impersonation` | Plan 1+ / PSS (dependencies) |
-
-4. **Grant admin consent** (`Group.ReadWrite.All` almost always needs it).
-5. Send the user the **Directory (tenant) ID** and **Application (client) ID**. No client secret for a public client.
-
-Reuse an existing public client with those permissions if one already exists. Application permission `Tasks.ReadWrite.All` cannot drive Plan 1+ PSS.
+3. **API permissions** (all **Delegated**): Graph `Tasks.ReadWrite`, `Group.ReadWrite.All`, `User.Read`; Dataverse `user_impersonation` for Plan 1+.
+4. **Grant admin consent** in the home tenant.
+5. Put the **Application (client) ID** into `DEFAULT_CLIENT_ID` (safe to commit — it is public) or Advanced. Helper: `scripts/register-entra-public-client.sh` after `az login`.
 
 ### Runtime notes
 
 1. Caller should be a work/school member, hold **Planner Plan 1+** for dependencies, and be a member of the target M365 group.
 2. Graph uses the Graph token; premium PSS uses a **separate** token for the Dataverse org audience (`{orgUrl}/.default`).
-3. Never log raw tokens. Schedule APIs exclude application / system / integration users.
+3. Never log raw tokens.
 
 ---
-
 ## Public vs secret; where values live
 
 | Value | Classification | Storage |
 | --- | --- | --- |
-| Tenant id | Identifier | **Local** `settings.json` only — **never git** |
-| Application (client) id | Public identifier | **Local** `settings.json` only — **never git** (not shipped as a PlanCraft default) |
+| Default tenant (`organizations`) / overrides | Public | Source defaults and/or local settings |
+| Application (client) id | Public | Source `DEFAULT_CLIENT_ID` and/or local settings override |
 | Dataverse org URL | Non-secret | Local settings |
 | Redirect URI, scopes, Graph/Dataverse **host patterns** | Public | Docs / source OK (no org-specific ids) |
 | Client **secret** (confidential client only) | **Secret** | OS keyring — **never** source, docs, or BACKLOG |

@@ -1,9 +1,10 @@
 //! Export a PlanCraft project to Microsoft Planner (Plan 1+ / basic board).
 //!
 //! Credentials (refresh token, optional client secret) live in the OS keyring.
-//! Tenant id, client id and Dataverse org URL are non-secret settings.
+//! Tenant / client defaults live in `defaults`; local settings can override.
 
 mod auth;
+mod defaults;
 mod graph;
 mod http;
 mod keys;
@@ -11,6 +12,7 @@ mod map;
 mod pss;
 
 pub use auth::{AuthConfig, DeviceCode, begin_device_code, graph_token, poll_device_code};
+pub use defaults::{DEFAULT_CLIENT_ID, DEFAULT_TENANT_ID, effective_client, effective_tenant, has_default_client};
 pub use graph::{GraphExportResult, GraphOptions, export_basic, list_member_groups};
 pub use keys::{delete_client_secret, store_client_secret};
 pub use map::{ExportTarget, build_export};
@@ -21,6 +23,10 @@ use plancraft_core::prelude::Project;
 use crate::settings::PlannerSettings;
 
 use http::UreqTransport;
+
+fn auth_config(settings: &PlannerSettings) -> Result<AuthConfig, String> {
+    AuthConfig::from_settings(&effective_tenant(&settings.tenant_id), &effective_client(&settings.client_id))
+}
 
 #[derive(Clone, Debug)]
 pub enum ExportOutcome {
@@ -59,7 +65,7 @@ pub fn export_project(
     target: ExportTarget,
     group_id: &str,
 ) -> Result<ExportOutcome, String> {
-    let cfg = AuthConfig::from_settings(&settings.tenant_id, &settings.client_id)?;
+    let cfg = auth_config(settings)?;
     let plan = build_export(project, target);
     let mut http = UreqTransport::default();
     match target {
@@ -76,13 +82,13 @@ pub fn export_project(
 
 /// Device-code sign-in for Graph (stores refresh token in the keyring).
 pub fn sign_in(settings: &PlannerSettings) -> Result<DeviceCode, String> {
-    let cfg = AuthConfig::from_settings(&settings.tenant_id, &settings.client_id)?;
+    let cfg = auth_config(settings)?;
     let mut http = UreqTransport::default();
     begin_device_code(&mut http, &cfg, "https://graph.microsoft.com/.default offline_access openid profile")
 }
 
 pub fn complete_sign_in(settings: &PlannerSettings, pending: &DeviceCode) -> Result<(), String> {
-    let cfg = AuthConfig::from_settings(&settings.tenant_id, &settings.client_id)?;
+    let cfg = auth_config(settings)?;
     let mut http = UreqTransport::default();
     let _ = poll_device_code(&mut http, &cfg, pending)?;
     Ok(())
@@ -97,8 +103,13 @@ pub fn sign_out() -> Result<(), String> {
 }
 
 pub fn load_groups(settings: &PlannerSettings) -> Result<Vec<(String, String)>, String> {
-    let cfg = AuthConfig::from_settings(&settings.tenant_id, &settings.client_id)?;
+    let cfg = auth_config(settings)?;
     let mut http = UreqTransport::default();
     let tokens = graph_token(&mut http, &cfg)?;
     list_member_groups(&mut http, &tokens)
+}
+
+/// True when Sign in can start (shipped default client and/or local override).
+pub fn can_sign_in(settings: &PlannerSettings) -> bool {
+    !effective_client(&settings.client_id).is_empty() && !effective_tenant(&settings.tenant_id).is_empty()
 }
