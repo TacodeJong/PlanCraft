@@ -160,7 +160,7 @@ impl ResourceInfo {
                                 ui.label(format::day(e.start));
                                 ui.label(format::day(e.end));
                                 ui.label(if e.working.is_empty() { "Nonworking".into() } else { e.working.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(", ") });
-                                if ui.small_button("✖").clicked() {
+                                if crate::icons::button(ui, "x", 18.0, "Remove").clicked() {
                                     remove = Some(i);
                                 }
                                 ui.end_row();
@@ -207,7 +207,7 @@ impl ResourceInfo {
                                 ui.label(a.from.map(format::day).unwrap_or_else(|| "NA".into()));
                                 ui.label(a.to.map(format::day).unwrap_or_else(|| "NA".into()));
                                 ui.label(format::units(a.units));
-                                if ui.small_button("✖").clicked() {
+                                if crate::icons::button(ui, "x", 18.0, "Remove").clicked() {
                                     remove = Some(i);
                                 }
                                 ui.end_row();

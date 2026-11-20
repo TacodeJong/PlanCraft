@@ -53,11 +53,11 @@ impl WorkingTime {
     fn month_view(&mut self, ui: &mut Ui, cal: &Calendar) {
         let wc = WorkCal::single(cal);
         ui.horizontal(|ui| {
-            if ui.small_button("⏴").clicked() {
+            if crate::icons::button(ui, "chevron-left", 20.0, "Previous month").clicked() {
                 self.month = (plancraft_core::dates::shift_days(self.month, -1)).with_day(1).unwrap_or(self.month);
             }
             ui.label(RichText::new(crate::format::month_year(self.month)).strong());
-            if ui.small_button("⏵").clicked() {
+            if crate::icons::button(ui, "chevron-right", 20.0, "Next month").clicked() {
                 self.month = (plancraft_core::dates::shift_days(self.month, 32)).with_day(1).unwrap_or(self.month);
             }
         });
@@ -211,7 +211,7 @@ impl WorkingTime {
                                         } else {
                                             e.working.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(", ")
                                         });
-                                        if ui.small_button("✖").clicked() {
+                                        if crate::icons::button(ui, "x", 18.0, "Remove").clicked() {
                                             remove = Some(i);
                                         }
                                         ui.end_row();

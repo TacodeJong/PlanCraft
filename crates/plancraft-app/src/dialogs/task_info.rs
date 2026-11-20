@@ -922,7 +922,7 @@ impl TaskInfo {
                 ui.label(format::money(p, t.sched.cost));
                 ui.end_row();
                 for w in &t.sched.warnings {
-                    ui.label(RichText::new("⚠").color(theme::pal().ERROR));
+                    ui.add(crate::icons::image("triangle-alert", 13.0, theme::pal().ERROR));
                     ui.label(RichText::new(w).color(theme::pal().ERROR));
                     ui.end_row();
                 }
@@ -950,7 +950,7 @@ impl TaskInfo {
                     }
                 });
                 ui.add(egui::TextEdit::singleline(&mut row.lag).desired_width(80.0).hint_text("0d"));
-                if ui.small_button("✖").clicked() {
+                if crate::icons::button(ui, "x", 18.0, "Remove").clicked() {
                     remove = Some(i);
                 }
                 ui.end_row();
@@ -978,7 +978,13 @@ impl TaskInfo {
                         if self.preds.iter().any(|x| x.pred == r) {
                             continue;
                         }
-                        if ui.selectable_label(false, format!("🔗 {}\\{}", e.name, s.name)).clicked() {
+                        if ui
+                            .add(egui::Button::image_and_text(
+                                crate::icons::image("link", 12.0, theme::pal().TEXT),
+                                format!("{}\\{}", e.name, s.name),
+                            ))
+                            .clicked()
+                        {
                             self.preds.push(PredRow { pred: r, kind: LinkType::FS, lag: String::new() });
                         }
                     }
@@ -1013,7 +1019,7 @@ impl TaskInfo {
                 ui.label(r.map(|r| r.category.label()).unwrap_or_default());
                 ui.add(egui::TextEdit::singleline(&mut row.units).desired_width(60.0));
                 ui.add(egui::TextEdit::singleline(&mut row.work).desired_width(70.0).hint_text("auto"));
-                if ui.small_button("✖").clicked() {
+                if crate::icons::button(ui, "x", 18.0, "Remove").clicked() {
                     remove = Some(i);
                 }
                 ui.end_row();
@@ -1200,7 +1206,7 @@ impl TaskInfo {
         for (i, m) in self.members.iter().enumerate() {
             ui.horizontal(|ui| {
                 ui.label(p.task_ref_name(m));
-                if ui.small_button("✖").clicked() {
+                if crate::icons::button(ui, "x", 18.0, "Remove").clicked() {
                     remove = Some(i);
                 }
             });
@@ -1220,7 +1226,14 @@ impl TaskInfo {
             for e in &p.external_projects {
                 for s in &e.tasks {
                     let r = TaskRef::External { project: e.id, task: s.id };
-                    if !self.members.contains(&r) && ui.selectable_label(false, format!("🔗 {}\\{}", e.name, s.name)).clicked() {
+                    if !self.members.contains(&r)
+                        && ui
+                            .add(egui::Button::image_and_text(
+                                crate::icons::image("link", 12.0, theme::pal().TEXT),
+                                format!("{}\\{}", e.name, s.name),
+                            ))
+                            .clicked()
+                    {
                         self.members.push(r);
                     }
                 }

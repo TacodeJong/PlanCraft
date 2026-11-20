@@ -70,11 +70,11 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState) {
     bar.horizontal(|ui| {
         ui.label(egui::RichText::new("Timesheet").strong().size(15.0));
         ui.separator();
-        if ui.button("⏴").on_hover_text("Previous week").clicked() {
+        if crate::icons::button(ui, "chevron-left", 22.0, "Previous week").clicked() {
             st.timesheet_week = plancraft_core::dates::add_days(week, -7).unwrap_or(week);
         }
         ui.label(format!("Week of {}", week.format("%b %-d, %Y")));
-        if ui.button("⏵").on_hover_text("Next week").clicked() {
+        if crate::icons::button(ui, "chevron-right", 22.0, "Next week").clicked() {
             st.timesheet_week = plancraft_core::dates::add_days(week, 7).unwrap_or(week);
         }
         if ui.button("This Week").clicked() {
@@ -96,7 +96,10 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState) {
             }
         });
         ui.separator();
-        if ui.button("⏱ Update task progress from time").on_hover_text("Set each task's % complete from tracked vs planned work").clicked()
+        if ui
+            .add(egui::Button::image_and_text(crate::icons::image("timer", 13.0, theme::pal().TEXT), "Update task progress from time"))
+            .on_hover_text("Set each task's % complete from tracked vs planned work")
+            .clicked()
         {
             match doc.edit("Update Progress from Time", |p| p.update_progress_from_time()) {
                 Ok(_) => st.toast(ToastKind::Success, "Task progress updated from tracked time"),

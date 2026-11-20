@@ -312,18 +312,19 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
     resp.context_menu(|ui| match menu {
         Some(Some(id)) => {
             let k = cols.iter().position(|c| c.id == id).unwrap_or(0);
-            let mut item = |ui: &mut Ui, label: &str, enabled: bool, cmd: ColumnCmd| {
-                if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+            let mut item = |ui: &mut Ui, icon: &'static str, label: &str, enabled: bool, cmd: ColumnCmd| {
+                let img = crate::icons::image(icon, 14.0, theme::pal().TEXT);
+                if ui.add_enabled(enabled, egui::Button::image_and_text(img, label)).clicked() {
                     col_cmd = Some(cmd);
                     ui.close();
                 }
             };
-            item(ui, "📝  Rename / Set % Complete…", true, ColumnCmd::Edit(id));
-            item(ui, "⬅  Move Left", k > 0, ColumnCmd::Move(id, k.saturating_sub(1)));
-            item(ui, "➡  Move Right", k + 1 < cols.len(), ColumnCmd::Move(id, k + 1));
+            item(ui, "pen-line", "Rename / Set % Complete…", true, ColumnCmd::Edit(id));
+            item(ui, "arrow-left", "Move Left", k > 0, ColumnCmd::Move(id, k.saturating_sub(1)));
+            item(ui, "arrow-right", "Move Right", k + 1 < cols.len(), ColumnCmd::Move(id, k + 1));
             ui.separator();
-            item(ui, "➕  Add Column…", true, ColumnCmd::Add);
-            item(ui, "🗑  Delete Column", cols.len() > 1, ColumnCmd::Delete(id));
+            item(ui, "plus", "Add Column…", true, ColumnCmd::Add);
+            item(ui, "trash-2", "Delete Column", cols.len() > 1, ColumnCmd::Delete(id));
         }
         _ => crate::commands::task_context_menu(ui, &mut |c| out.push(c)),
     });
@@ -411,15 +412,19 @@ fn card(ui: &Ui, painter: &egui::Painter, r: Rect, p: &Project, t: &Task, select
     );
     let x = r.left() + 12.0;
     let done = t.is_complete();
-    let mark = if done {
-        "✔ "
+    // The completion check is an icon; the milestone diamond stays a painted shape.
+    let mut tx = x;
+    if done {
+        crate::icons::paint_at(painter, Rect::from_center_size(pos2(x + 6.0, r.top() + 17.0), vec2(12.0, 12.0)), "check", pal.OK);
+        tx += 16.0;
     } else if t.is_milestone() {
-        "♦ "
-    } else {
-        ""
-    };
-    let name = line(ui, &format!("{mark}{}", t.name), 13.5, if done { pal.TEXT_WEAK } else { pal.TEXT }, r.width() - 20.0);
-    painter.galley(pos2(x, r.top() + 8.0), name, pal.TEXT);
+        let c = pos2(x + 5.0, r.top() + 17.0);
+        let pts = vec![c + vec2(0.0, -5.0), c + vec2(5.0, 0.0), c + vec2(0.0, 5.0), c + vec2(-5.0, 0.0)];
+        painter.add(egui::Shape::convex_polygon(pts, pal.MILESTONE, Stroke::NONE));
+        tx += 16.0;
+    }
+    let name = line(ui, &t.name, 13.5, if done { pal.TEXT_WEAK } else { pal.TEXT }, r.width() - 20.0 - (tx - x));
+    painter.galley(pos2(tx, r.top() + 8.0), name, pal.TEXT);
     let who = p.format_resource_names(t.id);
     let who = line(ui, if who.is_empty() { "Unassigned" } else { &who }, 11.5, pal.TEXT_WEAK, r.width() - 122.0);
     painter.galley(pos2(x, r.top() + 29.0), who, pal.TEXT_WEAK);

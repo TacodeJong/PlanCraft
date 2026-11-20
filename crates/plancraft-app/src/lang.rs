@@ -219,7 +219,7 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         "tb.asc" => ("ascending", "oplopend"),
         "tb.desc" => ("descending", "aflopend"),
         "tb.no_group" => ("No Group", "Geen groep"),
-        "tb.search" => ("🔍 Search tasks", "🔍 Taken zoeken"),
+        "tb.search" => ("Search tasks", "Taken zoeken"),
         "tb.entire" => ("Entire Project", "Heel project"),
         "tb.selected" => ("Selected", "Selectie"),
         "tb.timeline" => ("Timeline", "Tijdlijn"),

@@ -39,7 +39,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
     ui.horizontal(|ui| {
         ui.heading("Milestones");
         ui.add_space(12.0);
-        if ui.button("♦ New Milestone").clicked() {
+        if ui.add(egui::Button::image_and_text(crate::icons::image("diamond", 13.0, theme::pal().TEXT), "New Milestone")).clicked() {
             out.push(Command::InsertMilestone);
         }
         ui.label(RichText::new(format!("{count} · status as of {}", format::date(Some(at)))).color(theme::pal().TEXT_WEAK));
@@ -71,7 +71,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("♦").color(theme::pal().GOLD).size(20.0));
+                        ui.add(crate::icons::image("diamond", 20.0, theme::pal().GOLD));
                         ui.label(RichText::new(&ms.name).size(16.0).strong());
                         ui.add_space(8.0);
                         if ms.complete {
@@ -149,18 +149,18 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
                                         )
                                     }
                                 };
-                                ui.label(if pct >= 100.0 {
-                                    RichText::new("✔").color(theme::pal().OK)
+                                if pct >= 100.0 {
+                                    ui.add(crate::icons::image("check", 13.0, theme::pal().OK));
                                 } else {
-                                    RichText::new("○").color(theme::pal().TEXT_WEAK)
-                                });
+                                    ui.add(crate::icons::image("circle", 11.0, theme::pal().TEXT_WEAK));
+                                }
                                 ui.label(&name);
                                 progress_bar(ui, pct / 100.0, 80.0, theme::pal().ACCENT_MID);
                                 ui.label(
                                     RichText::new(format!("{} · {}", format::percent(pct), format::date(finish)))
                                         .color(theme::pal().TEXT_WEAK),
                                 );
-                                if ui.small_button("✖").on_hover_text("Remove from milestone").clicked() {
+                                if crate::icons::button(ui, "x", 18.0, "Remove from milestone").clicked() {
                                     edits.push((ms.id, *r, false));
                                 }
                             });

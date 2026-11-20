@@ -17,7 +17,7 @@ fn code_line(ui: &mut egui::Ui, shown: &str, text: &str) {
         egui::Frame::new().fill(theme::pal().HEADER_BG).corner_radius(4.0).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
             ui.add(egui::Label::new(RichText::new(shown).monospace()).wrap());
         });
-        if ui.small_button("📋").on_hover_text("Copy").clicked() {
+        if crate::icons::button(ui, "copy", 20.0, "Copy").clicked() {
             ui.ctx().copy_text(text.to_string());
         }
     });
@@ -57,7 +57,7 @@ pub fn show(
         ui.label("PlanCraft includes a Model Context Protocol (MCP) server. AI agents such as Claude Code can read and edit every part of your projects: tasks, milestones, dependencies, resources, calendars, time tracking, workload and leveling.");
         ui.add_space(8.0);
         ui.label(RichText::new("Live connection to this window").strong().size(15.0));
-        ui.label("Agents edit the documents open here. Changes appear immediately and can be undone like your own edits (marked ⚡ in the undo history).");
+        ui.label("Agents edit the documents open here. Changes appear immediately and can be undone like your own edits (marked 'AI' in the undo history).");
         ui.horizontal(|ui| {
             ui.label("Port:");
             let mut port = settings.mcp_port.to_string();
@@ -67,11 +67,11 @@ pub fn show(
                 settings.mcp_port = p;
             }
             if host.running() {
-                if ui.button("■ Stop server").clicked() {
+                if ui.add(egui::Button::image_and_text(crate::icons::image("square", 11.0, theme::pal().TEXT), "Stop server")).clicked() {
                     host.stop();
                 }
-                ui.label(RichText::new("⚡ running").color(theme::pal().OK));
-            } else if ui.add(egui::Button::new(RichText::new("▶ Start server").color(egui::Color32::WHITE)).fill(theme::pal().ACCENT)).clicked() {
+                ui.add(crate::icons::image("zap", 12.0, theme::pal().OK)); ui.label(RichText::new("running").color(theme::pal().OK));
+            } else if ui.add(egui::Button::image_and_text(crate::icons::image("play", 12.0, egui::Color32::WHITE), RichText::new("Start server").color(egui::Color32::WHITE)).fill(theme::pal().ACCENT)).clicked() {
                 host.start(ws.clone(), ctx.clone(), settings.mcp_port);
             }
             let mut auto = settings.mcp_autostart;

@@ -484,7 +484,12 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
             let label = t.sched.finish.map(|f| crate::format::day_month(f.date())).unwrap_or_default();
             bp.text(pos2(x0 + 10.0, yc), Align2::LEFT_CENTER, label, label_font.clone(), theme::pal().TEXT);
             if t.deadline.is_some_and(|dl| t.sched.finish.is_some_and(|f| f > dl)) {
-                bp.text(pos2(x0 - 10.0, yc), Align2::RIGHT_CENTER, "⚠", label_font.clone(), theme::pal().ERROR);
+                crate::icons::paint_at(
+                    &bp,
+                    Rect::from_center_size(pos2(x0 - 14.0, yc), vec2(11.0, 11.0)),
+                    "triangle-alert",
+                    theme::pal().ERROR,
+                );
             }
         } else if summary {
             // A manually scheduled summary is drawn in the manual-task colour.
@@ -588,7 +593,12 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
                 bp.hline(x1..=sx, yc + BAR_H / 2.0 + 2.0, Stroke::new(1.5, theme::pal().BAR_SLACK));
             }
             if t.deadline.is_some_and(|dl| t.sched.finish.is_some_and(|f| f > dl)) {
-                bp.text(pos2(x1 + 3.0, yc - 8.0), Align2::LEFT_CENTER, "⚠", FontId::proportional(10.0), theme::pal().ERROR);
+                crate::icons::paint_at(
+                    &bp,
+                    Rect::from_center_size(pos2(x1 + 8.0, yc - 8.0), vec2(10.0, 10.0)),
+                    "triangle-alert",
+                    theme::pal().ERROR,
+                );
             }
         }
         // Deadline marker.

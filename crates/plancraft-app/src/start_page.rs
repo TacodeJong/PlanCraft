@@ -52,7 +52,7 @@ fn action(ui: &mut Ui, id: &str, icon: &str, title: &str, subtitle: &str) -> boo
             ui.horizontal(|ui| {
                 let (badge, _) = ui.allocate_exact_size(vec2(38.0, 38.0), Sense::hover());
                 ui.painter().rect_filled(badge, 9.0, if hovered { theme::pal().ACCENT_LIGHT } else { theme::pal().ACCENT_PALE });
-                ui.painter().text(badge.center(), Align2::CENTER_CENTER, icon, FontId::proportional(18.0), theme::pal().ACCENT);
+                crate::icons::paint(ui, badge, icon, 18.0, theme::pal().ACCENT);
                 ui.add_space(6.0);
                 ui.vertical(|ui| {
                     ui.add_space(1.0);
@@ -192,7 +192,12 @@ fn recent_list(ui: &mut Ui, settings: &AppSettings, out: &mut Vec<Command>) {
                 p.hline((rect.left() + 10.0)..=(rect.right() - 10.0), rect.top(), Stroke::new(1.0, theme::pal().GRID_LINE));
             }
             let icon_color = if exists { theme::pal().ACCENT_MID } else { theme::pal().GRID_LINE_STRONG };
-            p.text(pos2(rect.left() + 20.0, rect.center().y), Align2::CENTER_CENTER, "📄", FontId::proportional(16.0), icon_color);
+            crate::icons::paint_at(
+                p,
+                Rect::from_center_size(pos2(rect.left() + 20.0, rect.center().y), vec2(16.0, 16.0)),
+                "file-text",
+                icon_color,
+            );
             let text_color = if exists { theme::pal().TEXT } else { theme::pal().TEXT_WEAK };
             p.text(pos2(rect.left() + 40.0, rect.top() + 15.0), Align2::LEFT_CENTER, &name, FontId::proportional(13.5), text_color);
             let date = if exists { modified_label(path).unwrap_or_default() } else { "File not found".into() };
@@ -288,19 +293,19 @@ fn current_project(ui: &mut Ui, info: &StartInfo, out: &mut Vec<Command>) {
 fn start_actions(ui: &mut Ui, width: f32, out: &mut Vec<Command>) {
     ui.set_width(width);
     section_title(ui, "Start");
-    if action(ui, "blank", "➕", "Blank project", "An empty plan starting today") {
+    if action(ui, "blank", "plus", "Blank project", "An empty plan starting today") {
         out.push(Command::NewProject);
     }
-    if action(ui, "sample", "📊", "Sample project", "A product launch with milestones and a team") {
+    if action(ui, "sample", "chart-gantt", "Sample project", "A product launch with milestones and a team") {
         out.push(Command::NewDemo);
     }
-    if action(ui, "open", "📂", "Open…", "A PlanCraft plan, a Microsoft Project XML file, or a task list from Excel or CSV") {
+    if action(ui, "open", "folder-open", "Open…", "A PlanCraft plan, a Microsoft Project XML file, or a task list from Excel or CSV") {
         out.push(Command::Open);
     }
-    if action(ui, "server", "👥", "Open from Server…", "A plan shared on your network, to work on together") {
+    if action(ui, "server", "users-round", "Open from Server…", "A plan shared on your network, to work on together") {
         out.push(Command::OpenFromServer);
     }
-    if action(ui, "mcp", "⚡", "Connect an AI agent", "Let Claude Code and other MCP clients plan with you") {
+    if action(ui, "mcp", "zap", "Connect an AI agent", "Let Claude Code and other MCP clients plan with you") {
         out.push(Command::McpPanel);
     }
 }
@@ -329,7 +334,7 @@ pub fn show(ui: &mut Ui, info: &StartInfo, out: &mut Vec<Command>) -> bool {
             });
             if info.has_doc {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let label = RichText::new(format!("Back to {}  ➡", info.doc_title)).color(Color32::WHITE);
+                    let label = RichText::new(format!("Back to {}", info.doc_title)).color(Color32::WHITE);
                     if ui.add(egui::Button::new(label).fill(theme::pal().ACCENT).corner_radius(6.0).min_size(vec2(0.0, 30.0))).clicked() {
                         back = true;
                     }

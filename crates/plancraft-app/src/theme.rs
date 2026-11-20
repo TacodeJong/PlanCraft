@@ -785,10 +785,6 @@ mod tests {
         }
     }
 
-    /// Glyphs the bundled egui fonts cannot render (they show as empty boxes).
-    /// Found by rendering a glyph sheet; extend when a new icon turns out to be missing.
-    const MISSING_GLYPHS: &str = "→↶↷⊘▤▸◆●⮜🗂🗒🤖ⓘ⊕⊖⇄✎⬚▦◯🗓✓✗✘⬤▢◈◇❖✜🧭🧮🗃🧑⏩▬↑↓⇥⇤⇹⇩";
-
     fn sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         for e in std::fs::read_dir(dir).unwrap().flatten() {
             let p = e.path();
@@ -800,8 +796,12 @@ mod tests {
         }
     }
 
+    /// Icons are Lucide SVGs (`crate::icons`) now: no emoji or pictographic characters may
+    /// appear in source code outside comments. The sole exception is the milestone mark '♦',
+    /// kept as a text prefix where a milestone name appears inside a plain label; typography
+    /// (… – — ‹ › quotes) lies outside the scanned ranges.
     #[test]
-    fn ui_text_avoids_glyphs_missing_from_bundled_fonts() {
+    fn ui_text_has_no_emoji_or_pictographs() {
         let mut files = Vec::new();
         sources(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
         let mut problems = Vec::new();
@@ -809,15 +809,25 @@ mod tests {
             let text = std::fs::read_to_string(&f).unwrap();
             for (n, line) in text.lines().enumerate() {
                 let code = line.trim_start();
-                if code.starts_with("//") || code.starts_with("const MISSING_GLYPHS") {
+                if code.starts_with("//") {
                     continue;
                 }
-                for c in line.chars().filter(|c| MISSING_GLYPHS.contains(*c)) {
-                    problems.push(format!("{}:{}: '{c}'", f.display(), n + 1));
+                for c in line.chars() {
+                    let v = c as u32;
+                    let pictograph = (0x1F000..=0x1FAFF).contains(&v)   // emoji and symbols
+                        || (0x2190..=0x21FF).contains(&v)               // arrows
+                        || (0x2300..=0x23FF).contains(&v)               // technical (watches, media keys)
+                        || (0x25A0..=0x25FF).contains(&v)               // geometric shapes
+                        || (0x2600..=0x27BF).contains(&v)               // misc symbols and dingbats
+                        || (0x2900..=0x2BFF).contains(&v)               // more arrows and symbols
+                        || v == 0xFE0F; // emoji variation selector
+                    if pictograph && c != '♦' {
+                        problems.push(format!("{}:{}: '{c}' (U+{v:04X})", f.display(), n + 1));
+                    }
                 }
             }
         }
-        assert!(problems.is_empty(), "glyphs that render as boxes:\n{}", problems.join("\n"));
+        assert!(problems.is_empty(), "pictographs in source (use crate::icons instead):\n{}", problems.join("\n"));
     }
 
     /// The bundled fonts load with their variation coordinates on this egui and can lay text

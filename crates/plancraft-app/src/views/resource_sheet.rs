@@ -95,14 +95,14 @@ fn cell(p: &Project, r: &Resource, col: Col, over: &HashSet<ResourceId>, work: &
             let mut icons = Vec::new();
             if over.contains(&r.id) {
                 icons.push((
-                    grid::Glyph::from("⚠"),
+                    grid::Glyph::Icon("triangle-alert"),
                     theme::pal().ERROR,
                     "This resource is overallocated and should be leveled.".to_string(),
                 ));
             }
             if !r.exceptions.is_empty() {
                 icons.push((
-                    grid::Glyph::from("📅"),
+                    grid::Glyph::Icon("calendar"),
                     theme::pal().ACCENT_MID,
                     format!("{} calendar exception(s): time off or altered hours", r.exceptions.len()),
                 ));

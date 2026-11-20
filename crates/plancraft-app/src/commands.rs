@@ -141,36 +141,37 @@ pub enum Command {
 
 /// Context menu shared by the task table and the Gantt chart.
 pub fn task_context_menu(ui: &mut egui::Ui, emit: &mut dyn FnMut(Command)) {
-    let mut item = |ui: &mut egui::Ui, label: &str, cmd: Command| {
-        if ui.button(label).clicked() {
+    let mut item = |ui: &mut egui::Ui, icon: &'static str, label: &str, cmd: Command| {
+        let img = crate::icons::image(icon, 14.0, crate::theme::pal().TEXT);
+        if ui.add(egui::Button::image_and_text(img, label)).clicked() {
             emit(cmd);
             ui.close();
         }
     };
-    item(ui, "ℹ  Task Information…", Command::TaskInfo);
-    item(ui, "📝  Notes…", Command::TaskNotes);
-    item(ui, "👥  Assign Resources…", Command::AssignResources);
+    item(ui, "info", "Task Information…", Command::TaskInfo);
+    item(ui, "pen-line", "Notes…", Command::TaskNotes);
+    item(ui, "users-round", "Assign Resources…", Command::AssignResources);
     ui.separator();
-    item(ui, "➕  Insert Task", Command::InsertTask);
-    item(ui, "♦  Insert Milestone", Command::InsertMilestone);
-    item(ui, "🗑  Delete Task", Command::DeleteSelection);
+    item(ui, "plus", "Insert Task", Command::InsertTask);
+    item(ui, "diamond", "Insert Milestone", Command::InsertMilestone);
+    item(ui, "trash-2", "Delete Task", Command::DeleteSelection);
     ui.separator();
-    item(ui, "➡  Indent", Command::Indent);
-    item(ui, "⬅  Outdent", Command::Outdent);
-    item(ui, "🔗  Link Tasks", Command::LinkSelected);
-    item(ui, "⛓  Unlink Tasks", Command::UnlinkSelected);
+    item(ui, "indent-increase", "Indent", Command::Indent);
+    item(ui, "indent-decrease", "Outdent", Command::Outdent);
+    item(ui, "link", "Link Tasks", Command::LinkSelected);
+    item(ui, "unlink", "Unlink Tasks", Command::UnlinkSelected);
     ui.separator();
-    item(ui, "✔  Mark 100% Complete", Command::SetPercent(100));
-    item(ui, "📅  Add to Timeline", Command::ToggleTimeline);
-    item(ui, "⏸  Inactivate / Activate", Command::ToggleActive);
-    item(ui, "➗  Split Task", Command::SplitTask);
-    item(ui, "⟲  Rejoin Split Task", Command::RejoinTasks);
+    item(ui, "check", "Mark 100% Complete", Command::SetPercent(100));
+    item(ui, "calendar", "Add to Timeline", Command::ToggleTimeline);
+    item(ui, "pause", "Inactivate / Activate", Command::ToggleActive);
+    item(ui, "split", "Split Task", Command::SplitTask);
+    item(ui, "rotate-ccw", "Rejoin Split Task", Command::RejoinTasks);
     ui.separator();
-    item(ui, "✂  Cut", Command::Cut);
-    item(ui, "📋  Copy", Command::Copy);
-    item(ui, "📥  Paste", Command::Paste);
-    item(ui, "⬇  Fill Down (Ctrl+D)", Command::FillDown);
+    item(ui, "scissors", "Cut", Command::Cut);
+    item(ui, "copy", "Copy", Command::Copy);
+    item(ui, "clipboard-paste", "Paste", Command::Paste);
+    item(ui, "arrow-down", "Fill Down (Ctrl+D)", Command::FillDown);
     ui.separator();
-    item(ui, "🔦  Find… (Ctrl+F)", Command::Find(false));
-    item(ui, "↪  Go To… (F5)", Command::GoTo);
+    item(ui, "search", "Find… (Ctrl+F)", Command::Find(false));
+    item(ui, "arrow-right", "Go To… (F5)", Command::GoTo);
 }

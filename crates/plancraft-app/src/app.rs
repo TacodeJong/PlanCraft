@@ -396,7 +396,8 @@ fn shared_status(ui: &mut Ui, r: &crate::remote::Remote) {
         let first: Vec<&str> = names.iter().take(3).copied().collect();
         let more = names.len().saturating_sub(3);
         let shown = if more > 0 { format!("{} and {more} more", first.join(", ")) } else { first.join(", ") };
-        ui.label(RichText::new(format!("👥 {shown}")).size(12.0).color(pal.ACCENT_MID)).on_hover_text("Also in this plan");
+        ui.add(crate::icons::image("users-round", 12.0, pal.ACCENT_MID));
+        ui.label(RichText::new(shown).size(12.0).color(pal.ACCENT_MID)).on_hover_text("Also in this plan");
     }
 }
 
@@ -416,6 +417,7 @@ impl PlanCraftApp {
             settings.theme = t;
         }
         theme::install(&cc.egui_ctx, settings.theme);
+        egui_extras::install_image_loaders(&cc.egui_ctx); // rasterizes the bundled Lucide SVGs
         // Find fonts for other scripts (Chinese, Hebrew, ...) while the window opens.
         plancraft_core::print::fallback::warm_up();
         let has_doc = !lock(&ws).docs.is_empty();
@@ -1807,14 +1809,15 @@ impl PlanCraftApp {
         let mut close = None;
         for (i, d) in ws.docs.iter().enumerate() {
             let active = ws.active == Some(i);
-            let mark = if self.disk_bars.contains_key(&d.handle) || d.lock.elsewhere().is_some() { "⚠ " } else { "" };
+            let warn = self.disk_bars.contains_key(&d.handle) || d.lock.elsewhere().is_some();
             let remote = self.remotes.get(d.handle);
-            let icon = if remote.is_some() { "👥" } else { "📄" };
+            let icon = if remote.is_some() { "users-round" } else { "file-text" };
             // The nav-row treatment: selected = wash + a 2 px solid ink bar at the left edge.
-            let label = format!("{icon} {mark}{}", d.title());
+            let label = d.title().to_string();
             let font = egui::FontId::proportional(12.5);
             let text_w = child.painter().layout_no_wrap(label.clone(), font.clone(), theme::pal().TEXT).size().x;
-            let (row, mut resp) = child.allocate_exact_size(vec2(text_w + 18.0, 22.0), Sense::click());
+            let icons_w = 16.0 + if warn { 16.0 } else { 0.0 };
+            let (row, mut resp) = child.allocate_exact_size(vec2(text_w + icons_w + 18.0, 22.0), Sense::click());
             let ink = if active {
                 child.painter().rect_filled(row, 3.0, theme::pal().WASH_SELECTED);
                 let bar = Rect::from_min_size(pos2(row.left(), row.center().y - 8.0), vec2(2.0, 16.0));
@@ -1826,14 +1829,24 @@ impl PlanCraftApp {
             } else {
                 theme::pal().TEXT_WEAK
             };
-            child.painter().text(pos2(row.left() + 10.0, row.center().y), Align2::LEFT_CENTER, label, font, ink);
+            let mut x = row.left() + 10.0;
+            if warn {
+                let r = Rect::from_center_size(pos2(x + 6.0, row.center().y), vec2(12.0, 12.0));
+                crate::icons::paint(&child, r, "triangle-alert", 12.0, theme::pal().WARN);
+                x += 16.0;
+            }
+            let r = Rect::from_center_size(pos2(x + 6.0, row.center().y), vec2(12.0, 12.0));
+            crate::icons::paint(&child, r, icon, 12.0, ink);
+            x += 16.0;
+            child.painter().text(pos2(x, row.center().y), Align2::LEFT_CENTER, label, font, ink);
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, d.title()));
             if let Some(r) = remote {
                 resp = resp.on_hover_text(format!("Opened from {} as {}: {}", r.server, r.user, r.state_label()));
             }
             if resp.clicked() {
                 switch = Some(i);
             }
-            if child.small_button("✖").on_hover_text("Close").clicked() {
+            if crate::icons::button(&mut child, "x", 18.0, "Close document").clicked() {
                 close = Some((d.handle, d.dirty));
             }
             child.add_space(6.0);
@@ -1882,12 +1895,14 @@ impl PlanCraftApp {
                 }
                 ui.separator();
                 let auto = doc.project.settings.new_tasks_auto;
+                let (mode_icon, mode_text) =
+                    if auto { ("rotate-cw", "New Tasks: Auto Scheduled") } else { ("pin", "New Tasks: Manually Scheduled") };
                 let resp = ui.add(
-                    egui::Label::new(hud(
-                        if auto { "⟳ New Tasks: Auto Scheduled" } else { "📌 New Tasks: Manually Scheduled" },
-                        theme::pal().TEXT_WEAK,
-                    ))
-                    .sense(Sense::click()),
+                    egui::Button::image_and_text(
+                        crate::icons::image(mode_icon, 12.0, theme::pal().TEXT_WEAK),
+                        hud(mode_text, theme::pal().TEXT_WEAK),
+                    )
+                    .frame(false),
                 );
                 if resp.on_hover_text("Click to change how new tasks are scheduled").clicked()
                     && let Err(e) = doc.edit("New Task Mode", |p| p.settings.new_tasks_auto = !auto)
@@ -1901,15 +1916,21 @@ impl PlanCraftApp {
                 let warnings = doc.project.sched.warnings.len();
                 if warnings > 0 {
                     ui.separator();
-                    let r = ui
-                        .add(egui::Label::new(hud(&format!("⚠ {warnings} scheduling issue(s)"), theme::pal().ERROR)).sense(Sense::click()));
+                    let r = ui.add(
+                        egui::Button::image_and_text(
+                            crate::icons::image("triangle-alert", 12.0, theme::pal().ERROR),
+                            hud(&format!("{warnings} scheduling issue(s)"), theme::pal().ERROR),
+                        )
+                        .frame(false),
+                    );
                     if r.on_hover_text(doc.project.sched.warnings.join("\n")).clicked() {
                         out.push(Command::Statistics);
                     }
                 }
                 if let Some((label, ChangeSource::Agent)) = &doc.last_change {
                     ui.separator();
-                    ui.label(hud(&format!("⚡ Last AI change: {label}"), theme::pal().ACCENT_DARK));
+                    ui.add(crate::icons::image("zap", 12.0, theme::pal().ACCENT_DARK));
+                    ui.label(hud(&format!("Last AI change: {label}"), theme::pal().ACCENT_DARK));
                 }
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1941,11 +1962,12 @@ impl PlanCraftApp {
                         self.st.gantt.px_per_day = z;
                     }
                 }
-                ui.label(RichText::new("🔍").size(12.0));
+                ui.add(crate::icons::image("zoom-in", 12.0, theme::pal().TEXT_WEAK));
                 ui.separator();
                 for v in [ViewKind::Timesheet, ViewKind::ResourceSheet, ViewKind::TeamPlanner, ViewKind::TaskUsage, ViewKind::Gantt] {
                     let active = self.st.view == v;
-                    if ui.selectable_label(active, RichText::new(v.icon()).size(13.0)).on_hover_text(v.label()).clicked() {
+                    let img = crate::icons::image(v.icon(), 13.0, theme::pal().TEXT);
+                    if ui.add(egui::Button::image(img).selected(active)).on_hover_text(v.label()).clicked() {
                         out.push(Command::SetView(v));
                     }
                 }
@@ -1984,16 +2006,16 @@ impl PlanCraftApp {
                 let mut dismiss = None;
                 for (i, t) in self.st.toasts.iter().enumerate() {
                     let (icon, color) = match t.kind {
-                        ToastKind::Info => ("ℹ", theme::pal().ACCENT_MID),
-                        ToastKind::Success => ("✔", theme::pal().OK),
-                        ToastKind::Warning => ("⚠", theme::pal().WARN),
-                        ToastKind::Error => ("✖", theme::pal().ERROR),
+                        ToastKind::Info => ("info", theme::pal().ACCENT_MID),
+                        ToastKind::Success => ("check", theme::pal().OK),
+                        ToastKind::Warning => ("triangle-alert", theme::pal().WARN),
+                        ToastKind::Error => ("x", theme::pal().ERROR),
                     };
                     let resp = egui::Frame::popup(ui.style())
                         .stroke(Stroke::new(1.0, color))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new(icon).color(color).size(15.0));
+                                ui.add(crate::icons::image(icon, 15.0, color));
                                 ui.label(&t.text);
                             });
                         })
@@ -2460,7 +2482,7 @@ impl PlanCraftApp {
                     |ui| {
                         ui.set_max_width(560.0);
                         ui.horizontal_top(|ui| {
-                            ui.label(RichText::new("✖").color(theme::pal().ERROR).size(18.0));
+                            ui.add(crate::icons::image("x", 18.0, theme::pal().ERROR));
                             ui.vertical(|ui| {
                                 ui.label(RichText::new(&msg).color(theme::pal().TEXT));
                                 ui.add_space(6.0);
@@ -2645,7 +2667,7 @@ impl PlanCraftApp {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("⚠").color(theme::pal().WARN).size(15.0));
+                    ui.add(crate::icons::image("triangle-alert", 15.0, theme::pal().WARN));
                     ui.label(RichText::new(message).color(theme::pal().TEXT));
                     for (action, label, hover) in buttons {
                         let selected = *action == DiskAction::Compare && bar.compare.is_some();
@@ -2699,7 +2721,7 @@ impl PlanCraftApp {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("⚠").color(theme::pal().WARN).size(15.0));
+                    ui.add(crate::icons::image("triangle-alert", 15.0, theme::pal().WARN));
                     ui.label(RichText::new(message).color(theme::pal().TEXT));
                     if ui.button("Save As…").on_hover_text("Work on a copy of the plan under another name").clicked() {
                         clicked = Some(DiskAction::SaveAs);
@@ -2829,7 +2851,7 @@ impl PlanCraftApp {
             if let (Some(prev), Some((label, ChangeSource::Agent))) = (prev, &d.last_change)
                 && prev != d.revision
             {
-                agent_msgs.push(format!("⚡ AI agent: {label}"));
+                agent_msgs.push(format!("AI agent: {label}"));
             }
         }
         for m in agent_msgs {
@@ -3179,7 +3201,7 @@ impl PlanCraftApp {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("⚠").color(theme::pal().WARN).size(15.0));
+                    ui.add(crate::icons::image("triangle-alert", 15.0, theme::pal().WARN));
                     ui.label(RichText::new("Some of your changes were not kept:").color(theme::pal().TEXT));
                     open = ui
                         .button("Open Your Version")
@@ -5498,7 +5520,7 @@ mod ui_tests {
                 // The Calendar's month buttons stay on the first or last month.
                 if v == ViewKind::Calendar {
                     use egui_kittest::kittest::Queryable;
-                    for button in ["⏴", "⏵", "⏵", "⏴", "⏴"] {
+                    for button in ["Previous month", "Next month", "Next month", "Previous month", "Previous month"] {
                         h.get_by_label(button).click();
                         h.run_steps(1);
                     }
@@ -6103,7 +6125,7 @@ mod shared_tests {
             lock(&app.ws).active_doc().and_then(|d| app.remotes.get(d.handle)).is_some_and(|r| r.others().count() == 1)
         });
         h.run_steps(2);
-        h.get_by_label_contains("👥 ben");
+        h.get_by_label_contains("ben"); // the people segment next to the users icon
         // Ben's place shows in Ana's task table.
         let task = ben.project.tasks[2].id;
         ben.link.presence(Some(task));

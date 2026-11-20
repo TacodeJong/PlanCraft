@@ -4,9 +4,9 @@
 //!
 //! ```text
 //! ┌──────────┬───────────────────────────────────────────────────────────┐
-//! │  view    │ File ▾  Task  Resource  Project  Report  View  Format      │  tabs
+//! │  view    │ File v  Task  Resource  Project  Report  View  Format      │  tabs
 //! │ selector ├───────────────────────────────────────────────────────────┤
-//! │    ▾     │ [+ Task] [♦ Milestone] │ ⬅ ➡ │ [🔗 Link] … single toolbar  │  toolbar
+//! │    v     │ [+ Task] [Milestone] │ in/outdent │ [Link] … single toolbar │  toolbar
 //! └──────────┴───────────────────────────────────────────────────────────┘
 //! ```
 //!
@@ -72,27 +72,32 @@ pub fn title_bar(ui: &mut Ui, info: &MenuInfo, out: &mut Vec<Command>) {
             ui.painter().rect_filled(r, 3.0, theme::pal().WASH_HOVER);
         }
         let color = if enabled { theme::pal().TEXT } else { theme::pal().LINE_STRONG };
-        ui.painter().text(r.center(), Align2::CENTER_CENTER, icon, FontId::proportional(14.0), color);
+        crate::icons::paint(ui, r, icon, 14.0, color);
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, tip));
         resp.on_hover_text(tip).clicked()
     };
-    if qa(ui2, "💾", "Save (Ctrl+S)", info.has_doc) {
+    if qa(ui2, "save", "Save (Ctrl+S)", info.has_doc) {
         out.push(Command::Save);
     }
     let undo_tip = match &info.undo_label {
         Some(l) => format!("Undo {l} (Ctrl+Z)"),
         None => "Undo (Ctrl+Z)".into(),
     };
-    if qa(ui2, "⟲", &undo_tip, info.can_undo) {
+    if qa(ui2, "undo-2", &undo_tip, info.can_undo) {
         out.push(Command::Undo);
     }
-    if qa(ui2, "⟳", "Redo (Ctrl+Y)", info.can_redo) {
+    if qa(ui2, "redo-2", "Redo (Ctrl+Y)", info.can_redo) {
         out.push(Command::Redo);
     }
     let title = if info.has_doc { format!("{} - PlanCraft", info.title) } else { "PlanCraft".into() };
     ui2.painter().text(rect.center(), Align2::CENTER_CENTER, title, FontId::proportional(13.0), theme::pal().TEXT_WEAK);
     ui2.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        let (txt, color) = if info.mcp_running { ("⚡ MCP live", theme::pal().MCP_LIVE) } else { ("○ MCP off", theme::pal().MCP_OFF) };
-        let resp = ui.add(egui::Label::new(egui::RichText::new(txt).color(color).size(12.0)).sense(Sense::click()));
+        let (icon, txt, color) =
+            if info.mcp_running { ("zap", "MCP live", theme::pal().MCP_LIVE) } else { ("circle", "MCP off", theme::pal().MCP_OFF) };
+        let resp = ui.add(
+            egui::Button::image_and_text(crate::icons::image(icon, 12.0, color), egui::RichText::new(txt).color(color).size(12.0))
+                .frame(false),
+        );
         let tip = match &info.mcp_url {
             Some(u) => format!("AI agents can control this window via MCP at {u}\nClick to manage."),
             None => "Start the built-in MCP server so AI agents (e.g. Claude Code) can work with your projects.".into(),
@@ -131,13 +136,7 @@ fn button(ui: &mut Ui, icon: &str, label: Option<&str>, tip: &str, enabled: bool
         theme::pal().TEXT_WEAK
     };
     let center = pos2(rect.left() + 13.0, rect.center().y);
-    if icon == "panes" {
-        let r = egui::Rect::from_center_size(center, vec2(12.0, 9.0));
-        p.rect_stroke(r, 1.0, Stroke::new(1.2, icon_color), StrokeKind::Inside);
-        p.vline(center.x + 2.0, r.y_range(), Stroke::new(1.2, icon_color));
-    } else {
-        p.text(center, Align2::CENTER_CENTER, icon, FontId::proportional(14.0), icon_color);
-    }
+    crate::icons::paint(ui, Rect::from_center_size(center, vec2(14.0, 14.0)), icon, 14.0, icon_color);
     if let Some(l) = label {
         p.text(
             pos2(rect.left() + 26.0, rect.center().y),
@@ -147,6 +146,8 @@ fn button(ui: &mut Ui, icon: &str, label: Option<&str>, tip: &str, enabled: bool
             if enabled { theme::pal().TEXT } else { theme::pal().TEXT_WEAK },
         );
     }
+    let name = label.map_or_else(|| tip.to_string(), |l| l.to_string());
+    resp.widget_info(move || egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name));
     let resp = if tip.is_empty() { resp } else { resp.on_hover_text(tip) };
     if enabled { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp }
 }
@@ -203,7 +204,8 @@ fn view_selector(ui: &mut Ui, rect: Rect, st: &UiState, enabled: bool, push: &dy
     }
     p.vline(rect.right() - 0.5, rect.y_range(), theme::hairline());
     let color = if enabled { theme::pal().TEXT } else { theme::pal().LINE_STRONG };
-    p.text(pos2(rect.center().x, rect.top() + 18.0), Align2::CENTER_CENTER, st.view.icon(), FontId::proportional(20.0), color);
+    let icon_rect = Rect::from_center_size(pos2(rect.center().x, rect.top() + 18.0), vec2(20.0, 20.0));
+    crate::icons::paint(ui, icon_rect, st.view.icon(), 18.0, color);
     let galley = p.layout(st.view.label().to_string(), FontId::proportional(12.0), theme::pal().TEXT, rect.width() - 12.0);
     let gh = galley.size().y;
     p.galley(pos2(rect.center().x - galley.size().x / 2.0, rect.top() + 32.0), galley, theme::pal().TEXT);
@@ -220,7 +222,8 @@ fn view_selector(ui: &mut Ui, rect: Rect, st: &UiState, enabled: bool, push: &dy
                 ui.separator();
                 ui.label(egui::RichText::new(crate::lang::text("view.resource_views")).small().color(theme::pal().TEXT_WEAK));
             }
-            if ui.selectable_label(st.view == v, format!("{}  {}", v.icon(), v.label())).clicked() {
+            let img = crate::icons::image(v.icon(), 14.0, theme::pal().TEXT);
+            if ui.add(egui::Button::image_and_text(img, v.label()).selected(st.view == v)).clicked() {
                 push(Command::SetView(v));
             }
         }
@@ -363,11 +366,11 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
     };
     match st.menu_tab {
         MenuTab::Task => {
-            b(ui, "➕", Some(crate::lang::text("tb.task")), "Insert a task above the selection (Insert)", doc, Command::InsertTask);
-            b(ui, "♦", Some(crate::lang::text("tb.milestone")), "Insert a milestone", doc, Command::InsertMilestone);
+            b(ui, "plus", Some(crate::lang::text("tb.task")), "Insert a task above the selection (Insert)", doc, Command::InsertTask);
+            b(ui, "diamond", Some(crate::lang::text("tb.milestone")), "Insert a milestone", doc, Command::InsertMilestone);
             b(
                 ui,
-                "☰",
+                "rows-3",
                 Some(crate::lang::text("tb.summary")),
                 "Group the selected tasks under a new summary task",
                 doc,
@@ -375,22 +378,22 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
             );
             b(
                 ui,
-                "🔁",
+                "repeat",
                 Some(crate::lang::text("tb.recurring")),
                 "Insert a task that repeats daily, weekly, monthly or yearly",
                 doc,
                 Command::RecurringTask,
             );
-            b(ui, "🗑", None, "Delete the selected tasks (Delete)", sel, Command::DeleteSelection);
+            b(ui, "trash-2", None, "Delete the selected tasks (Delete)", sel, Command::DeleteSelection);
             sep(ui);
-            b(ui, "⬅", None, "Outdent (Alt+Shift+Left)", sel, Command::Outdent);
-            b(ui, "➡", None, "Indent (Alt+Shift+Right)", sel, Command::Indent);
-            b(ui, "⬆", None, "Move up (Alt+Shift+Up)", sel, Command::MoveUp);
-            b(ui, "⬇", None, "Move down (Alt+Shift+Down)", sel, Command::MoveDown);
+            b(ui, "indent-decrease", None, "Outdent (Alt+Shift+Left)", sel, Command::Outdent);
+            b(ui, "indent-increase", None, "Indent (Alt+Shift+Right)", sel, Command::Indent);
+            b(ui, "arrow-up", None, "Move up (Alt+Shift+Up)", sel, Command::MoveUp);
+            b(ui, "arrow-down", None, "Move down (Alt+Shift+Down)", sel, Command::MoveDown);
             sep(ui);
             b(
                 ui,
-                "🔗",
+                "link",
                 Some(crate::lang::text("tb.link")),
                 "Link the selected tasks finish-to-start (Ctrl+F2)",
                 sel,
@@ -398,7 +401,7 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
             );
             b(
                 ui,
-                "⛓",
+                "unlink",
                 Some(crate::lang::text("tb.unlink")),
                 "Remove links between the selected tasks (Ctrl+Shift+F2)",
                 sel,
@@ -406,7 +409,7 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
             );
             if button(
                 ui,
-                "➗",
+                "split",
                 Some(crate::lang::text("tb.split")),
                 "Split Task: click a bar where its work should pause; drag a part to move it, or back to rejoin",
                 doc,
@@ -424,46 +427,53 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
             }
             b(
                 ui,
-                "✔",
+                "check",
                 Some(crate::lang::text("tb.on_track")),
                 "Set progress to where the schedule says it should be at the status date (today if none is set)",
                 sel,
                 Command::MarkOnTrack,
             );
             sep(ui);
-            b(ui, "⟳", None, "Auto schedule the selected tasks", sel, Command::SetMode(ScheduleMode::Auto));
-            b(ui, "📌", None, "Manually schedule the selected tasks", sel, Command::SetMode(ScheduleMode::Manual));
-            b(ui, "⏸", None, "Inactivate / activate", sel, Command::ToggleActive);
+            b(ui, "rotate-cw", None, "Auto schedule the selected tasks", sel, Command::SetMode(ScheduleMode::Auto));
+            b(ui, "pin", None, "Manually schedule the selected tasks", sel, Command::SetMode(ScheduleMode::Manual));
+            b(ui, "pause", None, "Inactivate / activate", sel, Command::ToggleActive);
             sep(ui);
-            b(ui, "ℹ", Some(crate::lang::text("tb.information")), "Task information (Shift+F2)", sel, Command::TaskInfo);
-            b(ui, "📝", None, "Task notes", sel, Command::TaskNotes);
-            b(ui, "📅", None, "Show on the timeline", sel, Command::ToggleTimeline);
-            b(ui, "🎯", None, "Scroll the chart to the task", sel, Command::ScrollToTask);
+            b(ui, "info", Some(crate::lang::text("tb.information")), "Task information (Shift+F2)", sel, Command::TaskInfo);
+            b(ui, "pen-line", None, "Task notes", sel, Command::TaskNotes);
+            b(ui, "calendar", None, "Show on the timeline", sel, Command::ToggleTimeline);
+            b(ui, "locate", None, "Scroll the chart to the task", sel, Command::ScrollToTask);
             sep(ui);
-            b(ui, "✂", None, "Cut (Ctrl+X)", sel, Command::Cut);
-            b(ui, "📋", None, "Copy (Ctrl+C)", sel, Command::Copy);
-            b(ui, "📥", None, "Paste (Ctrl+V)", doc && !st.clipboard.is_empty(), Command::Paste);
+            b(ui, "scissors", None, "Cut (Ctrl+X)", sel, Command::Cut);
+            b(ui, "copy", None, "Copy (Ctrl+C)", sel, Command::Copy);
+            b(ui, "clipboard-paste", None, "Paste (Ctrl+V)", doc && !st.clipboard.is_empty(), Command::Paste);
         }
         MenuTab::Resource => {
-            b(ui, "👥", Some(crate::lang::text("tb.assign")), "Assign resources to the selected tasks", sel, Command::AssignResources);
-            sep(ui);
-            b(ui, "➕", Some(crate::lang::text("tb.add_resource")), "Add a resource", doc, Command::InsertResource);
             b(
                 ui,
-                "ℹ",
+                "users-round",
+                Some(crate::lang::text("tb.assign")),
+                "Assign resources to the selected tasks",
+                sel,
+                Command::AssignResources,
+            );
+            sep(ui);
+            b(ui, "plus", Some(crate::lang::text("tb.add_resource")), "Add a resource", doc, Command::InsertResource);
+            b(
+                ui,
+                "info",
                 Some(crate::lang::text("tb.information")),
                 "Resource information, time off and availability",
                 res,
                 Command::ResourceInfo,
             );
-            b(ui, "🗑", None, "Delete the selected resources", res, Command::DeleteResources);
+            b(ui, "trash-2", None, "Delete the selected resources", res, Command::DeleteResources);
             sep(ui);
-            b(ui, "⚖", Some(crate::lang::text("tb.level")), "Delay tasks to resolve resource overallocations", doc, Command::LevelAll);
-            b(ui, "↺", Some(crate::lang::text("tb.clear_level")), "Remove all leveling delays", doc, Command::ClearLeveling);
+            b(ui, "scale", Some(crate::lang::text("tb.level")), "Delay tasks to resolve resource overallocations", doc, Command::LevelAll);
+            b(ui, "rotate-ccw", Some(crate::lang::text("tb.clear_level")), "Remove all leveling delays", doc, Command::ClearLeveling);
             sep(ui);
             b(
                 ui,
-                "⏱",
+                "timer",
                 Some(crate::lang::text("tb.timesheet")),
                 "Log hours per resource and task",
                 doc,
@@ -471,7 +481,7 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
             );
             b(
                 ui,
-                "⟳",
+                "rotate-cw",
                 Some(crate::lang::text("tb.update_progress")),
                 "Set % complete from tracked time",
                 doc,
@@ -481,20 +491,27 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
         MenuTab::Project => {
             b(
                 ui,
-                "🗄",
+                "archive",
                 Some(crate::lang::text("tb.project_info")),
                 "Name, dates, calendar and scheduling options",
                 doc,
                 Command::ProjectInfo,
             );
-            b(ui, "📆", Some(crate::lang::text("tb.working_time")), "Calendars, work weeks and holidays", doc, Command::ChangeWorkingTime);
+            b(
+                ui,
+                "calendar-days",
+                Some(crate::lang::text("tb.working_time")),
+                "Calendars, work weeks and holidays",
+                doc,
+                Command::ChangeWorkingTime,
+            );
             sep(ui);
-            b(ui, "🔗", Some(crate::lang::text("tb.links")), "Depend on tasks in other project files", doc, Command::ExternalLinks);
-            b(ui, "⟳", None, "Refresh links to other projects", doc, Command::RefreshExternal);
+            b(ui, "link", Some(crate::lang::text("tb.links")), "Depend on tasks in other project files", doc, Command::ExternalLinks);
+            b(ui, "rotate-cw", None, "Refresh links to other projects", doc, Command::RefreshExternal);
             sep(ui);
             b(
                 ui,
-                "🏷",
+                "tag",
                 Some(crate::lang::text("tb.custom")),
                 "Define your own task fields: text with a pick-list, number, cost, date, duration, flag",
                 doc,
@@ -503,7 +520,7 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
             sep(ui);
             b(
                 ui,
-                "⏭",
+                "skip-forward",
                 Some(crate::lang::text("tb.update")),
                 "Update progress through a date, or reschedule work not done yet to start after it",
                 doc,
@@ -512,15 +529,16 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
             sep(ui);
             b(
                 ui,
-                "📏",
+                "ruler",
                 Some(crate::lang::text("tb.baseline")),
                 "Save the schedule as Baseline or Baseline1–10, or set an interim plan",
                 doc,
                 Command::SetBaseline,
             );
-            b(ui, "✖", None, "Clear a baseline or an interim plan", doc, Command::ClearBaseline);
+            b(ui, "x", None, "Clear a baseline or an interim plan", doc, Command::ClearBaseline);
             sep(ui);
-            if button(ui, "⚡", Some(crate::lang::text("tb.agents")), "Built-in MCP server for AI agents", true, info.mcp_running).clicked()
+            if button(ui, "zap", Some(crate::lang::text("tb.agents")), "Built-in MCP server for AI agents", true, info.mcp_running)
+                .clicked()
             {
                 push(Command::McpPanel);
             }
@@ -528,16 +546,23 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
         MenuTab::Report => {
             b(
                 ui,
-                "📊",
+                "chart-column",
                 Some(crate::lang::text("tb.statistics")),
                 "Project statistics, variance and earned value",
                 doc,
                 Command::Statistics,
             );
-            b(ui, "♦", Some(crate::lang::text("tb.milestones")), "Milestone status report", doc, Command::SetView(ViewKind::Milestones));
             b(
                 ui,
-                "📶",
+                "diamond",
+                Some(crate::lang::text("tb.milestones")),
+                "Milestone status report",
+                doc,
+                Command::SetView(ViewKind::Milestones),
+            );
+            b(
+                ui,
+                "signal",
                 Some(crate::lang::text("tb.workload")),
                 "Resource utilization and resource graph",
                 doc,
@@ -545,7 +570,7 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
             );
             b(
                 ui,
-                "📈",
+                "chart-line",
                 Some(crate::lang::text("tb.tracking")),
                 "Current schedule against the baseline",
                 doc,
@@ -553,18 +578,18 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
             );
             b(
                 ui,
-                "📚",
+                "book-open",
                 Some(crate::lang::text("tb.baselines")),
                 "Compare Baseline, Baseline1 and Baseline2 bars",
                 doc,
                 Command::SetView(ViewKind::MultipleBaselines),
             );
             sep(ui);
-            b(ui, "🖶", Some(crate::lang::text("tb.print")), "Print preview, page setup and printing (Ctrl+P)", doc, Command::Print);
-            b(ui, "📄", Some(crate::lang::text("tb.export_pdf")), "Save the current view as a PDF", doc, Command::ExportPdf);
+            b(ui, "printer", Some(crate::lang::text("tb.print")), "Print preview, page setup and printing (Ctrl+P)", doc, Command::Print);
+            b(ui, "file-text", Some(crate::lang::text("tb.export_pdf")), "Save the current view as a PDF", doc, Command::ExportPdf);
             b(
                 ui,
-                "🗐",
+                "file-output",
                 Some(crate::lang::text("tb.export_csv")),
                 "Export the task list as CSV",
                 doc,
@@ -572,7 +597,7 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
             );
             b(
                 ui,
-                "📤",
+                "file-down",
                 Some(crate::lang::text("tb.export_xml")),
                 "Save the plan as a Microsoft Project XML file",
                 doc,
@@ -580,7 +605,7 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
             );
             b(
                 ui,
-                "📅",
+                "chart-gantt",
                 Some(crate::lang::text("tb.export_gantt")),
                 "Coloured Gantt cells for the tasks this filter shows",
                 doc,
@@ -663,31 +688,32 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
             ui.add(egui::TextEdit::singleline(&mut st.search).desired_width(130.0).hint_text(crate::lang::text("tb.search")));
             b(
                 ui,
-                "🔦",
+                "replace",
                 None,
                 "Find and replace in the task table (Ctrl+F; replace: Ctrl+H, or Cmd+Option+F on a Mac)",
                 doc,
                 Command::Find(false),
             );
-            b(ui, "↪", None, "Go to a task ID or a date (F5)", doc, Command::GoTo);
+            b(ui, "arrow-right", None, "Go to a task ID or a date (F5)", doc, Command::GoTo);
             sep(ui);
-            b(ui, "⊟", None, "Collapse all summaries", doc, Command::CollapseAll);
-            b(ui, "⊞", None, "Expand all summaries", doc, Command::ExpandAll);
+            b(ui, "fold-vertical", None, "Collapse all summaries", doc, Command::CollapseAll);
+            b(ui, "unfold-vertical", None, "Expand all summaries", doc, Command::ExpandAll);
             sep(ui);
-            b(ui, "🔍", None, "Zoom in (Ctrl++)", doc, Command::ZoomIn);
-            b(ui, "🔎", None, "Zoom out (Ctrl+-)", doc, Command::ZoomOut);
-            b(ui, "⛶", Some(crate::lang::text("tb.entire")), "Fit the whole project in the chart", doc, Command::ZoomEntire);
-            b(ui, "🎯", Some(crate::lang::text("tb.selected")), "Fit the selected tasks", sel, Command::ZoomSelected);
+            b(ui, "zoom-in", None, "Zoom in (Ctrl++)", doc, Command::ZoomIn);
+            b(ui, "zoom-out", None, "Zoom out (Ctrl+-)", doc, Command::ZoomOut);
+            b(ui, "maximize", Some(crate::lang::text("tb.entire")), "Fit the whole project in the chart", doc, Command::ZoomEntire);
+            b(ui, "crosshair", Some(crate::lang::text("tb.selected")), "Fit the selected tasks", sel, Command::ZoomSelected);
             sep(ui);
-            if button(ui, "📅", Some(crate::lang::text("tb.timeline")), "Show the timeline strip", doc, st.timeline_visible).clicked() {
+            if button(ui, "calendar", Some(crate::lang::text("tb.timeline")), "Show the timeline strip", doc, st.timeline_visible).clicked()
+            {
                 st.timeline_visible = !st.timeline_visible;
             }
-            if button(ui, "panes", Some(crate::lang::text("tb.properties")), "Show the properties pane", doc, st.properties_visible)
+            if button(ui, "panel-right", Some(crate::lang::text("tb.properties")), "Show the properties pane", doc, st.properties_visible)
                 .clicked()
             {
                 st.properties_visible = !st.properties_visible;
             }
-            if button(ui, "🕘", Some(crate::lang::text("tb.history")), "Undo history", doc, info.history_open).clicked() {
+            if button(ui, "history", Some(crate::lang::text("tb.history")), "Undo history", doc, info.history_open).clicked() {
                 push(Command::History);
             }
             sep(ui);
@@ -739,20 +765,20 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
             };
             if st.view == ViewKind::NetworkDiagram {
                 let n = &mut st.network;
-                toggle(ui, "⚠", "Critical First", "Lay out the critical path on the top row", &mut n.opts.critical_first);
-                toggle(ui, "☰", "Summary Tasks", "Show summary tasks, left of their subtasks", &mut n.show_summaries);
+                toggle(ui, "triangle-alert", "Critical First", "Lay out the critical path on the top row", &mut n.opts.critical_first);
+                toggle(ui, "rows-3", "Summary Tasks", "Show summary tasks, left of their subtasks", &mut n.show_summaries);
                 sep(ui);
-                toggle(ui, "🔗", "Link Labels", "Show the link type and lag on each line", &mut n.link_labels);
+                toggle(ui, "link", "Link Labels", "Show the link type and lag on each line", &mut n.link_labels);
                 toggle(
                     ui,
-                    "▣",
+                    "gauge",
                     "Progress Marks",
                     "One diagonal through tasks in progress, an X through complete tasks",
                     &mut n.progress_marks,
                 );
-                toggle(ui, "#", "IDs Only", "Small boxes that show only the task ID", &mut n.opts.ids_only);
+                toggle(ui, "hash", "IDs Only", "Small boxes that show only the task ID", &mut n.opts.ids_only);
                 sep(ui);
-                if button(ui, "⛶", Some(crate::lang::text("tb.fit")), "Zoom to show the whole diagram", doc, false).clicked() {
+                if button(ui, "maximize", Some(crate::lang::text("tb.fit")), "Zoom to show the whole diagram", doc, false).clicked() {
                     n.fit_pending = true;
                 }
                 return;
@@ -777,19 +803,19 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
                     .on_hover_text("Which baselines to compare, one bar each")
                 });
                 sep(ui);
-                toggle(ui, "☰", "Project Summary", "Show the project summary bar", &mut g.show_project_summary);
+                toggle(ui, "rows-3", "Project Summary", "Show the project summary bar", &mut g.show_project_summary);
                 return;
             }
-            toggle(ui, "⚠", crate::lang::text("fmt.critical"), "Highlight critical tasks", &mut g.show_critical);
+            toggle(ui, "triangle-alert", crate::lang::text("fmt.critical"), "Highlight critical tasks", &mut g.show_critical);
             toggle(
                 ui,
-                "↝",
+                "route",
                 crate::lang::text("fmt.paths"),
                 "Highlight the selected task's predecessors and successors (Alt+Ctrl+L)",
                 &mut g.show_paths,
             );
-            toggle(ui, "⌛", "Slack", "Show total slack after each task", &mut g.show_slack);
-            toggle(ui, "📏", "Baseline", "Show baseline bars (the Tracking Gantt always does)", &mut g.show_baseline);
+            toggle(ui, "hourglass", "Slack", "Show total slack after each task", &mut g.show_slack);
+            toggle(ui, "ruler", "Baseline", "Show baseline bars (the Tracking Gantt always does)", &mut g.show_baseline);
             egui::ComboBox::from_id_salt("tb_baseline_slot")
                 .width(88.0)
                 .selected_text(PlanSlot::Baseline(g.baseline_slot).name())
@@ -801,10 +827,10 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
                 .response
                 .on_hover_text("Which baseline the baseline bars show");
             sep(ui);
-            toggle(ui, "▣", "Progress", "Show progress inside bars", &mut g.show_progress);
-            toggle(ui, "🔗", "Links", "Show dependency arrows", &mut g.show_links);
-            toggle(ui, "👤", "Resource Names", "Show resource names beside bars", &mut g.show_resource_names);
-            toggle(ui, "☰", "Project Summary", "Show the project summary bar", &mut g.show_project_summary);
+            toggle(ui, "gauge", "Progress", "Show progress inside bars", &mut g.show_progress);
+            toggle(ui, "link", "Links", "Show dependency arrows", &mut g.show_links);
+            toggle(ui, "user-round", "Resource Names", "Show resource names beside bars", &mut g.show_resource_names);
+            toggle(ui, "rows-3", "Project Summary", "Show the project summary bar", &mut g.show_project_summary);
         }
     }
 }

@@ -54,7 +54,7 @@ impl AssignResources {
                             continue;
                         }
                         let assigned_all = !tasks.is_empty() && tasks.iter().all(|t| p.assignments.iter().any(|a| a.task == *t && a.resource == r.id));
-                        ui.label(if assigned_all { RichText::new("✔").color(theme::pal().OK) } else { RichText::new("") });
+                        if assigned_all { ui.add(crate::icons::image("check", 13.0, theme::pal().OK)); } else { ui.label(""); }
                         ui.label(&r.name);
                         ui.label(RichText::new(r.category.label()).color(theme::pal().TEXT_WEAK));
                         let current = tasks.first().and_then(|t| p.assignments.iter().find(|a| a.task == *t && a.resource == r.id)).map(|a| format::units(a.units));
@@ -212,7 +212,10 @@ pub fn statistics(ctx: &Context, doc: &Document, open: &mut bool) {
                 ui.separator();
                 ui.label(RichText::new("Scheduling warnings").strong().color(theme::pal().ERROR));
                 for w in &s.warnings {
-                    ui.label(RichText::new(format!("⚠ {w}")).color(theme::pal().ERROR));
+                    ui.horizontal(|ui| {
+                        ui.add(crate::icons::image("triangle-alert", 13.0, theme::pal().ERROR));
+                        ui.label(RichText::new(w).color(theme::pal().ERROR));
+                    });
                 }
             }
         });
@@ -334,10 +337,10 @@ impl ExternalLinks {
                 ui.colored_label(theme::pal().WARN, "Save this project first so links can be stored relative to its location.");
             }
             ui.horizontal(|ui| {
-                if ui.button("➕ Add Project File…").clicked() {
+                if ui.add(egui::Button::image_and_text(crate::icons::image("plus", 13.0, theme::pal().TEXT), "Add Project File…")).clicked() {
                     self.pick_requested = true;
                 }
-                if ui.button("⟳ Refresh All").clicked() {
+                if ui.add(egui::Button::image_and_text(crate::icons::image("rotate-cw", 13.0, theme::pal().TEXT), "Refresh All")).clicked() {
                     self.refresh_requested = true;
                 }
             });
@@ -347,7 +350,7 @@ impl ExternalLinks {
                     ui.set_width(220.0);
                     ui.label(RichText::new("Linked projects").strong());
                     for e in &doc.project.external_projects {
-                        let resp = ui.selectable_label(self.selected == Some(e.id), format!("📁 {}", e.name));
+                        let resp = ui.add(egui::Button::image_and_text(crate::icons::image("folder", 13.0, theme::pal().TEXT), &e.name).selected(self.selected == Some(e.id)));
                         if resp.clicked() {
                             self.selected = Some(e.id);
                         }
@@ -455,12 +458,16 @@ pub fn history(ctx: &Context, doc: &mut Document, open: &mut bool) {
             let mut undo_to = None;
             egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
                 for (i, (label, src)) in items.iter().enumerate() {
-                    let tag = match src {
-                        plancraft_core::workspace::ChangeSource::Agent => RichText::new("⚡ AI").color(theme::pal().ACCENT_MID),
-                        plancraft_core::workspace::ChangeSource::User => RichText::new("👤").color(theme::pal().TEXT_WEAK),
-                    };
                     ui.horizontal(|ui| {
-                        ui.label(tag);
+                        match src {
+                            plancraft_core::workspace::ChangeSource::Agent => {
+                                ui.add(crate::icons::image("zap", 12.0, theme::pal().ACCENT_MID));
+                                ui.label(RichText::new("AI").color(theme::pal().ACCENT_MID));
+                            }
+                            plancraft_core::workspace::ChangeSource::User => {
+                                ui.add(crate::icons::image("user-round", 12.0, theme::pal().TEXT_WEAK));
+                            }
+                        }
                         if ui.link(label).on_hover_text("Undo back to before this change").clicked() {
                             undo_to = Some(i + 1);
                         }

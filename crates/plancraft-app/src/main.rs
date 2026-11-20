@@ -22,6 +22,7 @@ mod edit;
 mod fields;
 mod fonts;
 mod format;
+mod icons;
 mod lang;
 mod logo;
 #[cfg(target_os = "macos")]

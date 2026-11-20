@@ -22,11 +22,11 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
     let mut bar =
         ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(rect.min + vec2(8.0, 4.0), vec2(rect.width() - 16.0, 26.0))));
     bar.horizontal(|ui| {
-        if ui.button("⏴").clicked() {
+        if crate::icons::button(ui, "chevron-left", 22.0, "Previous month").clicked() {
             st.calendar_month = (plancraft_core::dates::shift_days(month, -1)).with_day(1).unwrap_or(month);
         }
         ui.label(egui::RichText::new(crate::format::month_year(month)).size(16.0).strong());
-        if ui.button("⏵").clicked() {
+        if crate::icons::button(ui, "chevron-right", 22.0, "Next month").clicked() {
             st.calendar_month = (plancraft_core::dates::shift_days(month, 32)).with_day(1).unwrap_or(month);
         }
         if ui.button("Today").clicked() {

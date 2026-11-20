@@ -394,7 +394,13 @@ impl OpenFromServer {
                     n => format!(" · {n} people in it"),
                 };
                 let role = if p.role == Role::Viewer { " · view only" } else { "" };
-                let r = ui.selectable_label(selected, format!("📄 {}{role}{people}", p.name));
+                let r = ui.add(
+                    egui::Button::image_and_text(
+                        crate::icons::image("file-text", 13.0, crate::theme::pal().TEXT),
+                        format!("{}{role}{people}", p.name),
+                    )
+                    .selected(selected),
+                );
                 if r.clicked() {
                     *chosen = Some(p.name.clone());
                 }

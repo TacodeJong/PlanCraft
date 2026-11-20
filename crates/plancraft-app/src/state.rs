@@ -61,24 +61,25 @@ impl ViewKind {
         crate::lang::tr(crate::lang::Lang::En, self.key())
     }
 
+    /// The view's Lucide icon (see `crate::icons`).
     pub fn icon(self) -> &'static str {
         match self {
-            ViewKind::Gantt => "📊",
-            ViewKind::TrackingGantt => "📈",
-            ViewKind::MultipleBaselines => "📚",
-            ViewKind::NetworkDiagram => "🔀",
-            ViewKind::Board => "📇",
-            ViewKind::TaskUsage => "📝",
-            ViewKind::Milestones => "♦",
-            ViewKind::Overview => "◎",
-            ViewKind::Deliveries => "✉",
-            ViewKind::Report => "📄",
-            ViewKind::ResourceSheet => "👥",
-            ViewKind::ResourceUsage => "📋",
-            ViewKind::Workload => "📶",
-            ViewKind::TeamPlanner => "👤",
-            ViewKind::Timesheet => "⏱",
-            ViewKind::Calendar => "📅",
+            ViewKind::Gantt => "chart-gantt",
+            ViewKind::TrackingGantt => "chart-line",
+            ViewKind::MultipleBaselines => "book-open",
+            ViewKind::NetworkDiagram => "workflow",
+            ViewKind::Board => "kanban",
+            ViewKind::TaskUsage => "table",
+            ViewKind::Milestones => "diamond",
+            ViewKind::Overview => "circle-dot",
+            ViewKind::Deliveries => "mail",
+            ViewKind::Report => "file-text",
+            ViewKind::ResourceSheet => "users-round",
+            ViewKind::ResourceUsage => "clipboard-list",
+            ViewKind::Workload => "signal",
+            ViewKind::TeamPlanner => "user-round",
+            ViewKind::Timesheet => "timer",
+            ViewKind::Calendar => "calendar",
         }
     }
 

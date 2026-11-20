@@ -174,13 +174,14 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
         );
         let name_color = if lane.over { theme::pal().ERROR } else { theme::pal().TEXT };
         let icon = if lane.resource.is_none() {
-            "📋"
+            "clipboard-list"
         } else if lane.over {
-            "⚠"
+            "triangle-alert"
         } else {
-            "👤"
+            "user-round"
         };
-        bp.text(pos2(name_rect.left() + 10.0, name_rect.top() + 13.0), Align2::LEFT_CENTER, icon, FontId::proportional(12.0), name_color);
+        let icon_rect = Rect::from_center_size(pos2(name_rect.left() + 16.0, name_rect.top() + 13.0), vec2(12.0, 12.0));
+        crate::icons::paint_at(&bp, icon_rect, icon, name_color);
         bp.text(
             pos2(name_rect.left() + 28.0, name_rect.top() + 13.0),
             Align2::LEFT_CENTER,
@@ -263,7 +264,13 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
         ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
         if let Some(pp) = pointer {
             let name = p.task(tid).map(|t| t.name.clone()).unwrap_or_default();
-            painter.text(pp + vec2(12.0, 0.0), Align2::LEFT_CENTER, format!("↪ {name}"), FontId::proportional(12.0), theme::pal().ACCENT);
+            crate::icons::paint_at(
+                &painter,
+                Rect::from_center_size(pp + vec2(18.0, 0.0), vec2(11.0, 11.0)),
+                "arrow-right",
+                theme::pal().ACCENT,
+            );
+            painter.text(pp + vec2(26.0, 0.0), Align2::LEFT_CENTER, name, FontId::proportional(12.0), theme::pal().ACCENT);
         }
         if resp.drag_stopped() || !ui.input(|i| i.pointer.any_down()) {
             ui.ctx().data_mut(|d| d.remove::<(TaskId, Option<ResourceId>)>(drag_id));

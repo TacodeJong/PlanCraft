@@ -42,7 +42,7 @@ pub fn period_toolbar(ui: &mut Ui, st: &mut UiState, p: &Project) -> Date {
             }
         }
         ui.separator();
-        if ui.button("⏴").on_hover_text("Earlier").clicked() {
+        if crate::icons::button(ui, "chevron-left", 22.0, "Earlier").clicked() {
             from = step(st.granularity, from, -4);
         }
         if ui.button("Project Start").clicked() {
@@ -51,7 +51,7 @@ pub fn period_toolbar(ui: &mut Ui, st: &mut UiState, p: &Project) -> Date {
         if ui.button("Today").clicked() {
             from = st.granularity.bucket_start(plancraft_core::dates::today());
         }
-        if ui.button("⏵").on_hover_text("Later").clicked() {
+        if crate::icons::button(ui, "chevron-right", 22.0, "Later").clicked() {
             from = step(st.granularity, from, 4);
         }
         ui.label(egui::RichText::new(format!("from {}", format::day(from))).color(theme::pal().TEXT_WEAK));
@@ -138,7 +138,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
                         indent: if rl.assignments.is_empty() { 14.0 } else { 0.0 },
                         icons: if over {
                             vec![(
-                                "⚠".into(),
+                                crate::widgets::grid::Glyph::Icon("triangle-alert"),
                                 theme::pal().ERROR,
                                 format!("Overallocated on {} day(s) in view", rl.overallocated_days.len()),
                             )]

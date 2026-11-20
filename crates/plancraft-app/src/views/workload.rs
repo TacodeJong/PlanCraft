@@ -91,9 +91,15 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState) {
                     ui.label(format!("{:.0}%", u * 100.0));
                 });
                 if rl.overallocated {
-                    ui.label(egui::RichText::new(format!("⚠ {} day(s)", rl.overallocated_days.len())).color(theme::pal().ERROR));
+                    ui.horizontal(|ui| {
+                        ui.add(crate::icons::image("triangle-alert", 13.0, theme::pal().ERROR));
+                        ui.label(egui::RichText::new(format!("{} day(s)", rl.overallocated_days.len())).color(theme::pal().ERROR));
+                    });
                 } else {
-                    ui.label(egui::RichText::new("✔ OK").color(theme::pal().OK));
+                    ui.horizontal(|ui| {
+                        ui.add(crate::icons::image("check", 13.0, theme::pal().OK));
+                        ui.label(egui::RichText::new("OK").color(theme::pal().OK));
+                    });
                 }
                 ui.end_row();
             }

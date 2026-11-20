@@ -57,6 +57,10 @@ impl ColumnDef {
 #[derive(Clone, Debug)]
 pub enum Glyph {
     Text(String),
+    /// A Lucide icon by name (see `crate::icons`), tinted with the glyph color.
+    Icon(&'static str),
+    /// A short vertical color swatch (the task's group color).
+    Swatch,
     Dot,
     Diamond,
     Note,
@@ -326,6 +330,12 @@ fn paint_glyph(p: &egui::Painter, center: Pos2, glyph: &Glyph, color: Color32) {
     match glyph {
         Glyph::Text(text) => {
             p.text(center, Align2::CENTER_CENTER, text, FontId::proportional(12.0), color);
+        }
+        Glyph::Icon(name) => {
+            crate::icons::paint_at(p, Rect::from_center_size(center, vec2(12.0, 12.0)), name, color);
+        }
+        Glyph::Swatch => {
+            p.rect_filled(Rect::from_center_size(center, vec2(4.0, 12.0)), 1.0, color);
         }
         Glyph::Dot => {
             p.circle_filled(center, 4.0, color);

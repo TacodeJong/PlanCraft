@@ -317,40 +317,40 @@ pub fn indicators(
     let mut v = Vec::new();
     if let Some(names) = others {
         // A warning, not a lock: they may be changing it right now.
-        v.push((Glyph::from("👥"), theme::pal().ACCENT_MID, format!("Also on this task: {names}")));
+        v.push((Glyph::Icon("users-round"), theme::pal().ACCENT_MID, format!("Also on this task: {names}")));
     }
     if t.is_complete() {
-        v.push((Glyph::from("✔"), theme::pal().OK, "This task was completed".into()));
+        v.push((Glyph::Icon("check"), theme::pal().OK, "This task was completed".into()));
     }
     if !t.sched.warnings.is_empty() {
-        v.push((Glyph::from("⚠"), theme::pal().ERROR, t.sched.warnings.join("\n")));
+        v.push((Glyph::Icon("triangle-alert"), theme::pal().ERROR, t.sched.warnings.join("\n")));
     } else if t.deadline.is_some() {
-        v.push((Glyph::from("⚑"), theme::pal().DEADLINE, format!("Deadline: {}", format::date(t.deadline))));
+        v.push((Glyph::Icon("flag"), theme::pal().DEADLINE, format!("Deadline: {}", format::date(t.deadline))));
     }
     if t.constraint.kind.needs_date() {
         v.push((
-            Glyph::from("📌"),
+            Glyph::Icon("pin"),
             theme::pal().ACCENT_MID,
             format!("{} constraint on {}", t.constraint.kind.label(), format::date(t.constraint.date)),
         ));
     }
     if overallocated(t.id) {
-        v.push((Glyph::from("👤"), theme::pal().ERROR, "A resource assigned to this task is overallocated".into()));
+        v.push((Glyph::Icon("user-round"), theme::pal().ERROR, "A resource assigned to this task is overallocated".into()));
     }
     if t.predecessors.iter().any(|d| matches!(d.predecessor, TaskRef::External { .. }))
         || t.members.iter().any(|m| matches!(m, TaskRef::External { .. }))
     {
-        v.push((Glyph::from("🔗"), theme::pal().ACCENT_MID, "Linked to a task in another project".into()));
+        v.push((Glyph::Icon("link"), theme::pal().ACCENT_MID, "Linked to a task in another project".into()));
     }
     if !t.notes.is_empty() {
         v.push((Glyph::Note, theme::pal().TEXT_WEAK, t.notes.clone()));
     }
     if !t.active {
-        v.push((Glyph::from("⏸"), theme::pal().TEXT_WEAK, "Inactive task".into()));
+        v.push((Glyph::Icon("pause"), theme::pal().TEXT_WEAK, "Inactive task".into()));
     }
     if t.recurrence.is_some() {
         let n = p.task_index(t.id).map_or(0, |i| p.descendants_range(i).len());
-        v.insert(0, (Glyph::from("🔁"), theme::pal().ACCENT_MID, format!("Recurring task with {n} occurrences")));
+        v.insert(0, (Glyph::Icon("repeat"), theme::pal().ACCENT_MID, format!("Recurring task with {n} occurrences")));
     }
     let _ = p;
     v.truncate(2);
@@ -376,12 +376,11 @@ pub fn cell(col: TaskCol, p: &Project, idx: usize, ctx: &CellCtx) -> Cell {
         }
         Mode => {
             let (g, tip) = match t.mode {
-                ScheduleMode::Auto => ("⟳", "Auto Scheduled"),
-                ScheduleMode::Manual => ("📌", "Manually Scheduled"),
+                ScheduleMode::Auto => ("rotate-cw", "Auto Scheduled"),
+                ScheduleMode::Manual => ("pin", "Manually Scheduled"),
             };
             Cell {
-                text: g.into(),
-                color: Some(theme::pal().ACCENT_MID),
+                icons: vec![(Glyph::Icon(g), theme::pal().ACCENT_MID, tip.into())],
                 tooltip: Some(tip.into()),
                 edit_text: Some(tip.into()),
                 ..Default::default()
@@ -398,7 +397,7 @@ pub fn cell(col: TaskCol, p: &Project, idx: usize, ctx: &CellCtx) -> Cell {
                 icons.push((Glyph::Diamond, theme::pal().MILESTONE, crate::lang::text("rpt.milestone").into()));
             }
             if summary && let Some(rgb) = t.bar_color {
-                icons.push((Glyph::from("▌"), theme::paint_rgb(rgb), crate::lang::text("prop.group_color").into()));
+                icons.push((Glyph::Swatch, theme::paint_rgb(rgb), crate::lang::text("prop.group_color").into()));
             }
             let mut cell = Cell {
                 text: t.name.clone(),
