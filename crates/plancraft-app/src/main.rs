@@ -28,6 +28,7 @@ mod logo;
 #[cfg(target_os = "macos")]
 mod mac_open;
 mod mcp_host;
+mod menu;
 mod menubar;
 mod open_requests;
 mod printing;

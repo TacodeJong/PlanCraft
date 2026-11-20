@@ -1,2 +1,7 @@
 [alias]
 xtask = "run --quiet --package xtask --"
+
+# Isolate this worktree from fork-main / scheduler worktrees and from Cursor's
+# shared sandbox cargo-target (which overrides relative dirs unless we force it).
+[build]
+target-dir = "target-menus"

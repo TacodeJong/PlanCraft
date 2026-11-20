@@ -79,6 +79,8 @@ pub struct PlanCraftApp {
     /// Plans of the person's own work the server could not take, opened when the shared plan
     /// they came from was closed (named in the close prompt).
     kept_dropped: Vec<String>,
+    /// Native macOS application menu (inactive stub on other platforms / if install fails).
+    native_menu: crate::menu::NativeMenu,
 }
 
 /// Why a plan's file needs the user's attention (see [`PlanCraftApp::disk_bar`]).
@@ -462,6 +464,8 @@ impl PlanCraftApp {
             inject_panic: false,
             inbox: crate::open_requests::global(),
             egui_ctx: cc.egui_ctx.clone(),
+            // Install after egui's context exists (eframe creator), replacing winit's default menu.
+            native_menu: crate::menu::NativeMenu::install(&cc.egui_ctx),
         };
         for path in &app.settings.recent {
             app.fonts.ensure(&cc.egui_ctx, &path.to_string_lossy());
@@ -1104,6 +1108,54 @@ impl PlanCraftApp {
                 }
             }
             Command::About => self.dialogs.about = true,
+            Command::Settings => {
+                // Settings surface: AI settings for now (same window macOS Settings… opens).
+                self.dialogs.ai_open = true;
+                self.dialogs.ai.reload();
+            }
+            Command::ClearRecent => {
+                self.settings.recent.clear();
+                self.settings.save();
+            }
+            Command::ToggleTimelinePane => self.st.timeline_visible = !self.st.timeline_visible,
+            Command::TogglePropertiesPane => self.st.properties_visible = !self.st.properties_visible,
+            Command::ToggleShowCritical => self.st.gantt.show_critical = !self.st.gantt.show_critical,
+            Command::ToggleShowSlack => self.st.gantt.show_slack = !self.st.gantt.show_slack,
+            Command::ToggleShowBaseline => self.st.gantt.show_baseline = !self.st.gantt.show_baseline,
+            Command::ToggleShowProgress => self.st.gantt.show_progress = !self.st.gantt.show_progress,
+            Command::ToggleShowLinks => self.st.gantt.show_links = !self.st.gantt.show_links,
+            Command::ToggleShowResourceNames => self.st.gantt.show_resource_names = !self.st.gantt.show_resource_names,
+            Command::ToggleShowProjectSummary => self.st.gantt.show_project_summary = !self.st.gantt.show_project_summary,
+            Command::SetBaselineSlot(n) => self.st.gantt.baseline_slot = n,
+            Command::ToggleMultiBaseline(n) => {
+                let bit = 1u16 << n;
+                self.st.gantt.multi_baselines ^= bit;
+            }
+            Command::ToggleNetworkCriticalFirst => {
+                self.st.network.opts.critical_first = !self.st.network.opts.critical_first;
+            }
+            Command::ToggleNetworkSummaries => self.st.network.show_summaries = !self.st.network.show_summaries,
+            Command::ToggleNetworkLinkLabels => self.st.network.link_labels = !self.st.network.link_labels,
+            Command::ToggleNetworkProgressMarks => self.st.network.progress_marks = !self.st.network.progress_marks,
+            Command::ToggleNetworkIdsOnly => self.st.network.opts.ids_only = !self.st.network.opts.ids_only,
+            Command::ActivateDocument(handle) => {
+                let mut ws = lock(&self.ws);
+                if let Some(i) = ws.index_of(handle) {
+                    ws.active = Some(i);
+                    self.st.start_page = false;
+                }
+            }
+            Command::MinimizeWindow => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+            Command::HideApp => {
+                #[cfg(target_os = "macos")]
+                {
+                    use objc2::MainThreadMarker;
+                    use objc2_app_kit::NSApplication;
+                    if let Some(mtm) = MainThreadMarker::new() {
+                        NSApplication::sharedApplication(mtm).hide(None);
+                    }
+                }
+            }
             Command::SetView(v) => {
                 self.st.view = v;
                 self.st.start_page = false;
@@ -1809,6 +1861,47 @@ impl PlanCraftApp {
             history_open: self.dialogs.history,
             fields,
             columns,
+        }
+    }
+
+    /// Snapshot for the shared menu model (no workspace lock held while AppKit updates).
+    fn menu_snapshot(&self, ws: &Workspace) -> crate::menu::MenuSnapshot {
+        let doc = ws.active_doc();
+        let g = &self.st.gantt;
+        let n = &self.st.network;
+        crate::menu::MenuSnapshot {
+            has_doc: doc.is_some(),
+            can_undo: doc.is_some_and(|d| d.can_undo()),
+            can_redo: doc.is_some_and(|d| d.can_redo()),
+            undo_label: doc.and_then(|d| d.undo_label().map(String::from)),
+            task_selected: !self.st.sel.tasks.is_empty(),
+            resource_selected: !self.st.sel.resources.is_empty(),
+            has_clipboard: !self.st.clipboard.is_empty(),
+            view: self.st.view,
+            timeline_visible: self.st.timeline_visible,
+            properties_visible: self.st.properties_visible,
+            history_open: self.dialogs.history,
+            theme: self.settings.theme,
+            lang: self.st.lang,
+            show_critical: g.show_critical,
+            show_paths: g.show_paths,
+            show_slack: g.show_slack,
+            show_baseline: g.show_baseline,
+            show_progress: g.show_progress,
+            show_links: g.show_links,
+            show_resource_names: g.show_resource_names,
+            show_project_summary: g.show_project_summary,
+            baseline_slot: g.baseline_slot,
+            multi_baselines: g.multi_baselines,
+            network_critical_first: n.opts.critical_first,
+            network_summaries: n.show_summaries,
+            network_link_labels: n.link_labels,
+            network_progress_marks: n.progress_marks,
+            network_ids_only: n.opts.ids_only,
+            recent: self.settings.recent.iter().map(|p| (p.clone(), p.exists())).collect(),
+            documents: ws.docs.iter().enumerate().map(|(i, d)| (d.handle, d.title(), ws.active == Some(i))).collect(),
+            modal: self.confirm_close.is_some() || self.confirm_overwrite.is_some(),
+            start_page: self.st.start_page,
         }
     }
 
@@ -2807,6 +2900,8 @@ impl PlanCraftApp {
         }
         self.open_requested_files(&ctx);
         let mut out: Vec<Command> = Vec::new();
+        // Native menu clicks enqueue the same commands as the in-window bar.
+        out.extend(self.native_menu.take_clicks());
 
         // Intercept window close when there are unsaved changes.
         if ctx.input(|i| i.viewport().close_requested()) {
@@ -2959,6 +3054,11 @@ impl PlanCraftApp {
         theme::set_chart_style(self.st.chart_style);
 
         let info = self.menu_info(&ws);
+        let menu_snap = self.menu_snapshot(&ws);
+        let layout = if self.native_menu.is_active() { crate::menu::LayoutKind::Mac } else { crate::menu::LayoutKind::Desktop };
+        let menu_bar = crate::menu::build_menu_bar(&menu_snap, layout);
+        self.native_menu.sync(&menu_bar);
+        let show_menu_row = !self.native_menu.is_active();
         let start_open = self.st.start_page;
 
         if start_open {
@@ -2974,6 +3074,9 @@ impl PlanCraftApp {
             };
             egui::Panel::top("title").frame(egui::Frame::new().fill(theme::pal().BG)).show(ui, |ui| {
                 menubar::title_bar(ui, &info, &mut out);
+                if show_menu_row {
+                    crate::menu::draw_menu_row(ui, &menu_bar, &mut out);
+                }
             });
             egui::CentralPanel::no_frame().show(ui, |ui| {
                 if start_page::show(ui, &sinfo, &mut out) {
@@ -2983,6 +3086,9 @@ impl PlanCraftApp {
         } else {
             egui::Panel::top("title").frame(egui::Frame::new().fill(theme::pal().BG)).show(ui, |ui| {
                 menubar::title_bar(ui, &info, &mut out);
+                if show_menu_row {
+                    crate::menu::draw_menu_row(ui, &menu_bar, &mut out);
+                }
                 menubar::command_bar(ui, &mut self.st, &info, &self.settings, &mut out);
                 self.doc_tabs(ui, &mut ws, &mut out);
                 self.disk_bar(ui, &ws);
@@ -3170,6 +3276,12 @@ impl PlanCraftApp {
         self.overwrite_dialog(&ctx);
         self.toasts(&ctx);
 
+        // Drop menu/shortcut actions that raced a modal (ribbon pushes after the snapshot).
+        {
+            let ws = lock(&self.ws);
+            let gate = self.menu_snapshot(&ws);
+            out.retain(|c| crate::menu::command_enabled(c, &gate) || matches!(c, Command::Quit));
+        }
         for c in out {
             self.exec(&ctx, c);
         }
@@ -3324,6 +3436,14 @@ fn injected_panic() {
 impl eframe::App for PlanCraftApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         theme::pal().BG.to_normalized_gamma_f32()
+    }
+
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        let text_editing = ctx.egui_wants_keyboard_input();
+        self.native_menu.poll_into_raw_input(raw_input, text_editing);
+        if self.native_menu.take_paste_request() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+        }
     }
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {

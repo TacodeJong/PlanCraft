@@ -38,9 +38,11 @@ resvg = { version = "0.45", default-features = false }
 # Files opened from Finder arrive as an "open documents" event (`src/mac_open.rs`). Pure Rust
 # bindings to Apple's frameworks, the same versions eframe already uses.
 [target.'cfg(target_os = "macos")'.dependencies]
+# Native application menu (AppKit). Default features off so GTK is not pulled into the macOS build.
+muda = { version = "0.21.2", default-features = false }
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "objc2-core-services", "NSAppleEventDescriptor", "NSAppleEventManager", "NSNotification", "NSString", "NSURL"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
