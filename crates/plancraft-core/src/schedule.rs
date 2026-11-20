@@ -1265,10 +1265,8 @@ fn successor_is_pinned(t: &Task) -> bool {
     if t.bounds.finish_latest_fixed && t.bounds.finish_latest.is_some() {
         return true;
     }
-    matches!(
-        t.constraint.kind,
-        ConstraintKind::Mso | ConstraintKind::Mfo | ConstraintKind::Snlt | ConstraintKind::Fnlt
-    ) && t.constraint.date.is_some()
+    matches!(t.constraint.kind, ConstraintKind::Mso | ConstraintKind::Mfo | ConstraintKind::Snlt | ConstraintKind::Fnlt)
+        && t.constraint.date.is_some()
 }
 
 fn calculate(p: &mut Project) -> ScheduleReport {

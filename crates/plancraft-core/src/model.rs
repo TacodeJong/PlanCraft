@@ -832,16 +832,6 @@ impl Task {
         self.sched.is_summary
     }
 
-    /// How the start side is restricted (bounds only — same pair Project Planner feeds `DateMode`).
-    pub fn start_mode(&self) -> DateMode {
-        DateMode::of(self.bounds.start_earliest, self.bounds.start_latest)
-    }
-
-    /// How the finish side is restricted (bounds only).
-    pub fn finish_mode(&self) -> DateMode {
-        DateMode::of(self.bounds.finish_earliest, self.bounds.finish_latest)
-    }
-
     pub fn is_complete(&self) -> bool {
         self.percent_complete >= 100
     }

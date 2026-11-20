@@ -162,11 +162,7 @@ fn share_of(p: &Project, i: usize, parent: Option<usize>, is_summary: bool) -> O
     {
         return Some(Share::Percent(pct.min(1000.0)));
     }
-    if p.settings.rules.stretch
-        && t.fills_group
-        && t.start_mode() == DateMode::Unrestricted
-        && t.finish_mode() == DateMode::Unrestricted
-    {
+    if p.settings.rules.stretch && t.fills_group && t.start_mode() == DateMode::Unrestricted && t.finish_mode() == DateMode::Unrestricted {
         return Some(Share::Fill);
     }
     None

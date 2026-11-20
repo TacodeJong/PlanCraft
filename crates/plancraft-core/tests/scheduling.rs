@@ -1386,12 +1386,7 @@ fn cyclus_beleidsbrief_predecessor_respects_fnlt_successor() {
     assert!(send.bounds.finish_latest_fixed, "send carries a fixed FNLT");
     let df = draft.sched.finish.expect("draft finish");
     let ss = send.sched.start.expect("send start");
-    assert!(
-        df <= ss,
-        "1.7.1 finishes {df} after 1.7.2 starts {ss} (draft dur {}, send dur {})",
-        draft.sched.duration,
-        send.sched.duration
-    );
+    assert!(df <= ss, "1.7.1 finishes {df} after 1.7.2 starts {ss} (draft dur {}, send dur {})", draft.sched.duration, send.sched.duration);
     assert_eq!(send.sched.duration, send.duration.max(0), "pinned send keeps its own duration, not a stretch");
     assert_eq!(send.finish_mode(), DateMode::NoLater);
     assert_eq!(draft.start_mode(), DateMode::Unrestricted);
