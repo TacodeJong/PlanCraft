@@ -262,6 +262,7 @@ pub fn task_field_props() -> Map<String, Value> {
         "name": string("Task name."),
         "duration": duration("Planned duration: working time like \"3d\", or elapsed time like \"33ed\" (calendar time: nights, weekends and holidays count). On a summary task (working time only) it makes the summary manually scheduled (top-down planning), keeping its start."),
         "estimated": boolean("Mark the duration as a tentative estimate (shown with '?')."),
+        "leveling_delay": duration("Resource-leveling delay in working time only (e.g. \"0d\", \"4h\", \"2w\" or a number of days). Elapsed values like \"3ed\" and estimated '?' are not allowed."),
         "mode": string_enum("Scheduling mode: 'auto' (engine computes dates) or 'manual' (uses start/finish as entered; switching keeps the current dates). A manual summary keeps its own dates: its subtasks don't move it, links into it stop at it, and its auto subtasks start no earlier than its start (subtasks_start/subtasks_finish report their span).", &["auto", "manual"]),
         "active": boolean("Inactive tasks stay in the plan but do not affect the schedule or workload."),
         "task_type": string_enum("Which of units/duration/work stays fixed when another changes.", &["fixed_units", "fixed_duration", "fixed_work"]),

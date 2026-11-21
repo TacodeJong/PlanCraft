@@ -2,8 +2,6 @@
 //!
 //! Dates stay `dd-mm-yyyy` in both languages. A missing key comes back as the key itself.
 
-use std::sync::atomic::{AtomicU8, Ordering};
-
 use plancraft_core::model::{ChartStyle, ResourceCategory, RowMark, TaskStatus};
 use serde::{Deserialize, Serialize};
 
@@ -27,14 +25,50 @@ impl Lang {
     }
 }
 
-static CURRENT: AtomicU8 = AtomicU8::new(0);
+#[cfg(not(test))]
+mod current_lang {
+    use std::sync::atomic::{AtomicU8, Ordering};
+
+    use super::Lang;
+
+    static CURRENT: AtomicU8 = AtomicU8::new(0);
+
+    pub fn set_current(lang: Lang) {
+        CURRENT.store(if lang == Lang::En { 1 } else { 0 }, Ordering::Relaxed);
+    }
+
+    pub fn current() -> Lang {
+        if CURRENT.load(Ordering::Relaxed) == 1 { Lang::En } else { Lang::Nl }
+    }
+}
+
+/// Tests run on a parallel harness: keep language per thread so one NL case cannot
+/// flip English UI assertions (or the reverse) mid-suite. Production stays process-wide.
+#[cfg(test)]
+mod current_lang {
+    use std::cell::Cell;
+
+    use super::Lang;
+
+    thread_local! {
+        static CURRENT: Cell<u8> = const { Cell::new(0) };
+    }
+
+    pub fn set_current(lang: Lang) {
+        CURRENT.with(|c| c.set(if lang == Lang::En { 1 } else { 0 }));
+    }
+
+    pub fn current() -> Lang {
+        if CURRENT.with(|c| c.get()) == 1 { Lang::En } else { Lang::Nl }
+    }
+}
 
 pub fn set_current(lang: Lang) {
-    CURRENT.store(if lang == Lang::En { 1 } else { 0 }, Ordering::Relaxed);
+    current_lang::set_current(lang);
 }
 
 pub fn current() -> Lang {
-    if CURRENT.load(Ordering::Relaxed) == 1 { Lang::En } else { Lang::Nl }
+    current_lang::current()
 }
 
 /// The label for `key` in the language currently on screen.
@@ -106,10 +140,18 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         "view.team" => ("Team Planner", "Teamplanner"),
         "view.timesheet" => ("Timesheet", "Urenstaat"),
         "view.calendar" => ("Calendar", "Kalender"),
+        "view.change" => ("Change view", "Weergave wijzigen"),
+        "view.views" => ("Views", "Weergaven"),
+        "view.group.planning" => ("Planning", "Planning"),
+        "view.group.analysis" => ("Analysis & tracking", "Analyse & voortgang"),
+        "view.group.reporting" => ("Reporting", "Rapportage"),
+        "view.group.resources" => ("Resources & work", "Resources & werk"),
         "view.task_views" => ("Task views", "Taakweergaven"),
         "view.resource_views" => ("Resource views", "Resourceweergaven"),
         "filter.all" => ("All Tasks", "Alle taken"),
         "filter.critical" => ("Critical", "Kritiek"),
+        "filter.with_leveling_delay" => ("With delay", "Met vertraging"),
+        "filter.without_leveling_delay" => ("Without delay", "Zonder vertraging"),
         "filter.incomplete" => ("Incomplete Tasks", "Onvoltooide taken"),
         "filter.completed" => ("Completed Tasks", "Voltooide taken"),
         "filter.milestones" => ("Milestones", "Mijlpalen"),
@@ -139,6 +181,7 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         "col.wbs" => ("WBS", "WBS"),
         "col.name" => ("Task Name", "Taaknaam"),
         "col.duration" => ("Duration", "Duur"),
+        "col.leveling_delay" => ("Leveling delay", "Herverdelingsvertraging"),
         "col.start" => ("Start", "Begin"),
         "col.finish" => ("Finish", "Einde"),
         "col.predecessors" => ("Predecessors", "Voorgangers"),
@@ -191,8 +234,33 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         "tb.recurring" => ("Recurring", "Terugkerend"),
         "tb.link" => ("Link", "Koppelen"),
         "tb.unlink" => ("Unlink", "Ontkoppelen"),
+        "tb.more" => ("More", "Meer"),
+        "tb.more_hint" => ("More actions that do not fit this width", "Meer acties die niet op deze breedte passen"),
         "tb.split" => ("Split", "Splitsen"),
         "tb.on_track" => ("On Track", "Op schema"),
+        "tb.delete" => ("Delete", "Verwijderen"),
+        "tb.outdent" => ("Outdent", "Uitspringen"),
+        "tb.indent" => ("Indent", "Inspringen"),
+        "tb.move_up" => ("Move Up", "Omhoog"),
+        "tb.move_down" => ("Move Down", "Omlaag"),
+        "tb.auto_schedule" => ("Auto Schedule", "Automatisch plannen"),
+        "tb.manual_schedule" => ("Manually Schedule", "Handmatig plannen"),
+        "tb.toggle_active" => ("Inactivate", "Deactiveren"),
+        "tb.notes" => ("Notes", "Notities"),
+        "tb.show_on_timeline" => ("Show on Timeline", "Op tijdlijn tonen"),
+        "tb.scroll_to" => ("Scroll to Task", "Naar taak scrollen"),
+        "tb.cut" => ("Cut", "Knippen"),
+        "tb.copy" => ("Copy", "Kopiëren"),
+        "tb.paste" => ("Paste", "Plakken"),
+        "tb.find" => ("Find", "Zoeken"),
+        "tb.goto" => ("Go To", "Ga naar"),
+        "tb.collapse_all" => ("Collapse All", "Alles inklappen"),
+        "tb.expand_all" => ("Expand All", "Alles uitklappen"),
+        "tb.zoom_in" => ("Zoom In", "Inzoomen"),
+        "tb.zoom_out" => ("Zoom Out", "Uitzoomen"),
+        "tb.refresh_links" => ("Refresh Links", "Koppelingen vernieuwen"),
+        "tb.clear_baseline" => ("Clear Baseline", "Basislijn wissen"),
+        "tb.timescale" => ("Timescale", "Tijdschaal"),
         "tb.information" => ("Information", "Gegevens"),
         "tb.assign" => ("Assign Resources", "Resources toewijzen"),
         "tb.add_resource" => ("Add Resource", "Resource toevoegen"),
@@ -259,8 +327,18 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         "bar.all_categories" => ("All categories", "Alle categorieën"),
         "bar.of" => ("of", "van"),
         "prop.duration" => ("Duration", "Duur"),
+        "prop.duration_mode" => ("Duration mode", "Duurmodus"),
+        "prop.duration_fixed" => ("Fixed", "Vast"),
+        "prop.duration_auto" => ("Auto", "Auto"),
+        "prop.duration_auto_hint" => ("Calculated from the available window", "Berekend uit het beschikbare venster"),
+        "prop.duration_auto_blocked" => ("Auto duration is not available for this task", "Autoduur is niet beschikbaar voor deze taak"),
+        "prop.duration_auto_fallback" => {
+            ("No calculable window; showing the stored duration", "Geen berekenbaar venster; opgeslagen duur getoond")
+        }
         "prop.start" => ("Start", "Begin"),
         "prop.finish" => ("Finish", "Einde"),
+        "prop.group_edge_dynamic" => ("From subtasks", "Uit subtaken"),
+        "prop.group_edge_fixed" => ("Fixed date", "Vaste datum"),
         "prop.start_earliest" => ("Start no earlier than", "Niet eerder beginnen dan"),
         "prop.start_latest" => ("Start no later than", "Niet later beginnen dan"),
         "prop.finish_earliest" => ("Finish no earlier than", "Niet eerder eindigen dan"),
@@ -272,6 +350,7 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         }
         "ts.quarter" => ("Quarter", "Kwartaal"),
         "ts.month" => ("Month", "Maand"),
+        "ts.week" => ("Week", "Week"),
         "ts.day" => ("Day", "Dag"),
         "ts.no_axis" => ("This view has no time axis.", "Deze weergave heeft geen tijdas."),
         "dm.unrestricted" => ("Unrestricted", "Onbeperkt"),
@@ -285,7 +364,32 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         "prop.predecessors" => ("Predecessors", "Voorgangers"),
         "prop.resources" => ("Resources", "Resources"),
         "prop.status" => ("Status", "Status"),
+        "prop.placement" => ("Placement", "Plaatsing"),
+        "prop.placement_asap" => ("ASAP - As soon as possible", "ASAP - Zo vroeg mogelijk"),
+        "prop.placement_alap" => ("ALAP - As late as possible", "ALAP - Zo laat mogelijk"),
+        "prop.placement_hint_manual" => (
+            "Manual tasks keep typed dates; placement changes are disabled here.",
+            "Handmatige taken behouden getypte datums; plaatsingswijzigingen zijn hier uitgeschakeld.",
+        ),
         "prop.percent" => ("Percent complete", "Percentage voltooid"),
+        "prop.scheduled_result" => ("Scheduled result", "Gepland resultaat"),
+        "prop.start_limit" => ("Start limit", "Begingrens"),
+        "prop.finish_limit" => ("Finish limit", "Eindgrens"),
+        "prop.limit_from" => ("From", "Van"),
+        "prop.limit_to" => ("To", "Tot"),
+        "prop.leveling_delay" => ("Leveling delay", "Herverdelingsvertraging"),
+        "prop.leveling_delay_hint" => ("Added by resource leveling", "Toegevoegd door resource-herverdeling"),
+        "prop.leveling_delay_reset" => ("Reset to 0", "Zet op 0"),
+        "prop.leveling_delay_invalid" => {
+            ("Enter a working duration such as 0d, 3d or 4h.", "Voer een werktijd-duur in, zoals 0d, 3d of 4h.")
+        }
+        "prop.leveling_delay_working_only" => (
+            "Leveling delay is working time; elapsed values like 3ed are not allowed.",
+            "Herverdelingsvertraging is werktijd; verstreken waarden zoals 3ed zijn niet toegestaan.",
+        ),
+        "prop.leveling_delay_no_estimate" => {
+            ("Leveling delay does not accept tentative ? durations.", "Herverdelingsvertraging accepteert geen voorlopige ?-duur.")
+        }
         "prop.mark" => ("Row mark", "Markering"),
         "prop.notes" => ("Notes", "Notities"),
         "prop.group_resources" => {
@@ -327,7 +431,7 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         "rpt.status" => ("Status", "Status"),
         "status_bar.filter" => ("Filter", "Filter"),
         "filter.show_selection" => ("Show selection", "Toon selectie"),
-        "filter.clear_activity" => ("Clear activity", "Activiteit wissen"),
+        "filter.clear_activity" => ("Clear filter", "Filter wissen"),
         "filter.subtree" => ("Task and subtasks", "Taak en subtaken"),
         "filter.path" => ("Dependency path", "Afhankelijkheidspad"),
         "filter.status_all" => ("All statuses", "Alle statussen"),
@@ -406,8 +510,8 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         "prop.custom_fields" => ("Custom Fields", "Aangepaste velden"),
         "warn.title" => ("Scheduling warnings", "Planningswaarschuwingen"),
         "warn.pinned_hint" => (
-            "The pinned date wins from the links: check predecessors with negative slack.",
-            "De vaste datum gaat vóór de koppelingen: controleer voorgangers met negatieve speling.",
+            "This date rule conflicts with the schedule; check links, calendars, and leveling delays.",
+            "Deze datumregel botst met de planning; controleer koppelingen, kalenders en herverdelingsvertraging.",
         ),
         "ti.prev" => ("Previous task", "Vorige taak"),
         "ti.next" => ("Next task", "Volgende taak"),
@@ -442,6 +546,15 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         "ov.today" => ("Today", "Vandaag"),
         "ov.upcoming" => ("Upcoming milestones", "Komende mijlpalen"),
         "ov.none" => ("None", "Geen"),
+        "ov.late" => ("Late", "Vertraagd"),
+        "ov.open_gantt" => ("Open Gantt", "Gantt openen"),
+        "ov.status_as_of" => ("Status as of", "Status per"),
+        "ov.calendar_today" => ("Calendar today", "Kalender vandaag"),
+        "ov.days" => ("Days", "Dagen"),
+        "ov.agenda" => ("Agenda", "Agenda"),
+        "ov.empty" => ("No agenda items around the status date.", "Geen agenda-items rond de statusdatum."),
+        "ov.filtered_empty" => ("No agenda items match the resource filter.", "Geen agenda-items voor dit resourcefilter."),
+        "ov.day_empty" => ("Nothing starts or finishes on this day.", "Niets start of eindigt op deze dag."),
         "startup.last" => ("Last saved project", "Laatst opgeslagen project"),
         "startup.blank" => ("Blank document", "Leeg document"),
         "startup.page" => ("Start page", "Startpagina"),
@@ -730,6 +843,12 @@ mod tests {
             "view.gantt",
             "view.overview",
             "view.deliveries",
+            "view.change",
+            "view.views",
+            "view.group.planning",
+            "view.group.analysis",
+            "view.group.reporting",
+            "view.group.resources",
             "status.not_started",
             "status.started",
             "status.busy",
@@ -737,6 +856,9 @@ mod tests {
             "filter.all",
             "col.name",
             "prop.duration",
+            "prop.duration_mode",
+            "prop.duration_fixed",
+            "prop.duration_auto",
             "fmt.critical",
             "rpt.status",
             "menu.export_gantt",

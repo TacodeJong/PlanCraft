@@ -104,6 +104,38 @@ impl ViewKind {
     ];
 }
 
+/// One section in the Change-view picker and the View ▸ Views submenu.
+/// Toolbar headers and native separators both come from this list so the two
+/// surfaces stay in lockstep; [`ViewKind::ALL`] stays the enum scan order used
+/// by other lookups and is not reordered for the menu.
+#[derive(Clone, Copy, Debug)]
+pub struct ViewMenuGroup {
+    pub caption_key: &'static str,
+    pub views: &'static [ViewKind],
+}
+
+/// Reviewed Change-view groups: Overview first, everyday before advanced, all 16 once.
+pub const VIEW_MENU_GROUPS: &[ViewMenuGroup] = &[
+    ViewMenuGroup {
+        caption_key: "view.group.planning",
+        views: &[ViewKind::Overview, ViewKind::Gantt, ViewKind::Board, ViewKind::Calendar],
+    },
+    ViewMenuGroup {
+        caption_key: "view.group.analysis",
+        views: &[ViewKind::TrackingGantt, ViewKind::NetworkDiagram, ViewKind::TaskUsage, ViewKind::MultipleBaselines],
+    },
+    ViewMenuGroup { caption_key: "view.group.reporting", views: &[ViewKind::Milestones, ViewKind::Deliveries, ViewKind::Report] },
+    ViewMenuGroup {
+        caption_key: "view.group.resources",
+        views: &[ViewKind::ResourceSheet, ViewKind::TeamPlanner, ViewKind::ResourceUsage, ViewKind::Workload, ViewKind::Timesheet],
+    },
+];
+
+/// Flattened Change-view order shared by the toolbar picker and View ▸ Views.
+pub fn view_menu_views() -> impl Iterator<Item = ViewKind> {
+    VIEW_MENU_GROUPS.iter().flat_map(|g| g.views.iter().copied())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuTab {
     Task,
@@ -141,6 +173,8 @@ pub enum TaskFilter {
     #[default]
     All,
     Critical,
+    WithLevelingDelay,
+    WithoutLevelingDelay,
     Incomplete,
     Completed,
     Milestones,
@@ -178,9 +212,11 @@ impl PageGroup {
 }
 
 impl TaskFilter {
-    pub const ALL: [TaskFilter; 8] = [
+    pub const ALL: [TaskFilter; 10] = [
         TaskFilter::All,
         TaskFilter::Critical,
+        TaskFilter::WithLevelingDelay,
+        TaskFilter::WithoutLevelingDelay,
         TaskFilter::Incomplete,
         TaskFilter::Completed,
         TaskFilter::Late,
@@ -192,6 +228,8 @@ impl TaskFilter {
         crate::lang::text(match self {
             TaskFilter::All => "filter.all",
             TaskFilter::Critical => "filter.critical",
+            TaskFilter::WithLevelingDelay => "filter.with_leveling_delay",
+            TaskFilter::WithoutLevelingDelay => "filter.without_leveling_delay",
             TaskFilter::Incomplete => "filter.incomplete",
             TaskFilter::Completed => "filter.completed",
             TaskFilter::Milestones => "filter.milestones",
@@ -660,25 +698,27 @@ impl Default for UiState {
     }
 }
 
-/// The Q / M / D timescale presets in the View toolbar. Presets, not a replacement:
+/// The Q / M / W / D timescale presets in the View toolbar. Presets, not a replacement:
 /// free zoom keeps working, and the active chip follows the tier actually shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Timescale {
     Quarter,
     Month,
+    Week,
     #[default]
     Day,
 }
 
 impl Timescale {
-    pub const ALL: [Timescale; 3] = [Timescale::Quarter, Timescale::Month, Timescale::Day];
+    pub const ALL: [Timescale; 4] = [Timescale::Quarter, Timescale::Month, Timescale::Week, Timescale::Day];
 
-    /// The chip letter, as the user asked for it: Q / M / D.
+    /// The chip letter, as the user asked for it: Q / M / W / D.
     pub fn letter(self) -> &'static str {
         match self {
             Timescale::Quarter => "Q",
             Timescale::Month => "M",
+            Timescale::Week => "W",
             Timescale::Day => "D",
         }
     }
@@ -687,26 +727,30 @@ impl Timescale {
         match self {
             Timescale::Quarter => "ts.quarter",
             Timescale::Month => "ts.month",
+            Timescale::Week => "ts.week",
             Timescale::Day => "ts.day",
         }
     }
 
-    /// Chart zoom showing this tier: day columns, month headers, or quarter/month tiers.
+    /// Chart zoom whose bottom tier matches this preset's usage columns.
     pub fn px_per_day(self) -> f32 {
         match self {
-            Timescale::Quarter => 2.5,
-            Timescale::Month => 5.0,
+            Timescale::Quarter => 1.0,
+            Timescale::Month => 2.5,
+            Timescale::Week => 5.0,
             Timescale::Day => 24.0,
         }
     }
 
-    /// The preset the chart zoom currently falls in (None when zoomed out to years or in to hours).
+    /// The preset the chart zoom currently falls in (None when zoomed in to hours).
+    /// Mapped by the bottom (column) unit so each preset uniquely round-trips.
     pub fn of_px(per_day: f32) -> Option<Timescale> {
         use plancraft_core::timescale::Unit;
         match plancraft_core::timescale::tiers(per_day) {
+            (Unit::Year, Unit::Quarter) => Some(Timescale::Quarter),
+            (Unit::Quarter, Unit::Month) => Some(Timescale::Month),
+            (Unit::Month, Unit::Week) => Some(Timescale::Week),
             (Unit::Week, Unit::Day) => Some(Timescale::Day),
-            (Unit::Month, Unit::Week) => Some(Timescale::Month),
-            (Unit::Quarter, Unit::Month) => Some(Timescale::Quarter),
             _ => None,
         }
     }
@@ -716,15 +760,16 @@ impl Timescale {
         match self {
             Timescale::Quarter => Granularity::Quarter,
             Timescale::Month => Granularity::Month,
+            Timescale::Week => Granularity::Week,
             Timescale::Day => Granularity::Day,
         }
     }
 
-    /// The preset a usage-view bucket size corresponds to (weeks sit between presets).
+    /// The preset a usage-view bucket size corresponds to.
     pub fn of_granularity(g: Granularity) -> Option<Timescale> {
         match g {
             Granularity::Day => Some(Timescale::Day),
-            Granularity::Week => None,
+            Granularity::Week => Some(Timescale::Week),
             Granularity::Month => Some(Timescale::Month),
             Granularity::Quarter => Some(Timescale::Quarter),
         }
@@ -814,5 +859,45 @@ impl UiState {
 
     pub fn toast(&mut self, kind: ToastKind, text: impl Into<String>) {
         self.toasts.push(Toast { text: text.into(), kind, at: Instant::now() });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn view_menu_groups_cover_every_view_exactly_once_in_reviewed_order() {
+        let expected = [
+            ViewKind::Overview,
+            ViewKind::Gantt,
+            ViewKind::Board,
+            ViewKind::Calendar,
+            ViewKind::TrackingGantt,
+            ViewKind::NetworkDiagram,
+            ViewKind::TaskUsage,
+            ViewKind::MultipleBaselines,
+            ViewKind::Milestones,
+            ViewKind::Deliveries,
+            ViewKind::Report,
+            ViewKind::ResourceSheet,
+            ViewKind::TeamPlanner,
+            ViewKind::ResourceUsage,
+            ViewKind::Workload,
+            ViewKind::Timesheet,
+        ];
+        let ordered: Vec<_> = view_menu_views().collect();
+        assert_eq!(ordered.as_slice(), &expected[..], "toolbar and View > Views share this order");
+        assert_eq!(ordered.len(), ViewKind::ALL.len());
+        assert_eq!(VIEW_MENU_GROUPS.len(), 4);
+        assert_eq!(ordered[0], ViewKind::Overview, "Overview leads Choose/Change view");
+        assert_eq!(ordered[1], ViewKind::Gantt);
+        for v in ViewKind::ALL {
+            assert_eq!(ordered.iter().filter(|&&x| x == v).count(), 1, "{v:?} must appear once");
+        }
+        // Enum scan order used by other lookups stays untouched.
+        assert_eq!(ViewKind::ALL[0], ViewKind::Gantt);
+        assert_eq!(ViewKind::ALL[1], ViewKind::TrackingGantt);
+        assert_ne!(ViewKind::ALL.as_slice(), ordered.as_slice());
     }
 }

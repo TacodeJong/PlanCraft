@@ -489,6 +489,12 @@ impl ThemeChoice {
 
 pub const ROW_HEIGHT: f32 = 22.0;
 pub const HEADER_HEIGHT: f32 = 40.0;
+pub const DIALOG_MARGIN: i8 = 16;
+pub const CONTROL_RADIUS: u8 = 3;
+pub const POPUP_SCREEN_MARGIN: f32 = 16.0;
+pub const TITLE_BAND_LABEL_SIZE: f32 = 14.0;
+pub const TITLE_BAND_STATUS_SIZE: f32 = 12.0;
+pub const VIEW_SELECTOR_LABEL_SIZE: f32 = 12.0;
 
 /// The `.hud-label`: 11 px Geist Mono, upper case, widely spaced.
 pub const HUD_SIZE: f32 = 11.0;
@@ -496,9 +502,102 @@ pub const HUD_SPACING: f32 = HUD_SIZE * 0.15;
 /// Section labels and mono buttons are tracked a little tighter (0.12 em).
 pub const LABEL_SPACING: f32 = HUD_SIZE * 0.12;
 
+const PRIMARY_HOVER_ALPHA: f32 = 0.88;
+const PRIMARY_PRESS_ALPHA: f32 = 0.80;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControlRole {
+    /// egui's built-in buttons/combos/checks that use `Visuals::widgets`.
+    Native,
+    /// Toolbar/tab ghost controls with wash-on-interact feedback.
+    Ghost,
+    /// One-shot primary action buttons (inverted block role).
+    Primary,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ControlState {
+    pub enabled: bool,
+    pub selected: bool,
+    pub hovered: bool,
+    pub pressed: bool,
+    pub open: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ControlChrome {
+    pub fill: Option<Color32>,
+    pub stroke: Option<Color32>,
+}
+
 /// A 1 px hairline in the current theme's 15 % line color.
 pub fn hairline() -> Stroke {
     Stroke::new(1.0, pal().LINE)
+}
+
+/// `overlay` alpha-composited over `surface`, returned as an opaque color.
+pub fn composite_over(overlay: Color32, surface: Color32) -> Color32 {
+    // Color32 already stores premultiplied sRGBA; use its matching source-over operation.
+    surface.blend(overlay)
+}
+
+fn with_alpha(c: Color32, alpha: f32) -> Color32 {
+    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), (alpha.clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
+fn primary_fill_with_palette(p: &Palette, surface: Color32, alpha: f32) -> Color32 {
+    composite_over(with_alpha(p.INVERT_BG, alpha), surface)
+}
+
+/// Shared control chrome resolver used by both native `Visuals::widgets` and custom toolbar paint.
+pub fn control_chrome_with_palette(p: &Palette, surface: Color32, role: ControlRole, state: ControlState) -> ControlChrome {
+    let interactive = state.pressed || state.open || state.hovered;
+    if !state.enabled {
+        return match role {
+            ControlRole::Native => ControlChrome { fill: Some(p.CONTROLS), stroke: Some(p.LINE) },
+            ControlRole::Ghost | ControlRole::Primary => ControlChrome { fill: None, stroke: None },
+        };
+    }
+    match role {
+        ControlRole::Native => {
+            if interactive {
+                ControlChrome { fill: Some(p.WASH_HOVER), stroke: Some(p.LINE_STRONG) }
+            } else if state.selected {
+                ControlChrome { fill: Some(p.WASH_SELECTED), stroke: Some(p.LINE_STRONG) }
+            } else {
+                ControlChrome { fill: Some(p.CONTROLS), stroke: Some(p.LINE) }
+            }
+        }
+        ControlRole::Ghost => {
+            if interactive {
+                let fill = if state.selected {
+                    // Keep selected markers while still adding a visible hover/press delta.
+                    let selected = composite_over(p.WASH_SELECTED, surface);
+                    composite_over(p.WASH_HOVER, selected)
+                } else {
+                    p.WASH_HOVER
+                };
+                ControlChrome { fill: Some(fill), stroke: Some(p.LINE_STRONG) }
+            } else if state.selected {
+                ControlChrome { fill: Some(p.WASH_SELECTED), stroke: Some(p.LINE_STRONG) }
+            } else {
+                ControlChrome { fill: None, stroke: None }
+            }
+        }
+        ControlRole::Primary => {
+            if state.pressed {
+                ControlChrome { fill: Some(primary_fill_with_palette(p, surface, PRIMARY_PRESS_ALPHA)), stroke: None }
+            } else if interactive {
+                ControlChrome { fill: Some(primary_fill_with_palette(p, surface, PRIMARY_HOVER_ALPHA)), stroke: None }
+            } else {
+                ControlChrome { fill: Some(p.INVERT_BG), stroke: None }
+            }
+        }
+    }
+}
+
+pub fn control_chrome(surface: Color32, role: ControlRole, state: ControlState) -> ControlChrome {
+    control_chrome_with_palette(pal(), surface, role, state)
 }
 
 /// Inter 500: buttons and pill labels.
@@ -553,6 +652,30 @@ fn shadow(dark: bool) -> egui::epaint::Shadow {
 fn visuals(p: &Palette, dark: bool) -> Visuals {
     let mut v = if dark { Visuals::dark() } else { Visuals::light() };
     let ink_strong = if dark { Color32::WHITE } else { Color32::BLACK };
+    let native_idle = control_chrome_with_palette(
+        p,
+        p.CONTROLS,
+        ControlRole::Native,
+        ControlState { enabled: true, selected: false, hovered: false, pressed: false, open: false },
+    );
+    let native_hover = control_chrome_with_palette(
+        p,
+        p.CONTROLS,
+        ControlRole::Native,
+        ControlState { enabled: true, selected: false, hovered: true, pressed: false, open: false },
+    );
+    let native_active = control_chrome_with_palette(
+        p,
+        p.CONTROLS,
+        ControlRole::Native,
+        ControlState { enabled: true, selected: false, hovered: false, pressed: true, open: false },
+    );
+    let native_open = control_chrome_with_palette(
+        p,
+        p.CONTROLS,
+        ControlRole::Native,
+        ControlState { enabled: true, selected: false, hovered: false, pressed: false, open: true },
+    );
     v.panel_fill = p.BG;
     v.window_fill = p.PANEL;
     v.faint_bg_color = p.CONTROLS;
@@ -565,7 +688,7 @@ fn visuals(p: &Palette, dark: bool) -> Visuals {
     v.text_cursor.stroke = Stroke::new(1.5, ink_strong);
     // Square modals; 3 px menus — pressables also get 3 px below.
     v.window_corner_radius = CornerRadius::ZERO;
-    v.menu_corner_radius = CornerRadius::same(3);
+    v.menu_corner_radius = CornerRadius::same(CONTROL_RADIUS);
     v.window_stroke = Stroke::new(1.0, p.LINE);
     v.window_shadow = shadow(dark);
     v.popup_shadow = shadow(dark);
@@ -574,19 +697,21 @@ fn visuals(p: &Palette, dark: bool) -> Visuals {
     v.error_fg_color = p.ERROR;
     v.striped = false;
     v.interact_cursor = Some(egui::CursorIcon::PointingHand);
-    let r = CornerRadius::same(3);
+    let r = CornerRadius::same(CONTROL_RADIUS);
     // Idle controls sit on the CONTROLS tier with a hairline; hovers are washes with the
     // border raised to LINE_STRONG and the ink to full strength — never the accent.
     v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, p.TEXT);
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, p.LINE);
     v.widgets.noninteractive.bg_fill = p.BG;
     v.widgets.noninteractive.weak_bg_fill = p.BG;
-    for (w, fill, stroke, fg) in [
-        (&mut v.widgets.inactive, p.CONTROLS, p.LINE, p.TEXT),
-        (&mut v.widgets.hovered, p.WASH_HOVER, p.LINE_STRONG, ink_strong),
-        (&mut v.widgets.active, p.WASH_HOVER, p.LINE_STRONG, ink_strong),
-        (&mut v.widgets.open, p.WASH_HOVER, p.LINE_STRONG, ink_strong),
+    for (w, chrome, fg) in [
+        (&mut v.widgets.inactive, native_idle, p.TEXT),
+        (&mut v.widgets.hovered, native_hover, ink_strong),
+        (&mut v.widgets.active, native_active, ink_strong),
+        (&mut v.widgets.open, native_open, ink_strong),
     ] {
+        let fill = chrome.fill.unwrap_or(p.CONTROLS);
+        let stroke = chrome.stroke.unwrap_or(p.LINE);
         w.bg_fill = fill;
         w.weak_bg_fill = fill;
         w.bg_stroke = Stroke::new(1.0, stroke);
@@ -594,6 +719,8 @@ fn visuals(p: &Palette, dark: bool) -> Visuals {
         w.corner_radius = r;
         w.expansion = 0.0;
     }
+    v.disabled_alpha = 0.48;
+    v.weak_text_color = Some(p.TEXT_WEAK);
     v.widgets.noninteractive.expansion = 0.0;
     v
 }
@@ -615,6 +742,8 @@ pub fn install(ctx: &egui::Context, choice: ThemeChoice) {
         style.spacing.button_padding = egui::vec2(8.0, 3.0);
         style.spacing.interact_size.y = 22.0;
         style.spacing.menu_margin = egui::Margin::same(4);
+        style.spacing.window_margin = egui::Margin::same(DIALOG_MARGIN);
+        style.spacing.scroll = egui::style::ScrollStyle { bar_width: 8.0, floating: true, ..egui::style::ScrollStyle::thin() };
     });
     ctx.style_mut_of(Theme::Light, |s| s.visuals = visuals(&LIGHT, false));
     ctx.style_mut_of(Theme::Dark, |s| s.visuals = visuals(&DARK, true));

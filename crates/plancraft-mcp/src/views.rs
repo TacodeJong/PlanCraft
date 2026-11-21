@@ -165,6 +165,20 @@ fn kind_str(t: &Task) -> &'static str {
     }
 }
 
+fn placement_code(kind: ConstraintKind) -> &'static str {
+    if kind == ConstraintKind::Alap { "alap" } else { "asap" }
+}
+
+fn date_mode_code(mode: DateMode) -> &'static str {
+    match mode {
+        DateMode::Unrestricted => "unrestricted",
+        DateMode::On => "on",
+        DateMode::NoEarlier => "no_earlier",
+        DateMode::NoLater => "no_later",
+        DateMode::Between => "between",
+    }
+}
+
 /// Compact task row used by list views.
 pub fn task_row(p: &Project, idx: usize) -> Value {
     let Some(t) = p.tasks.get(idx) else {
@@ -211,6 +225,10 @@ pub fn task_row(p: &Project, idx: usize) -> Value {
     if t.mode == ScheduleMode::Manual {
         m.insert("mode".into(), json!("manual"));
     }
+    if t.duration_mode == DurationMode::Auto {
+        m.insert("duration_mode".into(), json!("auto"));
+        m.insert("duration_stored_minutes".into(), json!(t.duration));
+    }
     if t.elapsed && !t.sched.is_summary {
         m.insert("elapsed".into(), json!(true));
     }
@@ -240,6 +258,21 @@ pub fn task_row(p: &Project, idx: usize) -> Value {
                 .trim()
             ),
         );
+    }
+    m.insert("placement".into(), json!(placement_code(t.constraint.kind)));
+    let (start_min, start_max) = t.start_window();
+    let (finish_min, finish_max) = t.finish_window();
+    m.insert("start_date_mode".into(), json!(date_mode_code(DateMode::of(start_min, start_max))));
+    m.insert("finish_date_mode".into(), json!(date_mode_code(DateMode::of(finish_min, finish_max))));
+    m.insert("start_limit_min".into(), fmt_dt(start_min));
+    m.insert("start_limit_max".into(), fmt_dt(start_max));
+    m.insert("finish_limit_min".into(), fmt_dt(finish_min));
+    m.insert("finish_limit_max".into(), fmt_dt(finish_max));
+    m.insert("start_limit_fixed".into(), json!(t.bounds.start_latest_fixed));
+    m.insert("finish_limit_fixed".into(), json!(t.bounds.finish_latest_fixed));
+    if !t.sched.is_summary {
+        let board_status_id = p.board_column_of(idx).map(|c| c.0);
+        m.insert("board_status_id".into(), json!(board_status_id));
     }
     if !t.sched.warnings.is_empty() {
         m.insert("warnings".into(), json!(t.sched.warnings));
@@ -378,6 +411,15 @@ pub fn task_detail(p: &Project, id: TaskId) -> Value {
         "constraint_type": constraint_code(t.constraint.kind),
         "constraint_label": t.constraint.kind.label(),
         "constraint_date": fmt_dt(t.constraint.date),
+        "placement": placement_code(t.constraint.kind),
+        "start_date_mode": date_mode_code(t.start_mode()),
+        "finish_date_mode": date_mode_code(t.finish_mode()),
+        "start_limit_min": fmt_dt(t.start_window().0),
+        "start_limit_max": fmt_dt(t.start_window().1),
+        "finish_limit_min": fmt_dt(t.finish_window().0),
+        "finish_limit_max": fmt_dt(t.finish_window().1),
+        "start_limit_fixed": t.bounds.start_latest_fixed,
+        "finish_limit_fixed": t.bounds.finish_latest_fixed,
         "deadline": fmt_dt(t.deadline),
         "calendar": t.calendar.and_then(|c| p.calendar(c)).map(|c| json!({ "id": c.id.0, "name": c.name })),
         "ignore_resource_calendars": t.ignore_resource_calendars,
@@ -409,6 +451,7 @@ pub fn task_detail(p: &Project, id: TaskId) -> Value {
         "deliverable": t.deliverable,
         "show_on_timeline": t.show_on_timeline,
         "board_status": p.board_column_of(idx).filter(|_| !t.sched.is_summary).and_then(|c| p.board_column(c)).map(|c| c.name.clone()),
+        "board_status_id": p.board_column_of(idx).filter(|_| !t.sched.is_summary).map(|c| c.0),
         "show_on_board": t.show_on_board,
         "bar_color": t.bar_color.map(|c| format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])),
         "custom": crate::tools::custom_fields::custom_values_json(p, t),
@@ -813,4 +856,49 @@ pub fn summary_text(doc: &Document) -> String {
         }
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use plancraft_core::dates::ymd;
+    use plancraft_core::prelude::*;
+
+    #[test]
+    fn auto_duration_appears_in_task_row() {
+        let mut p = Project::new("MCP", ymd(2026, 12, 7).unwrap());
+        let _g = p.add_task("Group", None);
+        let a = p.add_task("Prep", None);
+        p.task_mut(a).unwrap().outline_level = 2;
+        p.task_mut(a).unwrap().duration = 5 * 480;
+        p.task_mut(a).unwrap().estimated = false;
+        p.set_duration_mode(a, DurationMode::Auto).unwrap();
+        recalculate(&mut p);
+        let idx = p.task_index(a).unwrap();
+        let row = task_row(&p, idx);
+        assert_eq!(row["duration_mode"], json!("auto"));
+        assert_eq!(row["duration_minutes"], json!(p.task(a).unwrap().sched.duration));
+        assert_eq!(row["duration_stored_minutes"], json!(5 * 480));
+        assert!(row.get("duration").and_then(|v| v.as_str()).is_some());
+    }
+
+    #[test]
+    fn detail_reports_effective_placement_and_finish_window_keys() {
+        let mut p = Project::new("MCP", ymd(2026, 12, 7).unwrap());
+        let _g = p.add_task("Group", None);
+        let a = p.add_task("Prep", None);
+        {
+            let t = p.task_mut(a).unwrap();
+            t.outline_level = 2;
+            t.bounds.finish_latest = Some(ymd(2026, 12, 11).unwrap().and_hms_opt(17, 0, 0).unwrap());
+            t.bounds.finish_latest_fixed = false;
+        }
+        recalculate(&mut p);
+        let detail = task_detail(&p, a);
+        assert_eq!(detail["constraint_type"], json!("asap"), "existing key must remain");
+        assert_eq!(detail["placement"], json!("asap"));
+        assert_eq!(detail["finish_date_mode"], json!("no_later"));
+        assert_eq!(detail["finish_limit_max"], json!("2026-12-11 17:00"));
+        assert_eq!(detail["finish_limit_fixed"], json!(false));
+    }
 }

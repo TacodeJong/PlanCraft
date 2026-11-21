@@ -1,0 +1,283 @@
+{
+  "generated_at_utc": "2026-11-21T06:40:28.395286+00:00",
+  "capture_count": 21,
+  "capture_method": "Real PlanCraftApp client-area renders via egui_kittest; demo/synthetic data; no live user plan",
+  "base_commit": "911b6ac532beb5b03c86d17cdc218c5d783aac98",
+  "verified_changed_sources_sha256": {
+    "crates/plancraft-app/src/app.rs": "89a0ff8a77dc438cc85320e5ee0f5cbb3c695e15fd72527d18443f73a5077c03",
+    "crates/plancraft-app/src/app/ui_tests/docs_screenshots.rs": "4a2670b811af71b4ed7ca0e2e32c34013f16aa66afadae6a19c706b68ea6af84",
+    "crates/plancraft-app/src/dialogs/task_info.rs": "039e8e7a4001c9d56b018654bc0010b764620a4c5ce09172a5ecb9204abda266",
+    "crates/plancraft-app/src/lang.rs": "322920158ae336882c1398ec4db64c1d97a6aa2df9ca3936b69ad09c2316d73f",
+    "crates/plancraft-app/src/menu/mod.rs": "ae863c47834cda31892b61ca0deb03421dbe4a2557ac5b572c13d3d47c0866af",
+    "crates/plancraft-app/src/menubar.rs": "a8e89df36d7e9a9ea833bc2ac64cd163573b81e96cd899a1fccc62dde5da1b9e",
+    "crates/plancraft-app/src/state.rs": "e3539db59ca25a5814bc857cf02b2dadd8636b11e13043e7a4a4234eb30f569d",
+    "crates/plancraft-app/src/views/filter_bar.rs": "63c399d3323ef9bb10700943ae69270cfb6225cb327a9e17253aef14bc74977d",
+    "crates/plancraft-app/src/views/overview.rs": "9fd677bebea624aab3b5e4ebd607b5ae3f94ee3a61a01eb3a35e8319a68c610f",
+    "crates/plancraft-app/src/views/properties.rs": "772c73f92f28b89aadd151faeca4ec763a2b39a8778c6f0799f4c0004ef88de1",
+    "crates/plancraft-app/src/widgets/craft.rs": "3ebecbbfd1ff4edc5629128a3177565e07f062939edad05fb8c1fa2433e153a6",
+    "crates/plancraft-core/src/model.rs": "1faf99d8a1a86d319c479676c24a5ca5373674ee3a4f6eb84ca2ec65909a3fcd",
+    "crates/plancraft-core/src/ops.rs": "e0acd10e109df3cc2fad9baeeb7f913820688b2dd1eb2ace4dc93fc47a609359",
+    "crates/plancraft-core/src/schedule.rs": "f3b524adb5ef743d0e0324b3648cc9b171231992d56172104f017ce2509dd9a3",
+    "crates/plancraft-core/src/shares.rs": "7aea5546774822d2040392d3b7401ab4722f9de00dbd83985a03a5d42157ef75",
+    "crates/plancraft-core/src/sync/tests.rs": "bf1db7552684bb8db56f1e24ee4284a4563bc7d7f4a7d296e0ac77d0ddd25bb8",
+    "crates/plancraft-core/tests/auto_duration.rs": "0d3fe3e72baccb9ec4f1a5a69b0e378655232e38df4d337ae0c4938c7fef39c7",
+    "crates/plancraft-core/tests/hostile.rs": "380b7170defd3f52248c3884317c36b550abc15ced82f7921544f479fbec8d11",
+    "crates/plancraft-mcp/src/views.rs": "bb3364a00a2d1619ab766541d8a90e8e444727aa0f3edd0c07be5a48c171d8b8",
+    "docs/ARCHITECTURE.md": "92f63024cabe9d1f0810867eb986bd5ac9ebda6ebbc508763a2e0df141e02b8c"
+  },
+  "source_fingerprint_sha256": "e71519afc04c7ca25de578ad091913300625742ea191c522f7bff33d7ef6b67e",
+  "screenshots": [
+    {
+      "filename": "task-information.png",
+      "view_state": "Task Information dialog for selected leaf task",
+      "language": "en",
+      "theme": "dark",
+      "size": [
+        1440,
+        900
+      ],
+      "sha256": "eb082724025bd3a306ccf5207cdcf31846966fe6ea89998b1fbd136163764a45",
+      "bytes": 319245
+    },
+    {
+      "filename": "network.png",
+      "view_state": "Network Diagram view with Format controls",
+      "language": "en",
+      "theme": "dark",
+      "size": [
+        1440,
+        900
+      ],
+      "sha256": "c20b17bc447fc20b502412e5bffc8ba10aba3c1c1d44b12be31fbe8604fad290",
+      "bytes": 156130
+    },
+    {
+      "filename": "resource-usage.png",
+      "view_state": "Resource Usage view",
+      "language": "en",
+      "theme": "dark",
+      "size": [
+        1440,
+        900
+      ],
+      "sha256": "dbb98c4e920d5f391131cfa2dad70bd41e53c83d59a07b58c8d517ea789444dd",
+      "bytes": 189960
+    },
+    {
+      "filename": "board.png",
+      "view_state": "Task Board view",
+      "language": "en",
+      "theme": "dark",
+      "size": [
+        1440,
+        900
+      ],
+      "sha256": "c836da131b58d16fbe225ee161cfc179d7f1d7c4626cade7b9287f07e31e1f4f",
+      "bytes": 177264
+    },
+    {
+      "filename": "gantt.png",
+      "view_state": "Gantt Chart view in light theme",
+      "language": "en",
+      "theme": "light",
+      "size": [
+        1440,
+        900
+      ],
+      "sha256": "6a57417b1fc5e70a0084f47dd580add61c8369eacabc72abdfc1a3ca6e4da12a",
+      "bytes": 292979
+    },
+    {
+      "filename": "calendar.png",
+      "view_state": "Calendar view",
+      "language": "en",
+      "theme": "dark",
+      "size": [
+        1440,
+        900
+      ],
+      "sha256": "d506ada51f7efd46afe975958156c570806387c817ab7360b10dc0ea728be1d9",
+      "bytes": 141321
+    },
+    {
+      "filename": "start-page.png",
+      "view_state": "Start Page with empty workspace",
+      "language": "en",
+      "theme": "dark",
+      "size": [
+        1440,
+        900
+      ],
+      "sha256": "345126310150d410e3ab7c9f8f35b29bfeff45b103ee3ba9db5bb7a50307602e",
+      "bytes": 112233
+    },
+    {
+      "filename": "tracking.png",
+      "view_state": "Tracking Gantt view",
+      "language": "en",
+      "theme": "dark",
+      "size": [
+        1440,
+        900
+      ],
+      "sha256": "9912c109d11054c928d34595f6a97a101116b8376f1000619c0af4f3f9ed6df8",
+      "bytes": 293936
+    },
+    {
+      "filename": "print-preview.png",
+      "view_state": "Print preview dialog only",
+      "language": "en",
+      "theme": "dark",
+      "size": [
+        1440,
+        900
+      ],
+      "sha256": "6ccc28fbd1238b2b8d2fe2336333128c28446fdc72a68df709d2e250e1d1b547",
+      "bytes": 288746
+    },
+    {
+      "filename": "languages.png",
+      "view_state": "Dutch UI in Gantt view",
+      "language": "nl",
+      "theme": "dark",
+      "size": [
+        1440,
+        900
+      ],
+      "sha256": "71d86930c3b8ab1292697ec1d69b325c08d192118f8ff376a8f466ec13832b83",
+      "bytes": 296558
+    },
+    {
+      "filename": "milestones.png",
+      "view_state": "Milestones view",
+      "language": "en",
+      "theme": "dark",
+      "size": [
+        1440,
+        900
+      ],
+      "sha256": "bdfb5886c86d232e8f36a96fae364d95a03a1b8a76fefcf53f22b13088e6e4d1",
+      "bytes": 230932
+    },
+    {
+      "filename": "gantt-dark.png",
+      "view_state": "Gantt Chart view in dark theme",
+      "language": "en",
+      "theme": "dark",
+      "size": [
+        1440,
+        900
+      ],
+      "sha256": "c99c316697711595e4a85e5bb4710deca57c7b1bd1570bfcb0e1692063b9cc06",
+      "bytes": 293617
+    },
+    {
+      "filename": "team-planner.png",
+      "view_state": "Team Planner view",
+      "language": "en",
+      "theme": "dark",
+      "size": [
+        1440,
+        900
+      ],
+      "sha256": "3df56cb0ddc8be2b0a2b32a477f6228dd6684bb825f319767d46bfb3e9dcceb8",
+      "bytes": 141012
+    },
+    {
+      "filename": "workload.png",
+      "view_state": "Workload view",
+      "language": "en",
+      "theme": "dark",
+      "size": [
+        1440,
+        900
+      ],
+      "sha256": "5060d507bc1d96fa44ead3f1f5bced78f45635a0b906c73097c91d67cf83485b",
+      "bytes": 208452
+    },
+    {
+      "filename": "overview.png",
+      "view_state": "Overview view in dark theme",
+      "language": "en",
+      "theme": "dark",
+      "size": [
+        1440,
+        900
+      ],
+      "sha256": "81e0ed94a0e1c971ce470b619584f902a1e76d5af52d199f79628ed5c1c23004",
+      "bytes": 170742
+    },
+    {
+      "filename": "overview-light.png",
+      "view_state": "Overview view in light theme",
+      "language": "en",
+      "theme": "light",
+      "size": [
+        1440,
+        900
+      ],
+      "sha256": "779993fda3700f6b19de75ed1d2db70b674ad30137dd16b3653e78dd97a8a420",
+      "bytes": 172751
+    },
+    {
+      "filename": "overview-narrow.png",
+      "view_state": "Overview view at 960x900",
+      "language": "en",
+      "theme": "dark",
+      "size": [
+        960,
+        900
+      ],
+      "sha256": "78f2784b4eb2691c49e71b367b28c7ea79bf863f297f172c8ab4c477fa843dd9",
+      "bytes": 135785
+    },
+    {
+      "filename": "duration-auto.png",
+      "view_state": "Properties General showing auto duration = 2 days, stored duration preserved",
+      "language": "en",
+      "theme": "dark",
+      "size": [
+        1440,
+        900
+      ],
+      "sha256": "9838cd24637f534a018e8b5b7cf92d64456d4622944b2652b72114c828f34c88",
+      "bytes": 201689
+    },
+    {
+      "filename": "properties-resources.png",
+      "view_state": "Properties Resources tab with non-100% units",
+      "language": "en",
+      "theme": "dark",
+      "size": [
+        1440,
+        900
+      ],
+      "sha256": "e44072e13e8922a5bd3844fa8ce859131737409ce00443f36086bad4f1ea8c8b",
+      "bytes": 298705
+    },
+    {
+      "filename": "format-toggles.png",
+      "view_state": "Format toolbar with Critical Path and Highlight Paths selected",
+      "language": "en",
+      "theme": "dark",
+      "size": [
+        1440,
+        900
+      ],
+      "sha256": "22f92e77fc8ef769f7253ea40119b3336b33500626b2be1ee6f30d3d8fad1348",
+      "bytes": 332095
+    },
+    {
+      "filename": "selection-filter.png",
+      "view_state": "Focused selection filter with a single Clear filter button",
+      "language": "en",
+      "theme": "dark",
+      "size": [
+        1440,
+        900
+      ],
+      "sha256": "2e04125d18a35d45aceb9249c0661273bff5838d6a63168b9e13156bc2328dc9",
+      "bytes": 185361
+    }
+  ]
+}

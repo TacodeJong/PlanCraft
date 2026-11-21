@@ -36,6 +36,8 @@ pub fn dock(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
 }
 
 fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: &mut Vec<Command>) {
+    #[cfg(test)]
+    ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("properties_test_visible_rect"), rect));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
     egui::ScrollArea::vertical().show(&mut child, |ui| {
         crate::widgets::craft::section_label(ui, st.t("tb.properties"));
@@ -210,6 +212,8 @@ fn general_tab(
     milestone_only: bool,
     share: bool,
 ) {
+    status_presets_row(ui, doc, st, ids, first, multi, any_summary);
+    ui.add_space(8.0);
     ui.horizontal(|ui| {
         if !multi && snap.milestone == Some(true) {
             let (rect, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
@@ -255,17 +259,7 @@ fn general_tab(
     // A group cannot be a milestone: the box stays visible but greyed (GUI.md).
     if ui.add_enabled(!any_summary, egui::Checkbox::new(&mut flag, st.t("prop.milestone"))).changed() {
         let ids = ids.to_vec();
-        edit(doc, st, "Milestone", move |p| {
-            for id in &ids {
-                if let Some(t) = p.task_mut(*id) {
-                    t.kind = if flag { TaskKind::Milestone } else { TaskKind::Task };
-                    if flag {
-                        t.duration = 0;
-                    }
-                }
-            }
-            Ok(())
-        });
+        edit(doc, st, "Milestone", move |p| set_milestones(p, &ids, flag));
     }
     label(ui, st.t("prop.mark"));
     let mark_label = snap.mark.map(|m| m.map(crate::lang::mark_name).unwrap_or(st.t("common.none"))).unwrap_or(st.t("common.multiple"));
@@ -289,13 +283,13 @@ fn general_tab(
             }
         }
     });
+    placement_row(ui, doc, st, ids, first, multi, any_summary);
     // The everyday fields, like the Swift inspector: no tab-hopping for normal work.
     schedule_fields(ui, doc, st, ids, snap, first, multi, any_summary, milestone_only, share);
     label(ui, st.t("prop.predecessors"));
     predecessors(ui, doc, st, ids, multi);
-    resources_tab(ui, doc, st, ids, snap, first, multi, any_summary);
-    status_block(ui, doc, st, ids, snap, first, multi, any_summary);
-    percent_block(ui, doc, st, ids, snap, first, multi, any_summary);
+    // Names only on General: units/work stay on the Resources tab.
+    general_resources(ui, doc, st, ids, snap, any_summary);
     if milestone_only {
         label(ui, st.t("prop.deliverable"));
         if let Some(text) = line(ui, ("task_deliverable", first, multi), snap.deliverable.as_deref().unwrap_or(""), "") {
@@ -409,22 +403,45 @@ fn schedule_fields(
     milestone_only: bool,
     share: bool,
 ) {
+    let all_summary = !ids.is_empty() && ids.iter().all(|id| doc.project.task_index(*id).is_some_and(|i| doc.project.has_children(i)));
     let derived_duration = common(ids.iter().filter_map(|id| doc.project.task(*id)).map(|t| doc.project.format_task_duration(t)));
-    label(ui, st.t("prop.duration"));
     if any_summary {
+        label(ui, st.t("prop.duration"));
         // A group's span comes from its subtasks: visible but not editable.
         derived_line(ui, derived_duration.as_deref().unwrap_or_else(|| st.t("common.multiple_lc")), st.t("prop.from_children"));
     } else if milestone_only {
+        label(ui, st.t("prop.duration"));
         // A milestone is always 0: greyed rather than hidden.
         derived_line(ui, snap.duration.as_deref().unwrap_or(""), st.t("prop.milestone_duration"));
-    } else if let Some(text) = line(ui, ("task_dur", first, multi), snap.duration.as_deref().unwrap_or(""), "") {
-        let ids = ids.to_vec();
-        edit(doc, st, "Duration", move |p| {
-            let (minutes, estimated) = p.parse_duration(&text).ok_or_else(|| format!("'{text}' is not a valid duration"))?;
-            for id in &ids {
-                p.set_duration(*id, minutes, estimated).map_err(|e| e.to_string())?;
+    } else {
+        let auto = snap.duration_mode_effective == Some(DurationMode::Auto);
+        ui.horizontal_wrapped(|ui| {
+            compact_label(ui, st.t("prop.duration"));
+            duration_mode_combo(ui, doc, st, ids, snap, first, multi);
+            if auto {
+                // Show the calculated span (sched), not the stale stored input.
+                let mut text = snap.duration.as_deref().unwrap_or("").to_string();
+                ui.add_enabled(
+                    false,
+                    egui::TextEdit::singleline(&mut text).desired_width((ui.available_size_before_wrap().x - 8.0).max(72.0)),
+                )
+                .on_disabled_hover_text(st.t("prop.duration_auto_hint"));
+            } else if let Some(text) = line_bounded(
+                ui,
+                ("task_dur", first, multi),
+                snap.duration.as_deref().unwrap_or(""),
+                "",
+                (ui.available_size_before_wrap().x - 8.0).max(72.0),
+            ) {
+                let ids = ids.to_vec();
+                edit(doc, st, "Duration", move |p| {
+                    let (minutes, estimated) = p.parse_duration(&text).ok_or_else(|| format!("'{text}' is not a valid duration"))?;
+                    for id in &ids {
+                        p.set_duration(*id, minutes, estimated).map_err(|e| e.to_string())?;
+                    }
+                    Ok(())
+                });
             }
-            Ok(())
         });
     }
     let start_minute = doc.project.settings.time.default_start_time;
@@ -441,7 +458,7 @@ fn schedule_fields(
             max: snap.finish_latest,
             fixed: snap.finish_fixed,
         };
-        date_mode_side(ui, doc, st, ids, first, multi, st.t("prop.moment"), side);
+        date_mode_side(ui, doc, st, ids, first, multi, st.t("prop.moment"), side, false);
     } else {
         let side = DateSide {
             finish: false,
@@ -452,7 +469,11 @@ fn schedule_fields(
             max: snap.start_latest,
             fixed: snap.start_fixed,
         };
-        date_mode_side(ui, doc, st, ids, first, multi, st.t("prop.start"), side);
+        if all_summary {
+            date_mode_side(ui, doc, st, ids, first, multi, st.t("prop.start"), side, true);
+        } else {
+            date_mode_side(ui, doc, st, ids, first, multi, st.t("prop.start"), side, false);
+        }
         let side = DateSide {
             finish: true,
             minute: finish_minute,
@@ -462,7 +483,11 @@ fn schedule_fields(
             max: snap.finish_latest,
             fixed: snap.finish_fixed,
         };
-        date_mode_side(ui, doc, st, ids, first, multi, st.t("prop.finish"), side);
+        if all_summary {
+            date_mode_side(ui, doc, st, ids, first, multi, st.t("prop.finish"), side, true);
+        } else {
+            date_mode_side(ui, doc, st, ids, first, multi, st.t("prop.finish"), side, false);
+        }
     }
     if share {
         // Stretch and percent-of-group both size a share: setting one clears the other.
@@ -544,6 +569,46 @@ fn planning_tab(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId
             Ok(())
         });
     }
+    label(ui, st.t("prop.leveling_delay"));
+    ui.horizontal_wrapped(|ui| {
+        let shown = snap.leveling_delay.as_deref().unwrap_or("");
+        let hint = if snap.leveling_delay.is_none() { st.t("common.multiple_lc") } else { "0d" };
+        let width = (ui.available_width() - 96.0).clamp(104.0, 260.0);
+        if let Some(text) = line_bounded(ui, ("task_leveling_delay", first, multi), shown, hint, width) {
+            let ids = ids.to_vec();
+            let invalid = st.t("prop.leveling_delay_invalid").to_string();
+            let working_only = st.t("prop.leveling_delay_working_only").to_string();
+            let no_estimate = st.t("prop.leveling_delay_no_estimate").to_string();
+            edit(doc, st, "Leveling delay", move |p| {
+                let typed = p
+                    .parse_task_duration(&text)
+                    .or_else(|| p.parse_duration(&text).map(|(minutes, estimated)| TypedDuration { minutes, estimated, elapsed: false }))
+                    .ok_or_else(|| invalid.clone())?;
+                if typed.elapsed {
+                    return Err(working_only.clone());
+                }
+                if typed.estimated {
+                    return Err(no_estimate.clone());
+                }
+                for id in &ids {
+                    p.set_leveling_delay(*id, typed.minutes).map_err(|e| e.to_string())?;
+                }
+                Ok(())
+            });
+        }
+        if ui.button(st.t("prop.leveling_delay_reset")).clicked() {
+            // Discard any focused draft so a later blur cannot overwrite this explicit action.
+            let input_id = ui.id().with(("task_leveling_delay", first, multi));
+            ui.ctx().data_mut(|data| data.remove::<String>(input_id));
+            let ids = ids.to_vec();
+            edit(doc, st, "Leveling delay", move |p| {
+                for id in &ids {
+                    p.set_leveling_delay(*id, 0).map_err(|e| e.to_string())?;
+                }
+                Ok(())
+            });
+        }
+    });
     label(ui, st.t("prop.mode"));
     let auto = st.t("prop.mode_auto");
     let manual = st.t("prop.mode_manual");
@@ -738,6 +803,21 @@ fn estimate_block(ui: &mut Ui, doc: &mut Document, st: &mut UiState, first: Task
     }
 }
 
+/// Resource names on General: toggle assignments without showing units or work.
+fn general_resources(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], snap: &Snap, any_summary: bool) {
+    label(ui, st.t("prop.resources"));
+    if any_summary {
+        let text = match snap.resources.as_deref() {
+            None => st.t("common.multiple_lc"),
+            Some(s) if s.trim().is_empty() => st.t("common.none_lc"),
+            Some(s) => s,
+        };
+        ui.label(text).on_hover_text(st.t("prop.group_resources"));
+        return;
+    }
+    resources(ui, doc, st, ids, snap.resources.as_deref());
+}
+
 fn resources_tab(
     ui: &mut Ui,
     doc: &mut Document,
@@ -789,6 +869,127 @@ fn resources_tab(
             });
         }
     }
+}
+
+fn duration_mode_combo(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], snap: &Snap, first: TaskId, multi: bool) {
+    let current = snap.duration_mode_effective;
+    let legacy_derived = snap.legacy_duration_derived == Some(true);
+    let label = match current {
+        Some(DurationMode::Fixed) => st.t("prop.duration_fixed"),
+        Some(DurationMode::Auto) => st.t("prop.duration_auto"),
+        None => st.t("common.multiple"),
+    };
+    let width = 96.0;
+    egui::ComboBox::from_id_salt(("task_dur_mode", first, multi)).width(width).selected_text(label).show_ui(ui, |ui| {
+        for mode in DurationMode::ALL {
+            let text = match mode {
+                DurationMode::Fixed => st.t("prop.duration_fixed"),
+                DurationMode::Auto => st.t("prop.duration_auto"),
+            };
+            let selected = current == Some(mode);
+            let can_convert_legacy = mode == DurationMode::Fixed && legacy_derived;
+            if ui.selectable_label(selected, text).clicked() && (!selected || can_convert_legacy) {
+                let ids = ids.to_vec();
+                edit(doc, st, "Duration mode", move |p| {
+                    for id in &ids {
+                        p.set_duration_mode(*id, mode).map_err(|e| e.to_string())?;
+                    }
+                    Ok(())
+                });
+            }
+        }
+    });
+    if snap.duration_mode == Some(DurationMode::Auto)
+        && let Some(why) = ids.iter().find_map(|id| doc.project.auto_duration_block_reason(*id))
+    {
+        ui.label(RichText::new(why).size(11.0).color(theme::pal().TEXT_WEAK));
+    }
+}
+
+fn placement_kind_for_ui(kind: ConstraintKind) -> ConstraintKind {
+    if matches!(kind, ConstraintKind::Alap) { ConstraintKind::Alap } else { ConstraintKind::Asap }
+}
+
+fn placement_row(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], first: TaskId, multi: bool, any_summary: bool) {
+    if any_summary {
+        label(ui, st.t("prop.placement"));
+        derived_line(ui, st.t("common.multiple_lc"), st.t("prop.from_children"));
+        return;
+    }
+    let tasks: Vec<&Task> = ids.iter().filter_map(|id| doc.project.task(*id)).collect();
+    let all_manual = tasks.iter().all(|t| t.mode == ScheduleMode::Manual);
+    let current = common_eq(tasks.iter().map(|t| placement_kind_for_ui(t.constraint.kind)));
+    let shown = current
+        .map(|k| match k {
+            ConstraintKind::Asap => st.t("prop.placement_asap").to_string(),
+            ConstraintKind::Alap => st.t("prop.placement_alap").to_string(),
+            _ => k.label().to_string(),
+        })
+        .unwrap_or_else(|| st.t("common.multiple").to_string());
+    ui.horizontal_wrapped(|ui| {
+        compact_label(ui, st.t("prop.placement"));
+        let width = (ui.available_width() - 104.0).clamp(120.0, 280.0);
+        egui::ComboBox::from_id_salt(("task_placement", first, multi)).width(width).selected_text(shown).show_ui(ui, |ui| {
+            for kind in [ConstraintKind::Asap, ConstraintKind::Alap] {
+                let selected = current == Some(kind);
+                let label = match kind {
+                    ConstraintKind::Asap => st.t("prop.placement_asap"),
+                    ConstraintKind::Alap => st.t("prop.placement_alap"),
+                    _ => kind.label(),
+                };
+                let resp = ui.add_enabled(!all_manual, egui::Button::selectable(selected, label));
+                if resp.clicked() && !selected {
+                    let ids = ids.to_vec();
+                    edit(doc, st, "Placement", move |p| {
+                        for id in &ids {
+                            p.set_placement(*id, kind).map_err(|e| e.to_string())?;
+                        }
+                        Ok(())
+                    });
+                }
+            }
+        });
+    });
+    if all_manual {
+        ui.label(RichText::new(st.t("prop.placement_hint_manual")).size(11.0).color(theme::pal().TEXT_WEAK));
+    }
+}
+
+fn status_presets_row(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], first: TaskId, multi: bool, any_summary: bool) {
+    label(ui, st.t("prop.status"));
+    if any_summary {
+        // A group's status rolls up from its subtasks.
+        let derived_status = common(ids.iter().filter_map(|id| doc.project.task(*id)).map(|t| {
+            let pct = t.sched.percent_complete;
+            crate::lang::status_name(if pct >= 100.0 {
+                TaskStatus::Done
+            } else if pct <= 0.0 {
+                TaskStatus::NotStarted
+            } else {
+                TaskStatus::Busy
+            })
+            .to_string()
+        }));
+        ui.label(derived_status.unwrap_or_else(|| st.t("common.multiple_lc").to_string())).on_hover_text(st.t("prop.from_children"));
+        return;
+    }
+    let columns: Vec<(BoardColumnId, String)> = doc.project.board_columns.iter().map(|c| (c.id, c.name.clone())).collect();
+    let current = common_eq(ids.iter().filter_map(|id| {
+        let idx = doc.project.task_index(*id)?;
+        doc.project.board_column_of(idx)
+    }));
+    ui.push_id(("task_status_presets", first, multi), |ui| {
+        ui.horizontal_wrapped(|ui| {
+            for (col, name) in &columns {
+                let selected = current == Some(*col);
+                if ui.add(egui::Button::selectable(selected, name)).clicked() && !selected {
+                    let ids = ids.to_vec();
+                    let col = *col;
+                    edit(doc, st, "Board status", move |p| p.set_board_status(&ids, col).map_err(|e| e.to_string()));
+                }
+            }
+        });
+    });
 }
 
 /// The task's status, as a combo on a leaf and read-only roll-up on a group (SPECS.md).
@@ -958,6 +1159,9 @@ struct Snap {
     name: Option<String>,
     milestone: Option<bool>,
     duration: Option<String>,
+    duration_mode: Option<DurationMode>,
+    duration_mode_effective: Option<DurationMode>,
+    legacy_duration_derived: Option<bool>,
     start: Option<Option<DateTime>>,
     finish: Option<Option<DateTime>>,
     start_mode: Option<DateMode>,
@@ -978,6 +1182,7 @@ struct Snap {
     active: Option<bool>,
     on_timeline: Option<bool>,
     priority: Option<String>,
+    leveling_delay: Option<String>,
     deliverable: Option<String>,
     mode: Option<ScheduleMode>,
     deadline: Option<Option<DateTime>>,
@@ -994,15 +1199,42 @@ struct Snap {
     resume: Option<Option<DateTime>>,
 }
 
+/// Duration text for the General pane: calculated span for Auto / stretch / percent / summaries.
+fn display_duration(p: &Project, t: &Task) -> String {
+    p.format_task_duration(t)
+}
+
 fn snapshot(p: &Project, ids: &[TaskId]) -> Snap {
     let text = |f: &dyn Fn(&Task) -> String| common(ids.iter().filter_map(|id| p.task(*id)).map(f));
     let flag = |f: &dyn Fn(&Task) -> bool| common_flag(ids.iter().filter_map(|id| p.task(*id)).map(f));
+    let shown_date = |t: &Task, finish: bool| {
+        if t.mode == ScheduleMode::Manual {
+            if finish { t.manual_finish.or(t.sched.finish) } else { t.manual_start.or(t.sched.start) }
+        } else if finish {
+            t.sched.finish
+        } else {
+            t.sched.start
+        }
+    };
+    let effective_mode = |id: TaskId| {
+        let Some(t) = p.task(id) else { return DurationMode::Fixed };
+        let (mode, _) = effective_duration_mode_for_ui(p, id, t);
+        mode
+    };
+    let legacy_mode = |id: TaskId| {
+        let Some(t) = p.task(id) else { return false };
+        let (_, legacy) = effective_duration_mode_for_ui(p, id, t);
+        legacy
+    };
     Snap {
         name: text(&|t| t.name.clone()),
         milestone: flag(&|t| t.is_milestone()),
-        duration: text(&|t| p.format_task_minutes(t, t.duration, t.estimated)),
-        start: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.sched.start.or(t.manual_start))),
-        finish: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.sched.finish.or(t.manual_finish))),
+        duration: text(&|t| display_duration(p, t)),
+        duration_mode: common_eq(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.duration_mode)),
+        duration_mode_effective: common_eq(ids.iter().copied().map(effective_mode)),
+        legacy_duration_derived: common_flag(ids.iter().copied().map(legacy_mode)),
+        start: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| shown_date(t, false))),
+        finish: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| shown_date(t, true))),
         start_mode: common_eq(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.start_mode())),
         finish_mode: common_eq(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.finish_mode())),
         // The windows, not the raw bounds: a legacy SNET-style pin or a manual date shows
@@ -1023,6 +1255,7 @@ fn snapshot(p: &Project, ids: &[TaskId]) -> Snap {
         active: flag(&|t| t.active),
         on_timeline: flag(&|t| t.show_on_timeline),
         priority: text(&|t| t.priority.to_string()),
+        leveling_delay: text(&|t| p.format_duration(t.leveling_delay.max(0), false)),
         deliverable: text(&|t| t.deliverable.clone()),
         mode: common_eq(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.mode)),
         deadline: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.deadline)),
@@ -1076,6 +1309,30 @@ fn can_share(p: &Project, id: TaskId) -> bool {
     p.parent_index(idx).is_some() && !p.has_children(idx) && !task.is_milestone()
 }
 
+fn set_milestones(p: &mut Project, ids: &[TaskId], milestone: bool) -> Result<(), String> {
+    for id in ids {
+        p.set_milestone(*id, milestone).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+pub(crate) fn effective_duration_mode_for_ui(p: &Project, id: TaskId, t: &Task) -> (DurationMode, bool) {
+    if t.duration_mode == DurationMode::Auto {
+        return (DurationMode::Auto, false);
+    }
+    let Some(idx) = p.task_index(id) else {
+        return (DurationMode::Fixed, false);
+    };
+    let has_parent = p.parent_index(idx).is_some();
+    if p.has_children(idx) || t.is_milestone() || !has_parent {
+        return (DurationMode::Fixed, false);
+    }
+    let percent_derived = p.settings.rules.span && t.duration_percent.is_some_and(|pct| pct.is_finite() && pct > 0.0);
+    let stretch_derived =
+        p.settings.rules.stretch && t.fills_group && t.start_mode() == DateMode::Unrestricted && t.finish_mode() == DateMode::Unrestricted;
+    if percent_derived || stretch_derived { (DurationMode::Auto, true) } else { (DurationMode::Fixed, false) }
+}
+
 fn show_date(
     ui: &mut Ui,
     salt: &str,
@@ -1103,6 +1360,17 @@ struct DateSide {
     fixed: Option<bool>,
 }
 
+fn side_mode_name<'a>(st: &'a UiState, mode: DateMode, summary_side: bool) -> &'a str {
+    if !summary_side {
+        return crate::lang::date_mode_name(mode);
+    }
+    match mode {
+        DateMode::Unrestricted => st.t("prop.group_edge_dynamic"),
+        DateMode::On => st.t("prop.group_edge_fixed"),
+        _ => crate::lang::date_mode_name(mode),
+    }
+}
+
 /// One side's date rule, the Project Planner way: a mode picker (Unrestricted, On, no earlier,
 /// no later, Between), only the date editors that mode needs, and the calculated date greyed
 /// when the mode doesn't pin it. An unrestricted side explains itself on hover.
@@ -1115,23 +1383,27 @@ fn date_mode_side(
     multi: bool,
     title: &str,
     side: DateSide,
+    summary_side: bool,
 ) {
-    label(ui, title);
     let DateSide { finish, minute, scheduled, mode, min, max, fixed } = side;
-    // The calculated date: greyed, because the mode's own editors below do the pinning.
-    if mode != Some(DateMode::On) {
+    let shown = mode.map(|m| side_mode_name(st, m, summary_side)).unwrap_or_else(|| st.t("common.multiple_lc"));
+    let mut pick = None;
+    ui.horizontal_wrapped(|ui| {
+        compact_label(ui, title);
+        let width = (ui.available_width() - 192.0).clamp(96.0, 210.0);
+        egui::ComboBox::from_id_salt(("date_mode", finish, first, multi)).width(width).selected_text(shown).show_ui(ui, |ui| {
+            for m in DateMode::ALL {
+                if ui.selectable_label(mode == Some(m), side_mode_name(st, m, summary_side)).clicked() {
+                    pick = Some(m);
+                }
+            }
+        });
         let resp = ui.scope(|ui| show_date(ui, &format!("sched_{finish}{first}"), scheduled, false, false, minute)).response;
         if mode == Some(DateMode::Unrestricted) {
-            resp.on_hover_text(st.t("dm.calc_deps"));
-        }
-    }
-    let shown = mode.map(crate::lang::date_mode_name).unwrap_or_else(|| st.t("common.multiple_lc"));
-    let mut pick = None;
-    egui::ComboBox::from_id_salt(("date_mode", finish, first, multi)).width(ui.available_width()).selected_text(shown).show_ui(ui, |ui| {
-        for m in DateMode::ALL {
-            if ui.selectable_label(mode == Some(m), crate::lang::date_mode_name(m)).clicked() {
-                pick = Some(m);
-            }
+            let why = if summary_side { st.t("prop.from_children") } else { st.t("dm.calc_deps") };
+            resp.on_hover_text(format!("{}\n{}", st.t("prop.scheduled_result"), why));
+        } else {
+            resp.on_hover_text(st.t("prop.scheduled_result"));
         }
     });
     if let Some(m) = pick
@@ -1160,6 +1432,7 @@ fn date_mode_side(
     };
     match mode {
         Some(DateMode::On) => {
+            label(ui, st.t(if finish { "prop.finish_limit" } else { "prop.start_limit" }));
             // The single pinned date: picking one writes both the minimum and the maximum.
             if let Some(Some(date)) = show_date(ui, &format!("on_{finish}{first}"), min, false, true, minute) {
                 let ids = ids.to_vec();
@@ -1172,19 +1445,24 @@ fn date_mode_side(
             }
         }
         Some(DateMode::NoEarlier) => {
+            label(ui, st.t(if finish { "prop.finish_limit" } else { "prop.start_limit" }));
             if let Some(Some(date)) = show_date(ui, &format!("min_{finish}{first}"), min, false, true, minute) {
                 write(doc, st, ids, true, date);
             }
         }
         Some(DateMode::NoLater) => {
+            label(ui, st.t(if finish { "prop.finish_limit" } else { "prop.start_limit" }));
             if let Some(Some(date)) = show_date(ui, &format!("max_{finish}{first}"), max, false, true, minute) {
                 write(doc, st, ids, false, date);
             }
         }
         Some(DateMode::Between) => {
+            label(ui, st.t(if finish { "prop.finish_limit" } else { "prop.start_limit" }));
+            label(ui, st.t("prop.limit_from"));
             if let Some(Some(date)) = show_date(ui, &format!("min_{finish}{first}"), min, false, true, minute) {
                 write(doc, st, ids, true, date);
             }
+            label(ui, st.t("prop.limit_to"));
             if let Some(Some(date)) = show_date(ui, &format!("max_{finish}{first}"), max, false, true, minute) {
                 write(doc, st, ids, false, date);
             }
@@ -1242,10 +1520,18 @@ fn label(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).size(11.0).color(theme::pal().TEXT_WEAK));
 }
 
+fn compact_label(ui: &mut Ui, text: &str) {
+    ui.label(RichText::new(text).size(11.0).color(theme::pal().TEXT_WEAK));
+}
+
 fn line(ui: &mut Ui, salt: impl std::hash::Hash + std::fmt::Debug, current: &str, hint: &str) -> Option<String> {
+    line_bounded(ui, salt, current, hint, ui.available_width())
+}
+
+fn line_bounded(ui: &mut Ui, salt: impl std::hash::Hash + std::fmt::Debug, current: &str, hint: &str, width: f32) -> Option<String> {
     let id = ui.id().with(salt);
     let mut text = ui.ctx().data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| current.to_string());
-    let resp = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(ui.available_width()).hint_text(hint));
+    let resp = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(width).hint_text(hint));
     if resp.lost_focus() {
         ui.ctx().data_mut(|d| d.remove::<String>(id));
         if text.trim() != current.trim() {
@@ -1468,4 +1754,140 @@ fn type_label(kind: ResourceType) -> &'static str {
 
 fn pos2(x: f32, y: f32) -> egui::Pos2 {
     egui::pos2(x, y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use plancraft_core::dates::prelude::*;
+    use plancraft_core::dates::ymd;
+    use plancraft_core::workspace::Document;
+
+    const DAY: Minutes = 480;
+
+    fn synthetic() -> (Project, TaskId) {
+        let mut p = Project::new("Props", ymd(2026, 12, 7).unwrap());
+        let _g = p.add_task("Group", None);
+        let pred = p.add_task("Predecessor", None);
+        let prep = p.add_task("Preparation", None);
+        let send = p.add_task("Send", None);
+        for id in [pred, prep, send] {
+            p.task_mut(id).unwrap().outline_level = 2;
+        }
+        {
+            let t = p.task_mut(pred).unwrap();
+            t.kind = TaskKind::Milestone;
+            t.duration = 0;
+            t.estimated = false;
+            t.constraint = Constraint { kind: ConstraintKind::Mso, date: Some(ymd(2026, 12, 8).unwrap().and_hms_opt(17, 0, 0).unwrap()) };
+        }
+        {
+            let t = p.task_mut(prep).unwrap();
+            t.duration = 5 * DAY;
+            t.estimated = false;
+        }
+        {
+            let t = p.task_mut(send).unwrap();
+            t.duration = DAY;
+            t.estimated = false;
+            t.bounds.finish_latest = Some(ymd(2026, 12, 11).unwrap().and_hms_opt(17, 0, 0).unwrap());
+            t.bounds.finish_latest_fixed = true;
+        }
+        p.link(pred.into(), prep, LinkType::FS, Lag::None).unwrap();
+        p.link(prep.into(), send, LinkType::FS, Lag::None).unwrap();
+        (p, prep)
+    }
+
+    #[test]
+    fn general_snapshot_shows_calculated_auto_duration_not_stored() {
+        let (mut p, prep) = synthetic();
+        p.set_duration_mode(prep, DurationMode::Auto).unwrap();
+        recalculate(&mut p);
+        let snap = snapshot(&p, &[prep]);
+        assert_eq!(snap.duration_mode, Some(DurationMode::Auto));
+        let two = p.format_duration(2 * DAY, false);
+        let five = p.format_duration(5 * DAY, false);
+        assert_eq!(snap.duration.as_deref(), Some(two.as_str()));
+        assert_ne!(snap.duration.as_deref(), Some(five.as_str()));
+        assert_eq!(p.task(prep).unwrap().duration, 5 * DAY);
+    }
+
+    #[test]
+    fn general_resources_use_names_without_units() {
+        let mut p = Project::new("Res", ymd(2026, 12, 7).unwrap());
+        let t = p.add_task("Task", None);
+        let r = p.add_resource("Ana");
+        p.assign(t, r, Some(0.5), None).unwrap();
+        recalculate(&mut p);
+        let snap = snapshot(&p, &[t]);
+        assert_eq!(snap.resources.as_deref(), Some("Ana"));
+        assert!(!snap.resources.as_deref().unwrap_or("").contains('%'));
+        assert_eq!(p.format_resource_units(t), "50%");
+    }
+
+    #[test]
+    fn toggling_assignment_preserves_existing_units() {
+        let mut p = Project::new("Units", ymd(2026, 12, 7).unwrap());
+        let t = p.add_task("Task", None);
+        let ana = p.add_resource("Ana");
+        let bob = p.add_resource("Bob");
+        p.assign(t, ana, Some(0.5), None).unwrap();
+        set_assigned(&mut p, &[t], bob, true).unwrap();
+        let ana_units = p.assignments_for_task(t).find(|a| a.resource == ana).map(|a| a.units);
+        assert_eq!(ana_units, Some(0.5));
+    }
+
+    #[test]
+    fn milestone_toggle_route_uses_canonical_op_and_undo_redo() {
+        let mut p = Project::new("Milestone", ymd(2026, 12, 7).unwrap());
+        let _g = p.add_task("Group", None);
+        let t = p.add_task("Task", None);
+        p.task_mut(t).unwrap().outline_level = 2;
+        p.task_mut(t).unwrap().duration = 2 * DAY;
+        p.set_duration_mode(t, DurationMode::Auto).unwrap();
+        recalculate(&mut p);
+        let mut doc = Document::new(1, p, None);
+
+        let _ = doc.edit("Milestone", |proj| set_milestones(proj, &[t], true)).unwrap();
+        let now = doc.project.task(t).unwrap();
+        assert!(now.is_milestone());
+        assert_eq!(now.duration, 0);
+        assert_eq!(now.duration_mode, DurationMode::Fixed);
+
+        assert!(doc.undo());
+        let now = doc.project.task(t).unwrap();
+        assert!(!now.is_milestone());
+        assert_eq!(now.duration_mode, DurationMode::Auto);
+
+        assert!(doc.redo());
+        let now = doc.project.task(t).unwrap();
+        assert!(now.is_milestone());
+        assert_eq!(now.duration_mode, DurationMode::Fixed);
+
+        let json = serde_json::to_string(&doc.project).unwrap();
+        let loaded: Project = serde_json::from_str(&json).unwrap();
+        let loaded = loaded.task(t).unwrap();
+        assert!(loaded.is_milestone());
+        assert_eq!(loaded.duration_mode, DurationMode::Fixed);
+    }
+
+    #[test]
+    fn legacy_derived_duration_is_shown_as_auto_mode() {
+        let mut p = Project::new("Legacy", ymd(2026, 12, 7).unwrap());
+        p.settings.rules.stretch = true;
+        let _g = p.add_task("Group", None);
+        let t = p.add_task("Task", None);
+        {
+            let row = p.task_mut(t).unwrap();
+            row.outline_level = 2;
+            row.duration = 3 * DAY;
+            row.fills_group = true;
+            row.duration_mode = DurationMode::Fixed;
+        }
+        recalculate(&mut p);
+        let snap = snapshot(&p, &[t]);
+        assert_eq!(snap.duration_mode, Some(DurationMode::Fixed));
+        assert_eq!(snap.duration_mode_effective, Some(DurationMode::Auto));
+        assert_eq!(snap.legacy_duration_derived, Some(true));
+    }
 }

@@ -17,6 +17,8 @@ pub struct MenuSnapshot {
     pub can_redo: bool,
     pub undo_label: Option<String>,
     pub task_selected: bool,
+    /// How many tasks are selected. Link needs at least two; Unlink may use one.
+    pub selected_task_count: usize,
     pub resource_selected: bool,
     pub has_clipboard: bool,
     pub view: ViewKind,
@@ -63,6 +65,7 @@ pub fn command_enabled(cmd: &Command, s: &MenuSnapshot) -> bool {
     let doc = s.document_actions_ok();
     let sel = doc && s.task_selected;
     let res = doc && s.resource_selected;
+    let linkable = doc && s.selected_task_count >= 2;
     match cmd {
         Command::NewProject | Command::NewDemo | Command::Open | Command::OpenFromServer | Command::ImportSpreadsheet => true,
         Command::OpenPath(_) => true,
@@ -94,7 +97,9 @@ pub fn command_enabled(cmd: &Command, s: &MenuSnapshot) -> bool {
                     ViewKind::ResourceSheet | ViewKind::ResourceUsage | ViewKind::Workload | ViewKind::TeamPlanner | ViewKind::Timesheet
                 ))
         }
-        Command::LinkSelected | Command::UnlinkSelected | Command::SetPercent(_) | Command::MarkOnTrack | Command::ToggleActive => sel,
+        // Link needs two or more selected tasks; Unlink may validly act on a single selection.
+        Command::LinkSelected => linkable,
+        Command::UnlinkSelected | Command::SetPercent(_) | Command::MarkOnTrack | Command::ToggleActive => sel,
         Command::SetMode(_) | Command::TaskInfo | Command::TaskNotes | Command::ToggleTimeline | Command::ScrollToTask => sel,
         Command::InsertTask
         | Command::InsertMilestone
@@ -227,6 +232,24 @@ pub fn shortcut_for(cmd: &Command) -> Option<KeyboardShortcut> {
 /// Portable label for a shortcut (`Cmd+S`), suitable for muda and egui `shortcut_text`.
 pub fn shortcut_label(cmd: &Command) -> Option<String> {
     portable_from_shortcut(shortcut_for(cmd)?)
+}
+
+/// Platform-facing hint for a portable chord (`Cmd+S` → `⌘S` on Mac, `Ctrl+S` on Windows/Linux).
+pub fn platform_shortcut_label(portable: &str, mac: bool) -> String {
+    crate::menu::model::Chord::parse(portable).map(|c| c.platform_label(mac)).unwrap_or_else(|| portable.to_string())
+}
+
+/// Tooltip body plus a platform shortcut when the command has one.
+pub fn tip_with_shortcut(cmd: &Command, description: &str, mac: bool) -> String {
+    match shortcut_label(cmd) {
+        Some(portable) => format!("{description} ({})", platform_shortcut_label(&portable, mac)),
+        None => description.to_string(),
+    }
+}
+
+/// Whether this host should show Mac-style shortcut glyphs.
+pub fn host_is_mac() -> bool {
+    cfg!(target_os = "macos")
 }
 
 fn portable_from_shortcut(sc: KeyboardShortcut) -> Option<String> {

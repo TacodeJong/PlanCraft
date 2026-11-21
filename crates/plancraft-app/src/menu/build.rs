@@ -2,7 +2,7 @@
 
 use crate::commands::Command;
 use crate::lang;
-use crate::state::ViewKind;
+use crate::state::{VIEW_MENU_GROUPS, ViewKind, view_menu_views};
 use crate::theme::ThemeChoice;
 
 use super::model::{APP_NAME, HIDE, Item, ItemKind, ItemRole, MINIMIZE, Menu, MenuBar, MenuRole, Node, Standard, take, tidy};
@@ -175,9 +175,17 @@ fn edit_menu(s: &MenuSnapshot) -> Vec<Node> {
 }
 
 fn view_menu(s: &MenuSnapshot) -> Vec<Node> {
+    // Flattened group order with separators between sections (no nested layers).
     let mut views = Vec::new();
-    for v in ViewKind::ALL {
-        views.push(item(s, &format!("view.set.{}", v.english()), Command::SetView(v), v.label()));
+    let mut flat = view_menu_views();
+    for (i, group) in VIEW_MENU_GROUPS.iter().enumerate() {
+        if i > 0 {
+            views.push(Node::Separator);
+        }
+        for _ in 0..group.views.len() {
+            let Some(v) = flat.next() else { break };
+            views.push(item(s, &format!("view.set.{}", v.english()), Command::SetView(v), v.label()));
+        }
     }
     let mut theme = Vec::new();
     for t in ThemeChoice::ALL {
@@ -195,7 +203,7 @@ fn view_menu(s: &MenuSnapshot) -> Vec<Node> {
     let appearance = Node::Submenu { label: "Appearance".into(), children: theme, role: Some(ItemRole::Appearance) };
     let language = Node::Submenu { label: lang::text("tb.language").into(), children: langs, role: Some(ItemRole::Language) };
     tidy(vec![
-        Node::Submenu { label: "Views".into(), children: views, role: None },
+        Node::Submenu { label: lang::text("view.views").into(), children: views, role: None },
         Node::Separator,
         item(s, "view.zoomIn", Command::ZoomIn, "Zoom In"),
         item(s, "view.zoomOut", Command::ZoomOut, "Zoom Out"),

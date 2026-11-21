@@ -806,6 +806,7 @@ impl Project {
                 if summary {
                     t.duration = t.sched.duration.clamp(0, MAX_MINUTES);
                 }
+                t.duration_mode = DurationMode::Fixed;
             }
             t.mode = mode;
         }
@@ -898,6 +899,98 @@ impl Project {
         Ok(())
     }
 
+    /// Sets a task's placement policy: only As Soon As Possible / As Late As Possible.
+    /// When switching away from a dated legacy constraint, keeps the effective windows by
+    /// absorbing them into date bounds first.
+    pub fn set_placement(&mut self, id: TaskId, kind: ConstraintKind) -> PlanResult<()> {
+        if !matches!(kind, ConstraintKind::Asap | ConstraintKind::Alap) {
+            return invalid("placement must be As Soon As Possible or As Late As Possible");
+        }
+        let idx = self.require_task(id)?;
+        if self.row(idx)?.mode == ScheduleMode::Manual {
+            return invalid("placement cannot be changed on a manually scheduled task");
+        }
+        let (constraint, modern_bounds, (start_min, start_max), (finish_min, finish_max)) = {
+            let t = self.row(idx)?;
+            (t.constraint, t.bounds, t.start_window(), t.finish_window())
+        };
+        let mut next_bounds = modern_bounds;
+        next_bounds.start_earliest = start_min;
+        next_bounds.start_latest = start_max;
+        next_bounds.finish_earliest = finish_min;
+        next_bounds.finish_latest = finish_max;
+        let date = constraint.date;
+        if let Some(date) = date {
+            match constraint.kind {
+                ConstraintKind::Snet => {
+                    next_bounds.start_earliest = Some(next_bounds.start_earliest.map_or(date, |d| d.max(date)));
+                }
+                ConstraintKind::Fnet => {
+                    next_bounds.finish_earliest = Some(next_bounds.finish_earliest.map_or(date, |d| d.max(date)));
+                }
+                ConstraintKind::Snlt => {
+                    if !modern_bounds.start_latest_fixed && modern_bounds.start_latest.is_some_and(|d| d != date) {
+                        return invalid(
+                            "cannot change placement: start no-later has overlapping legacy and modern dates that cannot be represented together",
+                        );
+                    }
+                    next_bounds.start_latest = Some(next_bounds.start_latest.map_or(date, |d| d.min(date)));
+                    next_bounds.start_latest_fixed = true;
+                }
+                ConstraintKind::Fnlt => {
+                    if !modern_bounds.finish_latest_fixed && modern_bounds.finish_latest.is_some_and(|d| d != date) {
+                        return invalid(
+                            "cannot change placement: finish no-later has overlapping legacy and modern dates that cannot be represented together",
+                        );
+                    }
+                    next_bounds.finish_latest = Some(next_bounds.finish_latest.map_or(date, |d| d.min(date)));
+                    next_bounds.finish_latest_fixed = true;
+                }
+                ConstraintKind::Mso => {
+                    if modern_bounds.start_earliest.is_some_and(|d| d != date) || modern_bounds.start_latest.is_some_and(|d| d != date) {
+                        return invalid(
+                            "cannot change placement: Must Start On overlaps with different modern start bounds and cannot be represented losslessly",
+                        );
+                    }
+                    next_bounds.start_earliest = Some(date);
+                    next_bounds.start_latest = Some(date);
+                    next_bounds.start_latest_fixed = true;
+                }
+                ConstraintKind::Mfo => {
+                    if modern_bounds.finish_earliest.is_some_and(|d| d != date) || modern_bounds.finish_latest.is_some_and(|d| d != date) {
+                        return invalid(
+                            "cannot change placement: Must Finish On overlaps with different modern finish bounds and cannot be represented losslessly",
+                        );
+                    }
+                    next_bounds.finish_earliest = Some(date);
+                    next_bounds.finish_latest = Some(date);
+                    next_bounds.finish_latest_fixed = true;
+                }
+                ConstraintKind::Asap | ConstraintKind::Alap => {}
+            }
+        }
+        if next_bounds.start_latest.is_none() {
+            next_bounds.start_latest_fixed = false;
+        }
+        if next_bounds.finish_latest.is_none() {
+            next_bounds.finish_latest_fixed = false;
+        }
+        let t = self.row_mut(idx)?;
+        t.bounds = next_bounds;
+        t.constraint = Constraint { kind, date: None };
+        Ok(())
+    }
+
+    /// Sets the leveling delay of one task, in working minutes.
+    pub fn set_leveling_delay(&mut self, id: TaskId, minutes: Minutes) -> PlanResult<()> {
+        if !(0..=MAX_MINUTES).contains(&minutes) {
+            return invalid("leveling delay must be between 0 and 5 years");
+        }
+        let idx = self.require_task(id)?;
+        self.row_mut(idx)?.leveling_delay = minutes;
+        Ok(())
+    }
+
     /// Sets a task's duration as typed: working or elapsed time (see [`TypedDuration`]). A
     /// summary task takes working time only.
     pub fn set_typed_duration(&mut self, id: TaskId, typed: TypedDuration) -> PlanResult<()> {
@@ -939,10 +1032,15 @@ impl Project {
         let task_type = t.task_type;
         t.duration = minutes;
         t.estimated = estimated;
+        // Typing a duration opts out of Auto: the stored value is the plan again.
+        if t.duration_mode == DurationMode::Auto {
+            t.duration_mode = DurationMode::Fixed;
+        }
         // A zero duration makes a milestone, whether the task is scheduled automatically or
         // manually (a summary, handled above, never becomes one).
         if minutes == 0 && t.kind == TaskKind::Task {
             t.kind = TaskKind::Milestone;
+            t.duration_mode = DurationMode::Fixed;
         } else if minutes > 0 && t.kind == TaskKind::Milestone && t.members.is_empty() {
             t.kind = TaskKind::Task;
         }
@@ -964,6 +1062,51 @@ impl Project {
         Ok(())
     }
 
+    /// Why [`DurationMode::Auto`] cannot be set on this task, if any. `None` means Auto is allowed.
+    pub fn auto_duration_block_reason(&self, id: TaskId) -> Option<&'static str> {
+        let idx = self.task_index(id)?;
+        let t = self.tasks.get(idx)?;
+        if self.has_children(idx) {
+            return Some("a group's duration comes from its subtasks");
+        }
+        if t.is_milestone() {
+            return Some("a milestone has no duration to calculate");
+        }
+        if t.mode == ScheduleMode::Manual {
+            return Some("a manually scheduled task keeps a fixed duration");
+        }
+        if crate::schedule::parents(self).get(idx).copied().flatten().is_none() {
+            return Some("auto duration needs a parent group");
+        }
+        None
+    }
+
+    /// Sets Fixed vs Auto duration. Auto is a per-task opt-in; it does not enable project-wide
+    /// stretch/span rules. Switching back to Fixed restores the stored duration as the plan.
+    pub fn set_duration_mode(&mut self, id: TaskId, mode: DurationMode) -> PlanResult<()> {
+        let idx = self.require_task(id)?;
+        if mode == DurationMode::Auto
+            && let Some(why) = self.auto_duration_block_reason(id)
+        {
+            return invalid(why);
+        }
+        let t = self.row_mut(idx)?;
+        t.duration_mode = mode;
+        match mode {
+            DurationMode::Auto => {
+                // Percent-of-group and Auto both size duration; picking Auto clears the percent.
+                t.duration_percent = None;
+            }
+            DurationMode::Fixed => {
+                // Explicit Fixed opts this task out of legacy share sizing while keeping project
+                // rules unchanged for other tasks.
+                t.fills_group = false;
+                t.duration_percent = None;
+            }
+        }
+        Ok(())
+    }
+
     /// Converts a task into a milestone or back.
     pub fn set_milestone(&mut self, id: TaskId, milestone: bool) -> PlanResult<()> {
         let idx = self.require_task(id)?;
@@ -976,6 +1119,7 @@ impl Project {
             t.kind = TaskKind::Milestone;
             t.duration = 0;
             t.estimated = false;
+            t.duration_mode = DurationMode::Fixed;
         } else {
             t.kind = TaskKind::Task;
             if t.duration == 0 {

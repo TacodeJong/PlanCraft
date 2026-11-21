@@ -23,12 +23,13 @@ pub enum Field {
 }
 
 /// Built-in columns and their keys (as saved in table layouts). Keys never change.
-const BUILTIN: [(TaskCol, &str); 58] = [
+const BUILTIN: [(TaskCol, &str); 59] = [
     (TaskCol::Indicators, "indicators"),
     (TaskCol::Mode, "mode"),
     (TaskCol::Wbs, "wbs"),
     (TaskCol::Name, "name"),
     (TaskCol::Duration, "duration"),
+    (TaskCol::LevelingDelay, "leveling_delay"),
     (TaskCol::Start, "start"),
     (TaskCol::Finish, "finish"),
     (TaskCol::Predecessors, "predecessors"),
@@ -233,6 +234,7 @@ impl Field {
             Wbs => num(idx as f64),
             UniqueId => num(f64::from(t.id.0)),
             Duration => mins(s.duration),
+            LevelingDelay => mins(t.leveling_delay.max(0)),
             Start | EarlyStart => time(s.start),
             Finish | EarlyFinish => time(s.finish),
             LateStart => time(s.late_start),
@@ -333,11 +335,12 @@ fn generated_from_key(key: &str) -> Option<TaskCol> {
 
 /// Columns the chooser offers beyond a table's own layout: cheap, commonly wanted singles
 /// (the Swift app's inspector offers these too).
-const CHOOSER_EXTRAS: [TaskCol; 10] = [
+const CHOOSER_EXTRAS: [TaskCol; 11] = [
     TaskCol::Wbs,
     TaskCol::Status,
     TaskCol::RowMark,
     TaskCol::PercentComplete,
+    TaskCol::LevelingDelay,
     TaskCol::Resources,
     TaskCol::Units,
     TaskCol::Work,
@@ -457,6 +460,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn leveling_delay_key_round_trips_and_defaults_include_it() {
+        let p = plancraft_core::sample::demo_project(plancraft_core::dates::ymd(2026, 10, 19).unwrap());
+        let delay = Field::from_key(&p, "leveling_delay").expect("built-in key should resolve");
+        assert_eq!(delay.key(), "leveling_delay");
+
+        for table in [TaskTable::Entry, TaskTable::Schedule, TaskTable::Details] {
+            let keys: Vec<String> = table_fields(&p, table).into_iter().map(|f| f.key()).collect();
+            assert!(keys.iter().any(|k| k == "leveling_delay"), "{table:?} defaults should expose leveling_delay");
+        }
+    }
+
     /// Regression: a saved layout naming only unknown columns (a crafted or newer file) gave the
     /// table no columns at all, and the grid's cursor maths panicked on it.
     #[test]
@@ -519,5 +534,24 @@ mod tests {
         let mut keys = [SortKey::Missing, SortKey::Text("b".into()), SortKey::Num(2.0), SortKey::Text("a".into()), SortKey::Num(-1.0)];
         keys.sort_by(SortKey::cmp);
         assert_eq!(keys, [SortKey::Num(-1.0), SortKey::Num(2.0), SortKey::Text("a".into()), SortKey::Text("b".into()), SortKey::Missing]);
+    }
+
+    #[test]
+    fn leveling_delay_sort_key_is_numeric_minutes() {
+        let mut p = Project::new("Sort", plancraft_core::dates::ymd(2026, 10, 19).unwrap());
+        let a = p.add_task("A", None);
+        let b = p.add_task("B", None);
+        let c = p.add_task("C", None);
+        p.task_mut(a).expect("task a").leveling_delay = 12 * 480;
+        p.task_mut(b).expect("task b").leveling_delay = 0;
+        p.task_mut(c).expect("task c").leveling_delay = 2 * 480;
+
+        let f = Field::from_key(&p, "leveling_delay").expect("delay field");
+        let mut rows = [(0usize, f.sort_key(&p, 0)), (1usize, f.sort_key(&p, 1)), (2usize, f.sort_key(&p, 2))];
+        rows.sort_by(|(_, a), (_, b)| a.cmp(b));
+
+        assert_eq!(rows[0].0, p.task_index(b).expect("b index"));
+        assert_eq!(rows[1].0, p.task_index(c).expect("c index"));
+        assert_eq!(rows[2].0, p.task_index(a).expect("a index"));
     }
 }

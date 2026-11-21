@@ -295,6 +295,7 @@ enum Op {
     Link(usize, usize, usize, i64),
     Unlink(usize),
     Duration(usize, i64),
+    DurationMode(usize, bool),
     Percent(usize, u8),
     Assign(usize, usize, f64, Option<i64>),
     Unassign(usize),
@@ -355,6 +356,7 @@ fn edit_op() -> impl Strategy<Value = Op> {
         (i(), i(), 0usize..4, big()).prop_map(|(a, b, k, l)| Op::Link(a, b, k, l)),
         i().prop_map(Op::Unlink),
         (i(), big()).prop_map(|(a, d)| Op::Duration(a, d)),
+        (i(), any::<bool>()).prop_map(|(a, automatic)| Op::DurationMode(a, automatic)),
         (i(), any::<u8>()).prop_map(|(a, p)| Op::Percent(a, p)),
         (i(), 0usize..12, units(), prop::option::of(big())).prop_map(|(a, r, u, w)| Op::Assign(a, r, u, w)),
         i().prop_map(Op::Unassign),
@@ -485,6 +487,9 @@ fn apply(p: &mut Project, op: &Op) -> PlanResult<()> {
         Op::Link(a, b, k, lag) => p.link(task_at(p, a).into(), task_at(p, b), LinkType::ALL[k], Lag::Working(lag))?,
         Op::Unlink(i) => p.unlink_tasks(&[task_at(p, i)]),
         Op::Duration(i, d) => p.set_duration(task_at(p, i), d, false)?,
+        Op::DurationMode(i, automatic) => {
+            p.set_duration_mode(task_at(p, i), if automatic { DurationMode::Auto } else { DurationMode::Fixed })?;
+        }
         Op::Percent(i, pct) => p.set_percent_complete(task_at(p, i), pct)?,
         Op::Assign(i, r, u, w) => {
             let rid = p.resources.get(r % p.resources.len().max(1)).map_or(ResourceId(999), |r| r.id);

@@ -8,6 +8,7 @@ use plancraft_core::workspace::Document;
 use crate::edit::EditExt;
 use crate::format;
 use crate::theme;
+use crate::views::properties::effective_duration_mode_for_ui;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -64,6 +65,7 @@ pub struct TaskInfo {
     tab: Tab,
     name: String,
     duration: String,
+    duration_mode: DurationMode,
     estimated: bool,
     percent: String,
     status: Option<TaskStatus>,
@@ -151,6 +153,7 @@ impl TaskInfo {
             tab: if notes_tab { Tab::Notes } else { Tab::General },
             name: t.name.clone(),
             duration: p.format_task_minutes(t, t.sched.duration, t.estimated),
+            duration_mode: effective_duration_mode_for_ui(p, id, t).0,
             estimated: t.estimated,
             percent: format!("{}", t.percent_complete),
             status: Some(t.status),
@@ -324,6 +327,7 @@ impl TaskInfo {
             changed!(
                 name,
                 duration,
+                duration_mode,
                 estimated,
                 percent,
                 status,
@@ -570,6 +574,10 @@ impl TaskInfo {
             if self.milestone != o.milestone {
                 p.set_milestone(id, self.milestone).map_err(err)?;
             }
+            // Duration mode before a typed duration: typing opts out of Auto via set_duration.
+            if !self.milestone && self.duration_mode != o.duration_mode {
+                p.set_duration_mode(id, self.duration_mode).map_err(err)?;
+            }
             if !self.milestone && (self.duration != o.duration || self.estimated != o.estimated) {
                 let typed = p.parse_task_duration(&self.duration).ok_or_else(|| format!("'{}' is not a valid duration", self.duration))?;
                 // The duration text shows "?" for an estimated task: unless it was edited, the box
@@ -757,11 +765,35 @@ impl TaskInfo {
                 ui.horizontal(|ui| {
                     ui.label("Name:");
                     ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(320.0));
+                    ui.label(crate::lang::text("prop.duration_mode"));
+                    let mode_editable = !self.summary && !self.milestone;
+                    ui.add_enabled_ui(mode_editable, |ui| {
+                        let label = match self.duration_mode {
+                            DurationMode::Fixed => crate::lang::text("prop.duration_fixed"),
+                            DurationMode::Auto => crate::lang::text("prop.duration_auto"),
+                        };
+                        egui::ComboBox::from_id_salt("ti_dur_mode").selected_text(label).show_ui(ui, |ui| {
+                            for mode in DurationMode::ALL {
+                                let text = match mode {
+                                    DurationMode::Fixed => crate::lang::text("prop.duration_fixed"),
+                                    DurationMode::Auto => crate::lang::text("prop.duration_auto"),
+                                };
+                                ui.selectable_value(&mut self.duration_mode, mode, text);
+                            }
+                        });
+                    });
                     ui.label("Duration:");
                     // Several tasks: each milestone or summary among them keeps its own duration.
-                    let duration_editable = if self.is_multi() { !self.summary } else { !self.milestone && !self.summary };
-                    ui.add_enabled(duration_editable, egui::TextEdit::singleline(&mut self.duration).desired_width(80.0));
-                    ui.checkbox(&mut self.estimated, "Estimated");
+                    // Auto duration is calculated and read-only until Fixed is selected again.
+                    let duration_editable = if self.is_multi() {
+                        !self.summary && self.duration_mode == DurationMode::Fixed
+                    } else {
+                        !self.milestone && !self.summary && self.duration_mode == DurationMode::Fixed
+                    };
+                    ui.add_enabled(duration_editable, egui::TextEdit::singleline(&mut self.duration).desired_width(80.0)).on_hover_text(
+                        if self.duration_mode == DurationMode::Auto { crate::lang::text("prop.duration_auto_hint") } else { "" },
+                    );
+                    ui.add_enabled(duration_editable, egui::Checkbox::new(&mut self.estimated, "Estimated"));
                 });
                 ui.add_space(4.0);
                 if self.is_multi() {
@@ -1617,9 +1649,63 @@ fn pick_date_iso(ui: &mut egui::Ui, p: &Project, salt: &str, text: &mut String, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use plancraft_core::dates::{DateExt, ymd};
+
+    const DAY: Minutes = 480;
 
     fn demo() -> Project {
         plancraft_core::sample::demo_project(plancraft_core::dates::ymd(2026, 10, 19).unwrap())
+    }
+
+    #[derive(Clone, Copy)]
+    enum LegacyDurationKind {
+        Stretch,
+        Percent,
+    }
+
+    fn legacy_duration_project(kind: LegacyDurationKind) -> (Project, TaskId) {
+        let mut p = Project::new("Legacy", ymd(2026, 12, 7).unwrap());
+        p.settings.rules.stretch = matches!(kind, LegacyDurationKind::Stretch);
+        p.settings.rules.span = matches!(kind, LegacyDurationKind::Percent);
+        let _g = p.add_task("Group", None);
+        let pred = p.add_task("Predecessor", None);
+        let prep = p.add_task("Preparation", None);
+        let send = p.add_task("Send", None);
+        for id in [pred, prep, send] {
+            p.task_mut(id).unwrap().outline_level = 2;
+        }
+        {
+            let t = p.task_mut(pred).unwrap();
+            t.kind = TaskKind::Milestone;
+            t.duration = 0;
+            t.estimated = false;
+            t.constraint = Constraint { kind: ConstraintKind::Mso, date: Some(ymd(2026, 12, 8).unwrap().and_hms_opt(17, 0, 0).unwrap()) };
+        }
+        {
+            let t = p.task_mut(prep).unwrap();
+            t.duration = 5 * DAY;
+            t.estimated = false;
+            t.duration_mode = DurationMode::Fixed;
+            match kind {
+                LegacyDurationKind::Stretch => {
+                    t.fills_group = true;
+                }
+                LegacyDurationKind::Percent => {
+                    t.duration_percent = Some(50.0);
+                }
+            }
+        }
+        {
+            let t = p.task_mut(send).unwrap();
+            t.duration = DAY;
+            t.estimated = false;
+            t.bounds.finish_latest = Some(ymd(2026, 12, 11).unwrap().and_hms_opt(17, 0, 0).unwrap());
+            t.bounds.finish_latest_fixed = true;
+        }
+        p.link(pred.into(), prep, LinkType::FS, Lag::None).unwrap();
+        p.link(prep.into(), send, LinkType::FS, Lag::None).unwrap();
+        plancraft_core::schedule::recalculate(&mut p);
+        (p, prep)
     }
 
     /// Regression: OK wrote every field back as the dialog opened, undoing what an agent changed
@@ -1652,6 +1738,49 @@ mod tests {
         assert_eq!(t.percent_complete, 30);
         assert!(t.predecessors.is_empty(), "the agent's unlink stays, not {pred:?}");
         assert_eq!(t.priority, 900);
+    }
+
+    #[test]
+    fn task_info_opens_legacy_duration_tasks_as_auto() {
+        for kind in [LegacyDurationKind::Stretch, LegacyDurationKind::Percent] {
+            let (p, id) = legacy_duration_project(kind);
+            let info = TaskInfo::new(&p, id, false).expect("task info opens");
+            assert_eq!(info.duration_mode, DurationMode::Auto);
+            let task = p.task(id).expect("task exists");
+            match kind {
+                LegacyDurationKind::Stretch => assert!(task.fills_group),
+                LegacyDurationKind::Percent => assert!(task.duration_percent.is_some()),
+            }
+        }
+    }
+
+    #[test]
+    fn task_info_apply_preserves_legacy_duration_flags_until_fixed_is_selected() {
+        for kind in [LegacyDurationKind::Stretch, LegacyDurationKind::Percent] {
+            let (mut p, id) = legacy_duration_project(kind);
+            let mut info = TaskInfo::new(&p, id, false).expect("task info opens");
+            info.notes.push_str(" changed");
+            info.apply(&mut p).expect("noop save applies");
+            let task = p.task(id).expect("task exists");
+            assert_eq!(task.duration_mode, DurationMode::Fixed);
+            match kind {
+                LegacyDurationKind::Stretch => assert!(task.fills_group),
+                LegacyDurationKind::Percent => assert!(task.duration_percent.is_some()),
+            }
+
+            let (mut p, id) = legacy_duration_project(kind);
+            let mut info = TaskInfo::new(&p, id, false).expect("task info opens");
+            info.duration_mode = DurationMode::Fixed;
+            info.apply(&mut p).expect("fixed selection applies");
+            let task = p.task(id).expect("task exists");
+            assert_eq!(task.duration_mode, DurationMode::Fixed);
+            match kind {
+                LegacyDurationKind::Stretch => assert!(!task.fills_group),
+                LegacyDurationKind::Percent => assert!(task.duration_percent.is_none()),
+            }
+            assert_eq!(p.settings.rules.stretch, matches!(kind, LegacyDurationKind::Stretch));
+            assert_eq!(p.settings.rules.span, matches!(kind, LegacyDurationKind::Percent));
+        }
     }
 
     /// Multiple Task Information: fields that differ start empty, and only the fields changed are

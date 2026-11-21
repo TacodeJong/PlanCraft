@@ -59,6 +59,27 @@ fn same(a: &Project, b: &Project) -> bool {
 }
 
 #[test]
+fn duration_mode_survives_shared_wire_changes_and_reversion() {
+    use crate::model::DurationMode;
+    let before = plan();
+    let id = before.tasks.iter().find(|t| before.auto_duration_block_reason(t.id).is_none()).unwrap().id;
+    let mut after = before.clone();
+    after.set_duration_mode(id, DurationMode::Auto).unwrap();
+    recalculate(&mut after);
+    assert_eq!(task(&before, id).duration_mode, DurationMode::Fixed);
+    let patch = diff(&before, &after).unwrap();
+    let wire = serde_json::to_string(&patch).unwrap();
+    let received: Patch = serde_json::from_str(&wire).unwrap();
+    let rebuilt = apply(&before, &received).unwrap();
+    assert_eq!(task(&rebuilt, id).duration_mode, DurationMode::Auto);
+    assert_eq!(rebuilt.settings.rules, before.settings.rules);
+    assert!(same(&rebuilt, &after));
+    let reverted = apply(&rebuilt, &diff(&after, &before).unwrap()).unwrap();
+    assert_eq!(task(&reverted, id).duration_mode, DurationMode::Fixed);
+    assert!(same(&reverted, &before));
+}
+
+#[test]
 fn applying_the_difference_gives_back_the_changed_plan() {
     let before = plan();
     let mut after = before.clone();

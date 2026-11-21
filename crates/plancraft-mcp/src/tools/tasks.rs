@@ -40,6 +40,7 @@ pub fn tools() -> Vec<Tool> {
                     "children": { "type": "array", "items": { "type": "object" }, "description": "Nested subtasks (same item format)." },
                     "level": { "type": "integer", "description": "Relative outline level (1 = top of batch) for flat lists instead of 'children'." },
                     "duration": { "type": ["string", "number"] },
+                    "leveling_delay": { "type": ["string", "number"] },
                     "predecessors": { "type": ["array", "string"], "description": "Like create_task; may use batch keys." },
                     "resources": { "type": ["string", "array"], "description": "Text like \"Ana[50%], Bob\" or an array of names/ids/{resource, units}. Unknown names create resources." },
                     "milestone": { "type": "boolean" },
@@ -108,7 +109,20 @@ pub fn tools() -> Vec<Tool> {
             "Update many tasks",
             "Apply updates to several tasks in one call (one undo step). Each item is {\"task\": id, ...any update_task fields}.",
             schema(
-                json!({ "updates": { "type": "array", "items": { "type": "object", "properties": { "task": { "type": ["integer", "string"] } }, "required": ["task"] }, "description": "List of {\"task\": id, ...any update_task fields}." } }),
+                json!({
+                    "updates": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "task": { "type": ["integer", "string"] },
+                                "leveling_delay": { "type": ["string", "number"] }
+                            },
+                            "required": ["task"]
+                        },
+                        "description": "List of {\"task\": id, ...any update_task fields}."
+                    }
+                }),
                 &["updates"],
             ),
             update_tasks,
@@ -328,6 +342,10 @@ pub fn apply_task_fields(p: &mut Project, id: TaskId, a: &Args) -> ToolResult<()
     } else if let Some(e) = a.bool("estimated")? {
         let i = idx_of(p, id)?;
         row_mut(p, i)?.estimated = e;
+    }
+    if let Some(v) = a.get("leveling_delay") {
+        let minutes = parse_leveling_delay_value(p, v, "leveling_delay")?;
+        p.set_leveling_delay(id, minutes)?;
     }
     {
         let i = idx_of(p, id)?;

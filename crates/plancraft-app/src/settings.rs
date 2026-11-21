@@ -179,7 +179,7 @@ pub struct AppSettings {
     pub servers: Vec<KnownServer>,
     /// Task table columns switched on or off per table, by the table's label.
     pub columns: std::collections::HashMap<String, ColumnChoice>,
-    /// The Q/M/D timescale preset last chosen in the View toolbar.
+    /// The Q/M/W/D timescale preset last chosen in the View toolbar.
     #[serde(default)]
     pub timescale: crate::state::Timescale,
 }
@@ -372,6 +372,24 @@ mod tests {
         assert_eq!((s.mcp_port, s.table_width), (7878, 720.0));
         std::fs::write(&path, vec![b' '; (MAX_SETTINGS_BYTES + 1) as usize]).unwrap();
         assert_eq!(AppSettings::load_from(&path).mcp_port, 7878);
+    }
+
+    #[test]
+    fn timescale_serde_keeps_legacy_strings_and_accepts_week() {
+        use crate::state::Timescale;
+        for (raw, want) in [
+            (r#""quarter""#, Timescale::Quarter),
+            (r#""month""#, Timescale::Month),
+            (r#""day""#, Timescale::Day),
+            (r#""week""#, Timescale::Week),
+        ] {
+            assert_eq!(serde_json::from_str::<Timescale>(raw).unwrap(), want, "{raw}");
+        }
+        assert_eq!(serde_json::to_string(&Timescale::Week).unwrap(), r#""week""#);
+        let s: AppSettings = serde_json::from_str(r#"{"timescale":"week"}"#).unwrap();
+        assert_eq!(s.timescale, Timescale::Week);
+        let legacy: AppSettings = serde_json::from_str(r#"{"timescale":"quarter"}"#).unwrap();
+        assert_eq!(legacy.timescale, Timescale::Quarter);
     }
 
     #[test]

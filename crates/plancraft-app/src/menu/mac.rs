@@ -35,6 +35,9 @@ struct Chosen {
 }
 
 pub struct MacMenu {
+    /// When set, never touch AppKit/muda. Used by `cfg(test)` off-main harness installs so
+    /// `NativeMenu` stays active (Mac layout, no in-window menu row) without OS menu calls.
+    headless: bool,
     menu: Option<Menu>,
     entries: HashMap<String, Entry>,
     rx: Receiver<Chosen>,
@@ -44,6 +47,10 @@ pub struct MacMenu {
 
 impl MacMenu {
     pub fn try_install(ctx: &egui::Context) -> Option<Self> {
+        // AppKit/muda require the process main thread. Refuse before any muda call.
+        if MainThreadMarker::new().is_none() {
+            return Self::off_main(ctx);
+        }
         // Never crash for a menu: if AppKit refuses, the in-window row is the fallback.
         let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let (tx, rx) = channel();
@@ -62,7 +69,7 @@ impl MacMenu {
                 let _ = tx.send(Chosen { id: e.id.0.clone(), key, mods });
                 repaint.request_repaint();
             }));
-            MacMenu { menu: None, entries: HashMap::new(), rx, structure: 0, window: None }
+            MacMenu { headless: false, menu: None, entries: HashMap::new(), rx, structure: 0, window: None }
         }));
         match built {
             Ok(menu) => Some(menu),
@@ -73,7 +80,25 @@ impl MacMenu {
         }
     }
 
+    /// Off the AppKit main thread: production refuses; tests get an inert handle for the harness.
+    fn off_main(ctx: &egui::Context) -> Option<Self> {
+        let _ = ctx;
+        #[cfg(test)]
+        {
+            let (_tx, rx) = channel();
+            Some(MacMenu { headless: true, menu: None, entries: HashMap::new(), rx, structure: 0, window: None })
+        }
+        #[cfg(not(test))]
+        {
+            eprintln!("plancraft: could not install the macOS menu bar; using the in-window menus");
+            None
+        }
+    }
+
     pub fn sync(&mut self, bar: &MenuBar) {
+        if self.headless || MainThreadMarker::new().is_none() {
+            return;
+        }
         if self.menu.is_none() || structure_key(bar) != self.structure {
             self.build(bar);
             return;
@@ -109,6 +134,9 @@ impl MacMenu {
     }
 
     pub fn drain(&mut self) -> Vec<NativeEvent> {
+        if self.headless {
+            return Vec::new();
+        }
         let mut out = Vec::new();
         while let Ok(chosen) = self.rx.try_recv() {
             let Some(e) = self.entries.get(&chosen.id) else { continue };
@@ -139,6 +167,9 @@ impl MacMenu {
     }
 
     fn build(&mut self, bar: &MenuBar) {
+        if self.headless || MainThreadMarker::new().is_none() {
+            return;
+        }
         if let Some(old) = self.menu.take() {
             old.remove_for_nsapp();
         }
@@ -168,6 +199,9 @@ impl MacMenu {
     }
 
     fn rebuild_window(&mut self, bar: &MenuBar) {
+        if self.headless || MainThreadMarker::new().is_none() {
+            return;
+        }
         let (Some(menu), Some((old, ids, _))) = (self.menu.clone(), self.window.take()) else {
             return self.build(bar);
         };
@@ -340,4 +374,30 @@ fn accelerator(c: &Chord) -> Option<Accelerator> {
         },
     };
     Some(Accelerator::new(mods, code))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::menu::model::MenuBar;
+
+    /// egui_kittest drives PlanCraftApp on a worker; muda/AppKit must never be touched there.
+    /// Under `cfg(test)` off-main install is an inert MacMenu (keeps native layout / no in-window row).
+    #[test]
+    fn off_main_worker_install_is_inert_sync_drain_safe() {
+        let (done_tx, done_rx) = channel();
+        std::thread::spawn(move || {
+            assert!(MainThreadMarker::new().is_none(), "worker must be off the AppKit main thread");
+            let ctx = egui::Context::default();
+            let mut menu = MacMenu::try_install(&ctx).expect("cfg(test) off-main supplies inert MacMenu");
+            assert!(menu.headless, "off-main test install must be headless (no OS menu)");
+            let bar = MenuBar::default();
+            for _ in 0..8 {
+                menu.sync(&bar);
+                assert!(menu.drain().is_empty(), "inert drain yields no events");
+            }
+            let _ = done_tx.send(());
+        });
+        done_rx.recv_timeout(std::time::Duration::from_secs(5)).expect("worker finished without panic");
+    }
 }

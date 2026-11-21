@@ -19,12 +19,7 @@ pub fn task(ui: &mut Ui, rect: Rect, p: &Project, st: &mut UiState) -> Rect {
         ui.add_space(8.0);
         ui.label(RichText::new(st.t("bar.filters")).strong().color(theme::pal().TEXT));
         let picked = p.tasks.iter().find(|t| st.sel.tasks.contains(&t.id)).map(|t| t.id);
-        if ui.add_enabled(picked.is_some(), egui::Button::new(st.t("filter.show_selection"))).clicked()
-            && let Some(task) = picked
-        {
-            let scope = st.focus.map(|f| f.scope).unwrap_or(FocusScope::Subtree);
-            st.focus = Some(ActivityFocus { task, scope });
-        }
+        // One context-sensitive control: Show selection when idle, Clear filter when focused.
         if let Some(focus) = st.focus {
             let name = p.task(focus.task).map(|t| t.name.as_str()).unwrap_or("—");
             ui.label(RichText::new(name).color(theme::pal().TEXT_WEAK));
@@ -35,9 +30,14 @@ pub fn task(ui: &mut Ui, rect: Rect, p: &Project, st: &mut UiState) -> Rect {
                     }
                 }
             });
+            // Always usable while focused — even if the current selection is empty.
             if ui.button(st.t("filter.clear_activity")).clicked() {
                 st.focus = None;
             }
+        } else if ui.add_enabled(picked.is_some(), egui::Button::new(st.t("filter.show_selection"))).clicked()
+            && let Some(task) = picked
+        {
+            st.focus = Some(ActivityFocus { task, scope: FocusScope::default() });
         }
         let status = st.status_filter.map(crate::lang::status_name).unwrap_or_else(|| st.t("filter.status_all"));
         egui::ComboBox::from_id_salt("filter_status").width(120.0).selected_text(status).show_ui(ui, |ui| {
@@ -129,7 +129,7 @@ pub fn task(ui: &mut Ui, rect: Rect, p: &Project, st: &mut UiState) -> Rect {
         if !q.is_empty() {
             ui.label(RichText::new(format!("“{q}”")).color(theme::pal().TEXT_WEAK));
         }
-        if super::criteria_active(st) && ui.button(st.t("filter.reset")).clicked() {
+        if st.focus.is_none() && super::criteria_active(st) && ui.button(st.t("filter.reset")).clicked() {
             st.focus = None;
             st.status_filter = None;
             st.kind_filter = TaskKindFilter::All;
@@ -202,6 +202,7 @@ pub fn overview(ui: &mut Ui, rect: Rect, p: &Project, st: &mut UiState, shown: u
     let (bar, rest) = split(rect);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(bar));
     child.painter().rect_filled(bar, 0.0, theme::pal().PANEL_BG);
+    child.painter().hline(bar.x_range(), bar.bottom() - 0.5, theme::hairline());
     child.horizontal(|ui| {
         ui.add_space(8.0);
         ui.label(RichText::new(st.t("bar.filters")).strong().color(theme::pal().TEXT));
@@ -218,7 +219,7 @@ pub fn overview(ui: &mut Ui, rect: Rect, p: &Project, st: &mut UiState, shown: u
             }
         });
         if shown != total {
-            ui.label(RichText::new(format!("{shown} {} {total}", st.t("bar.of"))).color(theme::pal().ACCENT));
+            ui.label(RichText::new(format!("{shown} {} {total}", st.t("bar.of"))).color(theme::pal().TEXT_WEAK));
         }
     });
     rest

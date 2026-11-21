@@ -142,7 +142,7 @@ pub enum Command {
     /// Highlight the selected task's predecessor and successor chain (Alt+Ctrl+L).
     ToggleHighlightPaths,
     History,
-    /// A Q/M/D chip in the View toolbar: zoom the charts and usage buckets to that tier.
+    /// A Q/M/W/D chip in the View toolbar: zoom the charts and usage buckets to that tier.
     SetTimescale(crate::state::Timescale),
     SetTheme(crate::theme::ThemeChoice),
     SetLang(crate::lang::Lang),

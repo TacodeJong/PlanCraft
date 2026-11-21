@@ -153,8 +153,11 @@ PlanCraft Server shares a folder of plans for several people to edit at once (op
 
 The desktop app uses egui and eframe 0.36 with the wgpu renderer.
 
+**Design reference:** the approved chrome is ArtCraft brutalist-dark (and its derived light). `docs/images/` documents the current app with generated demo-data captures; it is not an independent design target. Use the approved ArtCraft reference when restyling, not screenshots of an earlier build.
+
 - **`app`:** layout (title band, command bar, document tabs, status bar, vertical view label), keyboard shortcuts, command execution, dialogs, the unsaved-changes prompt, and agent-change detection.
-- **`menubar`:** the title band and the two-row command bar (a view selector spanning both rows, plain tabs with a File dropdown, and a single toolbar row).
+- **`menubar`:** the title band and the two-row command bar (a view selector spanning both rows, plain tabs, and a single ArtCraft toolbar row). Controls are 34 px high with wash hover/press; when the row cannot fit, overflow moves into a discoverable More menu (never a hidden scrollbar). Link enablement requires two selected tasks (shared with the native menu via `selected_task_count`). The Change-view picker and View ▸ Views share `state::VIEW_MENU_GROUPS` (Planning / Analysis & tracking / Reporting / Resources & work) with Overview first in Planning; `ViewKind::ALL` stays the enum scan order.
+- **`views/overview`:** ArtCraft agenda dashboard (Archivo heading, mono HUD section labels, square hairline panels, responsive KPI grid, day strip, overdue/today/week/upcoming lists). Counts and buckets come from `plancraft_core::agenda` / `report::status_moment`; the header labels status moment versus calendar today. Optional Open Gantt emits `Command::SetView` only.
 - **`start_page`:** the Start Page, a centered launcher with start actions, recent projects (with file dates) and a summary of the open project.
 - **`commands`:** the `Command` enum shared by the menu bar, toolbar, context menus and shortcuts.
 - **`widgets::grid`:** a virtualized spreadsheet grid with in-place text and choice editors, column resizing, keyboard navigation, and blank rows for entering new items.

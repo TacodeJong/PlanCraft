@@ -15,6 +15,7 @@ pub enum TaskCol {
     Wbs,
     Name,
     Duration,
+    LevelingDelay,
     Start,
     Finish,
     Predecessors,
@@ -168,10 +169,12 @@ impl TaskTable {
     pub fn columns(self) -> Vec<TaskCol> {
         use TaskCol::*;
         match self {
-            TaskTable::Entry => vec![Indicators, Mode, Name, Duration, Start, Finish, Predecessors, Resources],
+            TaskTable::Entry => vec![Indicators, Mode, Name, Duration, LevelingDelay, Start, Finish, Predecessors, Resources],
             TaskTable::Schedule => vec![
                 Indicators,
                 Name,
+                Duration,
+                LevelingDelay,
                 Start,
                 Finish,
                 LateStart,
@@ -215,7 +218,21 @@ impl TaskTable {
             ],
             TaskTable::Summary => vec![Indicators, Wbs, Name, Duration, Start, Finish, PercentComplete, Cost, Work, Milestones],
             TaskTable::Details => {
-                vec![Indicators, UniqueId, Name, TaskType, Priority, EarlyStart, EarlyFinish, Predecessors, Successors, Deliverable, Notes]
+                vec![
+                    Indicators,
+                    UniqueId,
+                    Name,
+                    TaskType,
+                    Duration,
+                    LevelingDelay,
+                    Priority,
+                    EarlyStart,
+                    EarlyFinish,
+                    Predecessors,
+                    Successors,
+                    Deliverable,
+                    Notes,
+                ]
             }
         }
     }
@@ -231,6 +248,11 @@ impl TaskCol {
             Wbs => ColumnDef::new(ct("col.wbs"), 50.0).read_only(),
             Name => ColumnDef::new(ct("col.name"), 230.0),
             Duration => ColumnDef::new(ct("col.duration"), 76.0).right(),
+            LevelingDelay => {
+                ColumnDef::new(ct("col.leveling_delay"), if crate::lang::current() == crate::lang::Lang::Nl { 176.0 } else { 116.0 })
+                    .right()
+                    .read_only()
+            }
             Start => ColumnDef::new(ct("col.start"), 96.0),
             Finish => ColumnDef::new(ct("col.finish"), 96.0),
             Predecessors => ColumnDef::new(ct("col.predecessors"), 96.0),
@@ -426,6 +448,7 @@ pub fn cell(col: TaskCol, p: &Project, idx: usize, ctx: &CellCtx) -> Cell {
             cell
         }
         Duration => Cell::text(p.format_task_duration(t)),
+        LevelingDelay => Cell::text(p.format_duration(t.leveling_delay.max(0), false)),
         Start => Cell { text: format::date(s.start), edit_text: Some(format::iso_date(s.start)), ..Default::default() },
         Finish => Cell { text: format::date(s.finish), edit_text: Some(format::iso_date(s.finish)), ..Default::default() },
         Predecessors => Cell::text(p.format_predecessors(t.id)),
@@ -914,5 +937,21 @@ mod tests {
         p.task_mut(id).unwrap().notes = "one line".into();
         commit(TaskCol::Notes, &mut p, id, "replaced").unwrap();
         assert_eq!(p.task(id).unwrap().notes, "replaced");
+    }
+
+    #[test]
+    fn leveling_delay_column_shows_zero_and_is_read_only() {
+        let mut p = Project::new("Delay", plancraft_core::dates::ymd(2026, 10, 19).unwrap());
+        let id = p.add_task("Task", None);
+        p.task_mut(id).unwrap().leveling_delay = 2 * 480;
+        plancraft_core::schedule::recalculate(&mut p);
+        let idx = p.task_index(id).unwrap();
+        let none = |_: TaskId| false;
+        let ctx = CellCtx { overallocated: &none, others_on: None };
+
+        assert_eq!(cell(TaskCol::LevelingDelay, &p, idx, &ctx).text, p.format_duration(2 * 480, false));
+        p.task_mut(id).unwrap().leveling_delay = 0;
+        assert_eq!(cell(TaskCol::LevelingDelay, &p, idx, &ctx).text, p.format_duration(0, false), "zero should stay explicit");
+        assert!(commit(TaskCol::LevelingDelay, &mut p, id, "3d").is_err(), "column is read-only in this scope");
     }
 }

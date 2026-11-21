@@ -76,6 +76,29 @@ pub enum TaskType {
     FixedWork,
 }
 
+/// Whether a leaf task keeps a typed duration or sizes itself from the available window.
+///
+/// Distinct from [`ScheduleMode`]: that chooses how *dates* are set; this chooses how *duration*
+/// is set. Default [`DurationMode::Fixed`] keeps old plans unchanged. [`DurationMode::Auto`] is a
+/// per-task opt-in that reuses group-share fill without turning on project-wide stretch rules.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DurationMode {
+    /// The stored duration is the plan (editable).
+    #[default]
+    Fixed,
+    /// Duration is calculated from the dependency/date window (read-only while Auto).
+    Auto,
+}
+
+impl DurationMode {
+    pub const ALL: [DurationMode; 2] = [DurationMode::Fixed, DurationMode::Auto];
+
+    fn is_fixed(&self) -> bool {
+        *self == DurationMode::Fixed
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum ConstraintKind {
@@ -598,6 +621,9 @@ pub struct Task {
     /// `groupShare`); any own date on either side keeps the stored duration instead.
     #[serde(default, skip_serializing_if = "is_false")]
     pub fills_group: bool,
+    /// Fixed (typed) vs Auto (window-calculated) duration. Absent on old files → Fixed.
+    #[serde(default, skip_serializing_if = "DurationMode::is_fixed")]
+    pub duration_mode: DurationMode,
     /// Duration as a percentage of the parent group's share. Used only while [`ScheduleRules::span`] is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_percent: Option<f64>,
@@ -765,6 +791,21 @@ impl Task {
         DateMode::of(min, max)
     }
 
+    /// Whether one side takes its date from dependencies/group rollup (`true`) or from its own
+    /// exact anchor (`false`).
+    ///
+    /// Only an `On` side is an exact anchor. Other modes (`No Earlier Than`, `No Later Than`,
+    /// `Between`) keep a bound/range while the side itself remains dynamic.
+    pub fn side_is_dynamic(&self, finish: bool) -> bool {
+        self.side_anchor(finish).is_none()
+    }
+
+    /// The exact anchor of one side (`On` mode), if any.
+    pub fn side_anchor(&self, finish: bool) -> Option<DateTime> {
+        let (min, max) = if finish { self.finish_window() } else { self.start_window() };
+        min.zip(max).and_then(|(a, b)| (a == b).then_some(a))
+    }
+
     pub fn new(id: TaskId, name: impl Into<String>, minutes_per_day: Minutes) -> Self {
         Self {
             id,
@@ -781,6 +822,7 @@ impl Task {
             constraint: Constraint::default(),
             bounds: DateBounds::default(),
             fills_group: false,
+            duration_mode: DurationMode::Fixed,
             duration_percent: None,
             deadline: None,
             calendar: None,

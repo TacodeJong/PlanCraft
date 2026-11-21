@@ -345,6 +345,29 @@ pub fn parse_task_duration_value(p: &Project, v: &Value, key: &str) -> ToolResul
     Ok(TypedDuration { minutes, estimated, elapsed: false })
 }
 
+/// Parses a leveling delay: working time only (no elapsed `ed`), and no estimated `?` marker.
+pub fn parse_leveling_delay_value(p: &Project, v: &Value, key: &str) -> ToolResult<Minutes> {
+    if let Value::String(s) = v
+        && let Some(typed) = p.parse_task_duration(s)
+    {
+        if typed.elapsed {
+            return err(format!("'{key}' is working time; elapsed values like \"3ed\" are not allowed"));
+        }
+        if typed.estimated {
+            return err(format!("'{key}' does not accept estimated durations (remove '?')"));
+        }
+        if typed.minutes < 0 {
+            return err(format!("'{key}' must not be negative"));
+        }
+        return Ok(typed.minutes);
+    }
+    let (minutes, estimated) = parse_duration_value(p, v, key)?;
+    if estimated {
+        return err(format!("'{key}' does not accept estimated durations (remove '?')"));
+    }
+    Ok(minutes)
+}
+
 /// Parses an amount of a task's own kind of time (actual or remaining duration): a number is
 /// days (elapsed days for an elapsed task), text is read by [`Project::parse_task_minutes`].
 pub fn parse_task_minutes_value(p: &Project, id: TaskId, v: &Value, key: &str) -> ToolResult<Minutes> {

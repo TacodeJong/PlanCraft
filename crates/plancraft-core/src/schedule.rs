@@ -34,7 +34,10 @@ enum PredSource {
     /// A leaf task index.
     Leaf(usize),
     /// A summary used as SS/SF predecessor: start = min of leaves' starts.
-    SummaryStart(Vec<usize>),
+    SummaryStart { leaves: Vec<usize>, starts: Vec<DateTime>, finishes: Vec<DateTime> },
+    /// A summary with one fixed side used as predecessor: one side is anchored, the other
+    /// still rolls up from its leaf descendants.
+    SummaryAnchored { leaves: Vec<usize>, anchor: DateTime, fixed_finish: bool, other_anchor: Option<DateTime> },
     /// Fixed dates of an external task.
     Fixed { start: DateTime, finish: DateTime, duration: Minutes },
 }
@@ -418,7 +421,26 @@ struct Engine<'a> {
 #[derive(Clone, Copy, Debug, Default)]
 struct Inherited {
     snet: Option<DateTime>,
+    finish_cap: Option<SummaryFinishCap>,
     deadline: Option<DateTime>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SummaryFinishCap {
+    date: DateTime,
+    source: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SummaryStartFloor {
+    date: DateTime,
+    source: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct SummaryAncestorLimits {
+    start_floor: Option<SummaryStartFloor>,
+    finish_cap: Option<SummaryFinishCap>,
 }
 
 /// Constraints a summary passes to its subtasks: its Start No Earlier Than date drives their
@@ -431,16 +453,45 @@ fn inherited_from_summaries(p: &Project, parent: &[Option<usize>], manual_summar
     for i in 0..p.tasks.len() {
         let Some(pi) = parent.get(i).copied().flatten() else { continue };
         let (Some(par), Some(up)) = (p.tasks.get(pi), out.get(pi).copied()) else { continue };
+        let (start_min, _) = par.start_window();
+        let (_, finish_max) = par.finish_window();
+        let finish_mode = par.finish_mode();
         // An inactive summary passes on what its own summaries set, not its own date or deadline.
-        let bound_snet = par.bounds.start_earliest.filter(|_| par.active);
-        let own_snet = match manual_summary.get(pi).copied().flatten() {
-            Some((start, _)) => par.active.then_some(start),
-            None => par.constraint.date.filter(|_| par.active && par.constraint.kind == ConstraintKind::Snet).max(bound_snet),
+        let own_snet = if par.active {
+            if let Some((start, _)) = manual_summary.get(pi).copied().flatten() {
+                Some(start)
+            } else {
+                // Earliest summary starts flow down to descendants; no-later starts do not.
+                start_min
+            }
+        } else {
+            None
         };
-        // An unfixed latest finish limits late dates the way a deadline does. A fixed one moves the plan instead.
-        let bound_deadline = par.bounds.finish_latest.filter(|_| par.active && !par.bounds.finish_latest_fixed);
+        // A fixed summary finish is a hard cap for its descendants.
+        let own_finish_cap = if par.active {
+            if manual_summary.get(pi).copied().flatten().is_some() {
+                // Legacy top-down planning keeps a manual summary's finish independent from its
+                // subtasks: overrun is shown on the summary rollup instead of moving descendants.
+                None
+            } else if let Some(anchor) = par.side_anchor(true) {
+                Some(SummaryFinishCap { date: anchor, source: pi })
+            } else if par.bounds.finish_latest_fixed {
+                finish_max.map(|date| SummaryFinishCap { date, source: pi })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        // An unfixed latest finish limits late dates the way a deadline does. A fixed one moves
+        // the plan instead. "On" remains an exact anchor (handled above), not a soft deadline.
+        let bound_deadline = if par.active && !par.bounds.finish_latest_fixed && finish_mode != DateMode::On { finish_max } else { None };
         let own_deadline = min_opt(par.deadline.filter(|_| par.active), bound_deadline);
-        let v = Inherited { snet: up.snet.max(own_snet), deadline: min_opt(up.deadline, own_deadline) };
+        let v = Inherited {
+            snet: up.snet.max(own_snet),
+            finish_cap: min_cap(up.finish_cap, own_finish_cap),
+            deadline: min_opt(up.deadline, own_deadline),
+        };
         if let Some(slot) = out.get_mut(i) {
             *slot = v;
         }
@@ -501,6 +552,92 @@ fn min_opt(a: Option<DateTime>, b: Option<DateTime>) -> Option<DateTime> {
     }
 }
 
+fn min_cap(a: Option<SummaryFinishCap>, b: Option<SummaryFinishCap>) -> Option<SummaryFinishCap> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(if x.date <= y.date { x } else { y }),
+        (x, None) => x,
+        (None, y) => y,
+    }
+}
+
+fn max_floor(a: Option<SummaryStartFloor>, b: Option<SummaryStartFloor>) -> Option<SummaryStartFloor> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(if x.date >= y.date { x } else { y }),
+        (x, None) => x,
+        (None, y) => y,
+    }
+}
+
+fn inherited_finish_cap_warning(p: &Project, cap: SummaryFinishCap) -> String {
+    let date = cap.date.format("%Y-%m-%d");
+    if let Some(group) = p.tasks.get(cap.source) {
+        return format!("Cannot finish by ancestor summary '{}' fixed finish date ({date})", group.name);
+    }
+    format!("Cannot finish by an ancestor summary's fixed finish date ({date})")
+}
+
+fn inherited_start_floor_warning(p: &Project, floor: SummaryStartFloor) -> String {
+    let date = floor.date.format("%Y-%m-%d");
+    if let Some(group) = p.tasks.get(floor.source) {
+        return format!("Cannot start before ancestor summary '{}' constrained start date ({date})", group.name);
+    }
+    format!("Cannot start before an ancestor summary's constrained start date ({date})")
+}
+
+fn own_hard_finish_pin(t: &Task) -> Option<DateTime> {
+    if t.bounds.finish_latest_fixed {
+        return t.finish_window().1;
+    }
+    if matches!(t.constraint.kind, ConstraintKind::Mfo | ConstraintKind::Fnlt) {
+        return t.constraint.date;
+    }
+    t.side_anchor(true)
+}
+
+fn summary_ancestor_limits(
+    p: &Project,
+    parent: &[Option<usize>],
+    manual_summary: &[Option<(DateTime, DateTime)>],
+) -> Vec<SummaryAncestorLimits> {
+    let mut out = vec![SummaryAncestorLimits::default(); p.tasks.len()];
+    for i in 0..p.tasks.len() {
+        let Some(pi) = parent.get(i).copied().flatten() else { continue };
+        let (Some(par), Some(up)) = (p.tasks.get(pi), out.get(pi).copied()) else { continue };
+        let (start_min, _) = par.start_window();
+        let (_, finish_max) = par.finish_window();
+        let own_start_floor = if par.active {
+            if let Some((start, _)) = manual_summary.get(pi).copied().flatten() {
+                Some(SummaryStartFloor { date: start, source: pi })
+            } else {
+                start_min.map(|date| SummaryStartFloor { date, source: pi })
+            }
+        } else {
+            None
+        };
+        let own_finish_cap = if par.active {
+            if manual_summary.get(pi).copied().flatten().is_some() {
+                None
+            } else if let Some(anchor) = par.side_anchor(true) {
+                Some(SummaryFinishCap { date: anchor, source: pi })
+            } else if par.bounds.finish_latest_fixed {
+                finish_max.map(|date| SummaryFinishCap { date, source: pi })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let v = SummaryAncestorLimits {
+            start_floor: max_floor(up.start_floor, own_start_floor),
+            finish_cap: min_cap(up.finish_cap, own_finish_cap),
+        };
+        if let Some(slot) = out.get_mut(i) {
+            *slot = v;
+        }
+    }
+    out
+}
+
 impl<'a> Engine<'a> {
     fn new(p: &'a Project) -> Self {
         let n = p.tasks.len();
@@ -555,6 +692,10 @@ impl<'a> Engine<'a> {
         self.inherited.get(i).copied().unwrap_or_default()
     }
 
+    fn inherited_finish_cap_warning(&self, cap: SummaryFinishCap) -> String {
+        inherited_finish_cap_warning(self.p, cap)
+    }
+
     /// Whether a backward-pass or slack calculation should follow `edge` from leaf `i`.
     ///
     /// An inactive successor does not affect how other tasks are scheduled. A link from a
@@ -567,7 +708,7 @@ impl<'a> Engine<'a> {
             return false;
         }
         match &edge.pred {
-            PredSource::SummaryStart(_) => {
+            PredSource::SummaryStart { .. } => {
                 let earliest = group_start.get(e).copied().flatten();
                 earliest.is_some() && self.date(i).es == earliest
             }
@@ -581,7 +722,9 @@ impl<'a> Engine<'a> {
         self.edges
             .iter()
             .map(|edge| match &edge.pred {
-                PredSource::SummaryStart(group) => group.iter().filter_map(|&g| self.date(g).es).min(),
+                PredSource::SummaryStart { leaves, starts, .. } => {
+                    leaves.iter().filter_map(|&g| self.date(g).es).chain(starts.iter().copied()).min()
+                }
                 _ => None,
             })
             .collect()
@@ -655,11 +798,41 @@ impl<'a> Engine<'a> {
                 }
                 let leaves = self.leaf_descendants(pi);
                 let pred_is_start = matches!(kind, LinkType::SS | LinkType::SF);
-                if !self.leaf(pi) && pred_is_start {
-                    vec![PredSource::SummaryStart(leaves)]
-                } else {
-                    leaves.into_iter().map(PredSource::Leaf).collect()
+                if !self.leaf(pi) {
+                    if let Some(anchor) = self.task(pi).and_then(|t| t.side_anchor(!pred_is_start)) {
+                        let other_anchor = self.task(pi).and_then(|t| t.side_anchor(pred_is_start));
+                        return vec![PredSource::SummaryAnchored { leaves, anchor, fixed_finish: !pred_is_start, other_anchor }];
+                    }
+                    if pred_is_start {
+                        let starts = self
+                            .p
+                            .descendants_range(pi)
+                            .filter_map(|i| self.task(i).filter(|t| !self.leaf(i) && t.active)?.side_anchor(false))
+                            .collect();
+                        let finishes = self
+                            .p
+                            .descendants_range(pi)
+                            .filter_map(|i| self.task(i).filter(|t| !self.leaf(i) && t.active)?.side_anchor(true))
+                            .collect();
+                        return vec![PredSource::SummaryStart { leaves, starts, finishes }];
+                    }
                 }
+                let mut sources: Vec<_> = leaves.into_iter().map(PredSource::Leaf).collect();
+                if !self.leaf(pi) {
+                    // A dynamic outer finish includes anchored inner groups, not just raw leaves.
+                    for i in self.p.descendants_range(pi) {
+                        let Some(group) = self.task(i).filter(|t| !self.leaf(i) && t.active) else { continue };
+                        if let Some(anchor) = group.side_anchor(true) {
+                            sources.push(PredSource::SummaryAnchored {
+                                leaves: self.leaf_descendants(i),
+                                anchor,
+                                fixed_finish: true,
+                                other_anchor: group.side_anchor(false),
+                            });
+                        }
+                    }
+                }
+                sources
             }
             TaskRef::External { project, task } => {
                 let snap = self.p.external(*project).and_then(|e| e.task(*task));
@@ -734,7 +907,8 @@ impl<'a> Engine<'a> {
                     let e = self.edges.len();
                     let preds: &[usize] = match &src {
                         PredSource::Leaf(pi) => std::slice::from_ref(pi),
-                        PredSource::SummaryStart(ls) => ls,
+                        PredSource::SummaryStart { leaves, .. } => leaves,
+                        PredSource::SummaryAnchored { leaves, .. } => leaves,
                         PredSource::Fixed { .. } => &[],
                     };
                     for pi in preds {
@@ -754,7 +928,8 @@ impl<'a> Engine<'a> {
     fn pred_count(edge: &Edge) -> usize {
         match &edge.pred {
             PredSource::Leaf(_) => 1,
-            PredSource::SummaryStart(v) => v.len(),
+            PredSource::SummaryStart { leaves, .. } => leaves.len(),
+            PredSource::SummaryAnchored { leaves, .. } => leaves.len(),
             PredSource::Fixed { .. } => 0,
         }
     }
@@ -814,10 +989,20 @@ impl<'a> Engine<'a> {
                 let d = self.date(*i);
                 Some((d.es?, d.ef?, self.duration_of(*i)))
             }
-            PredSource::SummaryStart(v) => {
-                let start = v.iter().filter_map(|i| self.date(*i).es).min()?;
-                let finish = v.iter().filter_map(|i| self.date(*i).ef).max()?;
+            PredSource::SummaryStart { leaves, starts, finishes } => {
+                let start = leaves.iter().filter_map(|i| self.date(*i).es).chain(starts.iter().copied()).min()?;
+                let finish = leaves.iter().filter_map(|i| self.date(*i).ef).chain(finishes.iter().copied()).max()?;
                 Some((start, finish, self.proj_cal.between(start, finish)))
+            }
+            PredSource::SummaryAnchored { leaves, anchor, fixed_finish, other_anchor } => {
+                let dyn_start = leaves.iter().filter_map(|i| self.date(*i).es).min().unwrap_or(*anchor);
+                let dyn_finish = leaves.iter().filter_map(|i| self.date(*i).ef).max().unwrap_or(*anchor);
+                let (start, finish) = if *fixed_finish {
+                    (other_anchor.unwrap_or(dyn_start), *anchor)
+                } else {
+                    (*anchor, other_anchor.unwrap_or(dyn_finish))
+                };
+                Some((start, finish, self.proj_cal.between(start, finish).max(0)))
             }
             PredSource::Fixed { start, finish, duration } => Some((*start, *finish, *duration)),
         }
@@ -888,12 +1073,20 @@ impl<'a> Engine<'a> {
                     },
                     _ => t.manual_finish.unwrap_or_else(from_start),
                 };
-                self.set_early(i, start, finish.max(start));
+                let finish = finish.max(start);
+                if warn
+                    && let Some(cap) = self.inherited(i).finish_cap
+                    && finish > cap.date
+                {
+                    self.warnings.push((Some(i), self.inherited_finish_cap_warning(cap)));
+                }
+                self.set_early(i, start, finish);
                 continue;
             }
 
             let mut es = project_start;
             let mut driven_by_link = false;
+            let inherited = self.inherited(i);
             for &e in self.incoming(i) {
                 let Some(edge) = self.edges.get(e) else { continue };
                 let Some((ps, pf, pdur)) = self.pred_dates(&edge.pred) else {
@@ -912,7 +1105,7 @@ impl<'a> Engine<'a> {
             }
 
             // A Start No Earlier Than date on a summary drives its subtasks' starts.
-            if let Some(snet) = self.inherited(i).snet {
+            if let Some(snet) = inherited.snet {
                 es = es.max(snet);
             }
 
@@ -961,6 +1154,22 @@ impl<'a> Engine<'a> {
                 es = es.max(*pin);
             }
 
+            let mut ancestor_cap_warned = false;
+            if let Some(cap) = inherited.finish_cap {
+                let latest_start = if dur > 0 { along(cap.date, false) } else { cap.date };
+                if es > latest_start {
+                    if warn {
+                        warnings.push(self.inherited_finish_cap_warning(cap));
+                        ancestor_cap_warned = true;
+                    }
+                    let keep_own_hard_finish = own_hard_finish_pin(t).is_some_and(|date| date > cap.date);
+                    if !keep_own_hard_finish {
+                        let floor = inherited.snet.max(t.bounds.start_earliest);
+                        es = floor.map_or(latest_start, |f| latest_start.max(f));
+                    }
+                }
+            }
+
             if t.leveling_delay > 0 {
                 es = cal.add(cal.snap_forward(es), t.leveling_delay);
             }
@@ -980,6 +1189,13 @@ impl<'a> Engine<'a> {
                     s = if dur > 0 { along(af, false) } else { af };
                 }
                 f = af.max(s);
+            }
+            if warn
+                && let Some(cap) = inherited.finish_cap
+                && f > cap.date
+                && !ancestor_cap_warned
+            {
+                warnings.push(self.inherited_finish_cap_warning(cap));
             }
             let segments: Vec<(DateTime, DateTime)> = match (parts, t.actual_start, t.actual_finish) {
                 (Some(pt), Some(a), _) if pt.split => {
@@ -1043,8 +1259,12 @@ impl<'a> Engine<'a> {
             let mut lf = project_finish.max(ef);
             // Deadlines (the task's own and its summaries') limit the late finish, so they
             // reduce total slack; they don't move the task.
-            if let Some(d) = min_opt(t.deadline, self.inherited(i).deadline) {
+            let inherited = self.inherited(i);
+            if let Some(d) = min_opt(t.deadline, inherited.deadline) {
                 lf = lf.min(d);
+            }
+            if let Some(cap) = inherited.finish_cap {
+                lf = lf.min(cap.date);
             }
             if let Some(d) = t.bounds.finish_latest {
                 lf = lf.min(d);
@@ -1279,7 +1499,7 @@ fn calculate(p: &mut Project) -> ScheduleReport {
     }
     rollup_tracking(p);
 
-    let share = if p.settings.rules.enabled() { crate::shares::resolve(p) } else { crate::shares::SharePlan::default() };
+    let share = if crate::shares::needed(p) { crate::shares::resolve(p) } else { crate::shares::SharePlan::default() };
 
     let (dates, eng_warnings, total_slack, free_slack, mut segments) = {
         let mut eng = Engine::new(p);
@@ -1363,6 +1583,15 @@ fn calculate(p: &mut Project) -> ScheduleReport {
     // Summaries' own fixed costs and assignments (active summaries only), counted once at the
     // project level on top of the leaves.
     let own = rollup_summaries(p, &share.group_min);
+    for (task_id, warning) in &share.task_notes {
+        if let Some(i) = p.task_index(*task_id) {
+            if let Some(task) = p.tasks.get_mut(i) {
+                task.sched.warnings.push(warning.clone());
+            }
+        } else {
+            report.warnings.push(warning.clone());
+        }
+    }
 
     // Project-level rollup.
     let leaves: Vec<&Task> = p.tasks.iter().filter(|t| !t.sched.is_summary && t.active).collect();
@@ -1469,6 +1698,14 @@ fn rollup_of(p: &Project, children: &[usize], own: Own, weights: &[(f64, f64)]) 
 /// and assignments on summary rows), totalled over active summaries for the project level.
 fn rollup_summaries(p: &mut Project, group_min: &[Option<Minutes>]) -> Own {
     let parent = parents(p);
+    let proj_cal = project_calendar(p);
+    let manual_summary: Vec<Option<(DateTime, DateTime)>> = p
+        .tasks
+        .iter()
+        .zip((0..p.tasks.len()).map(|i| !p.has_children(i)))
+        .map(|(t, leaf)| manual_summary_dates(t, !leaf, &proj_cal))
+        .collect();
+    let ancestor_limits = summary_ancestor_limits(p, &parent, &manual_summary);
     let mut total_own = Own::default();
     // Leaves weigh themselves; summaries get the sum of their children below.
     let mut weights: Vec<(f64, f64)> = p
@@ -1506,9 +1743,15 @@ fn rollup_summaries(p: &mut Project, group_min: &[Option<Minutes>]) -> Own {
         }
         // A manually scheduled summary keeps its own dates; its subtasks' span is kept apart.
         let manual = manual_summary_dates(t, true, &pc);
+        let start_dynamic = t.side_is_dynamic(false);
+        let finish_dynamic = t.side_is_dynamic(true);
         let (start, mut finish) = match manual {
             Some((s, f)) => (Some(s), Some(f)),
-            None => (r.start, r.finish),
+            None => {
+                let start = if start_dynamic { r.start } else { t.side_anchor(false).or(r.start) };
+                let finish = if finish_dynamic { r.finish } else { t.side_anchor(true).or(r.finish) };
+                (start, finish)
+            }
         };
         let mut duration = match (start, finish) {
             (Some(s), Some(f)) => pc.between(s, f),
@@ -1516,6 +1759,7 @@ fn rollup_summaries(p: &mut Project, group_min: &[Option<Minutes>]) -> Own {
         };
         // A nested group that stretches is at least as long as its share, even when its children are shorter.
         if manual.is_none()
+            && finish_dynamic
             && let Some(min) = group_min.get(i).copied().flatten()
             && duration < min
             && let Some(s) = start
@@ -1523,6 +1767,20 @@ fn rollup_summaries(p: &mut Project, group_min: &[Option<Minutes>]) -> Own {
             let f = pc.add(s, min);
             duration = pc.between(s, f);
             finish = Some(f);
+        }
+        let limits = ancestor_limits.get(i).copied().unwrap_or_default();
+        let mut summary_boundary_warnings = Vec::new();
+        if let Some(cap) = limits.finish_cap
+            && let Some(anchor) = t.side_anchor(true)
+            && anchor > cap.date
+        {
+            summary_boundary_warnings.push(inherited_finish_cap_warning(p, cap));
+        }
+        if let Some(floor) = limits.start_floor
+            && let Some(anchor) = t.side_anchor(false)
+            && anchor < floor.date
+        {
+            summary_boundary_warnings.push(inherited_start_floor_warning(p, floor));
         }
         let Some(t) = p.tasks.get_mut(i) else { continue };
         t.sched.start = start;
@@ -1534,10 +1792,10 @@ fn rollup_summaries(p: &mut Project, group_min: &[Option<Minutes>]) -> Own {
             t.sched.rollup_start = r.start.or(start);
             t.sched.rollup_finish = r.finish.or(finish);
         } else {
-            t.sched.early_start = r.es;
-            t.sched.early_finish = r.ef;
-            t.sched.late_start = r.ls;
-            t.sched.late_finish = r.lf;
+            t.sched.early_start = if start_dynamic { r.es } else { start };
+            t.sched.early_finish = if finish_dynamic { r.ef } else { finish };
+            t.sched.late_start = if start_dynamic { r.ls } else { start };
+            t.sched.late_finish = if finish_dynamic { r.lf } else { finish };
             t.sched.rollup_start = None;
             t.sched.rollup_finish = None;
         }
@@ -1553,6 +1811,7 @@ fn rollup_summaries(p: &mut Project, group_min: &[Option<Minutes>]) -> Own {
         t.sched.resume = None;
         t.sched.parts.clear();
         t.sched.warnings.clear();
+        t.sched.warnings.extend(summary_boundary_warnings);
         if let (Some(dl), Some(f)) = (t.deadline, finish)
             && f > dl
         {

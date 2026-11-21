@@ -206,6 +206,50 @@ impl Chord {
         parts.join("+")
     }
 
+    /// Human-facing shortcut for tooltips: readable ASCII on every platform (`Cmd+S`, `Ctrl+S`).
+    pub fn platform_label(&self, mac: bool) -> String {
+        let key = match self.key.as_str() {
+            "ArrowLeft" => "Left",
+            "ArrowRight" => "Right",
+            "ArrowUp" => "Up",
+            "ArrowDown" => "Down",
+            "Equals" | "=" => "=",
+            "Minus" | "-" => "-",
+            "Plus" | "+" => "+",
+            "Comma" | "," => ",",
+            other => other,
+        };
+        let mut parts = Vec::new();
+        if mac {
+            // Readable Mac order: Ctrl, Option, Shift, Cmd, then the key.
+            if self.ctrl {
+                parts.push("Ctrl");
+            }
+            if self.alt {
+                parts.push("Option");
+            }
+            if self.shift {
+                parts.push("Shift");
+            }
+            if self.cmd {
+                parts.push("Cmd");
+            }
+        } else {
+            // Cmd is the primary accelerator on Windows/Linux (Ctrl-as-Command in egui).
+            if self.ctrl || self.cmd {
+                parts.push("Ctrl");
+            }
+            if self.alt {
+                parts.push("Alt");
+            }
+            if self.shift {
+                parts.push("Shift");
+            }
+        }
+        parts.push(key);
+        parts.join("+")
+    }
+
     pub fn is_function_key(&self) -> bool {
         self.key.strip_prefix('F').and_then(|n| n.parse::<u8>().ok()).is_some_and(|n| (1..=24).contains(&n))
     }

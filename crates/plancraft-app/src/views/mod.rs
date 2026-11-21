@@ -69,6 +69,8 @@ fn matches_filter(p: &Project, t: &Task, f: TaskFilter) -> bool {
     match f {
         TaskFilter::All => true,
         TaskFilter::Critical => t.sched.critical,
+        TaskFilter::WithLevelingDelay => t.leveling_delay > 0,
+        TaskFilter::WithoutLevelingDelay => t.leveling_delay == 0,
         TaskFilter::Incomplete => !t.is_complete(),
         TaskFilter::Completed => t.is_complete(),
         TaskFilter::Milestones => t.is_milestone(),
@@ -619,5 +621,49 @@ mod tests {
         assert_eq!(notes, vec![leaf]);
         assert!(rows.iter().any(|r| matches!(r, Row::Notes(i) if *i == leaf)));
         assert!(rows.iter().all(|r| !matches!(r, Row::Notes(i) if *i == summary)));
+    }
+
+    #[test]
+    fn delayed_filters_are_shared_and_distinct_from_late() {
+        let mut p = demo();
+        let delayed = p
+            .tasks
+            .iter()
+            .find(|t| !t.sched.is_summary && !t.is_milestone() && t.sched.finish.is_some())
+            .map(|t| t.id)
+            .expect("a leaf task");
+        let late = p
+            .tasks
+            .iter()
+            .find(|t| !t.sched.is_summary && !t.is_milestone() && t.id != delayed && t.sched.finish.is_some())
+            .map(|t| t.id)
+            .expect("a second leaf task");
+
+        p.task_mut(delayed).expect("delayed task").leveling_delay = 2 * 480;
+        p.task_mut(late).expect("late task").leveling_delay = 0;
+        let finish = p.task(late).and_then(|t| t.sched.finish).expect("late task finish");
+        p.task_mut(late).expect("late task mut").deadline = Some(plancraft_core::dates::add_minutes(finish, -2 * 1440));
+        p.task_mut(late).expect("late task mut").percent_complete = 0;
+        plancraft_core::schedule::recalculate(&mut p);
+
+        let delayed_task = p.task(delayed).expect("delayed task");
+        let late_task = p.task(late).expect("late task");
+        assert!(delayed_task.leveling_delay > 0);
+        assert!(!columns::is_late(&p, delayed_task), "delayed fixture should not be late");
+        assert!(columns::is_late(&p, late_task), "late fixture should be late");
+
+        let mut st = UiState { filter: TaskFilter::WithLevelingDelay, ..UiState::default() };
+        assert!(task_matches(&p, &st, delayed_task));
+        assert!(!task_matches(&p, &st, late_task));
+
+        st.filter = TaskFilter::WithoutLevelingDelay;
+        assert!(!task_matches(&p, &st, delayed_task));
+        assert!(task_matches(&p, &st, late_task));
+
+        st.filter = TaskFilter::WithLevelingDelay;
+        st.search = delayed_task.name.clone();
+        assert!(task_matches(&p, &st, delayed_task), "new filter combines with existing criteria");
+        st.search = "no-such-task".into();
+        assert!(!task_matches(&p, &st, delayed_task));
     }
 }

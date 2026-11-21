@@ -1910,6 +1910,7 @@ impl PlanCraftApp {
             can_redo: doc.is_some_and(|d| d.can_redo()),
             undo_label: doc.and_then(|d| d.undo_label().map(String::from)),
             task_selected: !self.st.sel.tasks.is_empty(),
+            selected_task_count: self.st.sel.tasks.len(),
             resource_selected: !self.st.sel.resources.is_empty(),
             mcp_running: self.mcp.running(),
             mcp_url: self.mcp.url(),
@@ -1930,6 +1931,7 @@ impl PlanCraftApp {
             can_redo: doc.is_some_and(|d| d.can_redo()),
             undo_label: doc.and_then(|d| d.undo_label().map(String::from)),
             task_selected: !self.st.sel.tasks.is_empty(),
+            selected_task_count: self.st.sel.tasks.len(),
             resource_selected: !self.st.sel.resources.is_empty(),
             has_clipboard: !self.st.clipboard.is_empty(),
             view: self.st.view,
@@ -3561,6 +3563,12 @@ mod ui_tests {
     use super::*;
     use egui_kittest::Harness;
 
+    mod docs_screenshots;
+    mod general_properties;
+    mod gui_consistency;
+    mod leveling_columns;
+    mod planning_properties;
+
     fn harness() -> Harness<'static, PlanCraftApp> {
         let mut ws = Workspace::default();
         ws.add(plancraft_core::sample::demo_project(plancraft_core::dates::ymd(2026, 10, 19).unwrap()), None);
@@ -3575,19 +3583,420 @@ mod ui_tests {
     #[test]
     #[ignore = "renders on the GPU; run explicitly for visual review"]
     fn theme_preview_images() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        crate::lang::set_current(crate::lang::Lang::En);
         let mut h = harness();
         let ctx = h.ctx.clone();
+        h.state_mut().st.lang = crate::lang::Lang::En;
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/theme-previews");
         std::fs::create_dir_all(&dir).unwrap();
         for (theme, choice) in [("dark", crate::theme::ThemeChoice::Dark), ("light", crate::theme::ThemeChoice::Light)] {
             h.state_mut().exec(&ctx, Command::SetTheme(choice));
             for view in [ViewKind::Gantt, ViewKind::Overview, ViewKind::Board, ViewKind::ResourceUsage] {
                 h.state_mut().exec(&ctx, Command::SetView(view));
+                h.state_mut().st.menu_tab = crate::state::MenuTab::Task;
                 h.run_steps(4);
+                assert!(
+                    h.state().crash.is_none(),
+                    "{theme}/{view:?}: frame crash would yield an error-banner screenshot: {:?}",
+                    h.state().crash
+                );
+                // Tab strip "Task" and toolbar "+ Task" share a label — require a Button node each.
+                assert!(
+                    h.query_all_by_label(crate::lang::text("tab.task")).any(|n| n.accesskit_node().role() == egui::accesskit::Role::Button),
+                    "Task tab button missing"
+                );
+                assert!(
+                    h.query_all_by_label(crate::lang::text("tb.task")).any(|n| n.accesskit_node().role() == egui::accesskit::Role::Button),
+                    "primary Task toolbar button missing"
+                );
+                // View selector exposes the current view name.
+                assert!(
+                    h.query_all_by_label(view.label()).any(|n| n.accesskit_node().role() == egui::accesskit::Role::ComboBox),
+                    "current view selector missing"
+                );
                 let img = h.render().expect("rasterize the frame");
                 img.save(dir.join(format!("{theme}-{}.png", view.label().to_lowercase().replace(' ', "-")))).unwrap();
             }
         }
+        // Narrow overflow chrome for parent review (View + Format at 960).
+        let mut narrow = harness_at(960.0);
+        narrow.state_mut().st.lang = crate::lang::Lang::En;
+        crate::lang::set_current(crate::lang::Lang::En);
+        for (tab, name) in [(crate::state::MenuTab::View, "view"), (crate::state::MenuTab::Format, "format")] {
+            narrow.state_mut().st.menu_tab = tab;
+            narrow.run_steps(3);
+            assert!(narrow.state().crash.is_none(), "{name} @960 crashed: {:?}", narrow.state().crash);
+            narrow.get_by_label("More");
+            let img = narrow.render().expect("rasterize narrow toolbar");
+            img.save(dir.join(format!("narrow-960-{name}.png"))).expect("save narrow toolbar preview");
+        }
+        // Extra W-active Gantt frame (does not replace the ten above).
+        h.state_mut().exec(&ctx, Command::SetTheme(crate::theme::ThemeChoice::Dark));
+        h.state_mut().exec(&ctx, Command::SetView(ViewKind::Gantt));
+        h.state_mut().exec(&ctx, Command::SetTimescale(crate::state::Timescale::Week));
+        h.state_mut().st.menu_tab = crate::state::MenuTab::View;
+        h.run_steps(4);
+        assert!(h.state().crash.is_none(), "W-active Gantt crash: {:?}", h.state().crash);
+        let img = h.render().expect("rasterize W-active Gantt");
+        img.save(dir.join("dark-gantt-week.png")).unwrap();
+
+        // Change-view popup with reviewed group headers (ArtCraft chrome).
+        egui::Popup::open_id(&ctx, egui::Id::new("view_selector").with("popup"));
+        h.run_steps(3);
+        assert!(h.state().crash.is_none(), "Change view popup crash: {:?}", h.state().crash);
+        let img = h.render().expect("rasterize Change view popup");
+        img.save(dir.join("dark-change-view.png")).unwrap();
+
+        // Format toggles: Critical Path / Highlight Paths selected chrome (not invert-stuck).
+        egui::Popup::close_all(&ctx);
+        h.state_mut().exec(&ctx, Command::SetView(ViewKind::Gantt));
+        h.state_mut().st.menu_tab = crate::state::MenuTab::Format;
+        h.state_mut().st.gantt.show_critical = true;
+        h.state_mut().st.gantt.show_paths = true;
+        {
+            let id = lock(&h.state().ws).active_doc().unwrap().project.tasks[0].id;
+            h.state_mut().st.sel.select_task(id);
+        }
+        h.run_steps(4);
+        assert!(h.state().crash.is_none(), "Format toggles preview crash: {:?}", h.state().crash);
+        assert!(
+            h.query_all_by_label("Critical Path").any(|n| {
+                n.accesskit_node().role() == egui::accesskit::Role::Button
+                    && n.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)
+            }),
+            "Critical Path must expose selected state in preview"
+        );
+        let img = h.render().expect("rasterize Format toggles on");
+        img.save(dir.join("dark-format-toggles-on.png")).expect("save Format toggles preview");
+    }
+
+    fn harness_at(width: f32) -> Harness<'static, PlanCraftApp> {
+        let mut ws = Workspace::default();
+        ws.add(plancraft_core::sample::demo_project(plancraft_core::dates::ymd(2026, 10, 19).unwrap()), None);
+        let shared = ws.shared();
+        let mut h = Harness::builder().with_size(vec2(width, 900.0)).build_eframe(move |cc| PlanCraftApp::new(cc, shared));
+        h.run_steps(3);
+        h
+    }
+
+    /// Harness UI tests need a clean frame. The native muda menu must not panic off the main
+    /// thread (owned by `menu/mac.rs`); when it does, the crash banner steals the tree.
+    fn assert_harness_ready(h: &Harness<'static, PlanCraftApp>) {
+        if let Some(msg) = h.state().crash.as_ref() {
+            panic!("blocked on known native menu worker panic (menu/mac.rs owner); toolbar UI not evaluated: {msg}");
+        }
+    }
+
+    fn assert_kpi_frame_geometry(geom: &views::overview::OverviewGeom, width: f32) {
+        assert!(!geom.kpi_frames.is_empty(), "KPI frames recorded @{width}");
+        assert_eq!(geom.kpi_frames.len(), 4, "four KPI frames rendered @{width}");
+
+        // Determine the intended row structure independently of painted tops: grouping by
+        // the observed tops would make a staircase layout pass alignment checks vacuously.
+        let columns = views::overview::metric_columns(geom.viewport.width());
+        let rows: Vec<_> = geom.kpi_frames.chunks(columns).collect();
+
+        for (row_i, row) in rows.iter().enumerate() {
+            let first = row[0];
+            let top = first.top();
+            let height = first.height();
+            let mut widths = Vec::with_capacity(row.len());
+
+            for (i, frame) in row.iter().enumerate() {
+                assert!(
+                    (frame.top() - top).abs() <= 0.5,
+                    "KPI row {row_i} item {i} top misaligned @{width}: frame={frame:?} row_top={top}"
+                );
+                assert!(
+                    (frame.height() - height).abs() <= 0.5,
+                    "KPI row {row_i} item {i} height mismatch @{width}: frame={frame:?} row_height={height}"
+                );
+                widths.push(frame.width());
+            }
+
+            let first_width = widths[0];
+            for (i, width_px) in widths.iter().enumerate().skip(1) {
+                assert!(
+                    (*width_px - first_width).abs() <= 0.5,
+                    "KPI row {row_i} item {i} width mismatch @{width}: width={width_px} first_width={first_width}"
+                );
+            }
+
+            let row_span = row.last().expect("row frame").right() - first.left();
+            let total_width = widths.iter().sum::<f32>() + 8.0 * (row.len().saturating_sub(1)) as f32;
+            assert!(
+                (row_span - total_width).abs() <= 0.5,
+                "KPI row {row_i} widths + gaps should match painted span @{width}: row_span={row_span} total_width={total_width}"
+            );
+            assert!(
+                total_width <= geom.viewport.width() + 0.5,
+                "KPI row {row_i} must fit the Overview viewport (rounding tolerance only) @{width}: total_width={total_width} viewport_width={}",
+                geom.viewport.width()
+            );
+            assert!(
+                total_width + 32.0 >= geom.viewport.width(),
+                "KPI row {row_i} should use the available metric budget, allowing scrollbar reserve @{width}: total_width={total_width} viewport_width={}",
+                geom.viewport.width()
+            );
+        }
+    }
+
+    #[test]
+    fn overview_kpi_frame_geometry_en_nl_960_1440() {
+        for lang in [crate::lang::Lang::En, crate::lang::Lang::Nl] {
+            crate::lang::set_current(lang);
+            for width in [960.0_f32, 1440.0] {
+                let mut h = harness_at(width);
+                assert_harness_ready(&h);
+                let ctx = h.ctx.clone();
+                h.state_mut().st.lang = lang;
+                h.state_mut().st.properties_visible = true;
+                h.state_mut().exec(&ctx, Command::SetView(ViewKind::Overview));
+                h.run_steps(5);
+                assert!(h.state().crash.is_none(), "Overview @{width} {lang:?}");
+                let geom = views::overview::last_geom(&h.ctx).expect("overview geom snapshot");
+                assert_kpi_frame_geometry(&geom, width);
+            }
+        }
+    }
+
+    #[test]
+    fn toolbar_link_enablement_follows_selection_count() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        crate::lang::set_current(crate::lang::Lang::En);
+        let mut h = harness_at(1440.0);
+        assert_harness_ready(&h);
+        h.state_mut().st.lang = crate::lang::Lang::En;
+        h.state_mut().st.menu_tab = crate::state::MenuTab::Task;
+        h.state_mut().st.sel.tasks.clear();
+        h.run_steps(2);
+        assert!(h.get_by_label("Link").accesskit_node().is_disabled(), "0 selected: Link off");
+        assert!(h.get_by_label("Unlink").accesskit_node().is_disabled(), "0 selected: Unlink off");
+
+        let id = {
+            let ws = lock(&h.state().ws);
+            ws.active_doc().unwrap().project.tasks[0].id
+        };
+        h.state_mut().st.sel.select_task(id);
+        h.run_steps(2);
+        assert!(h.get_by_label("Link").accesskit_node().is_disabled(), "1 selected: Link still off");
+        assert!(!h.get_by_label("Unlink").accesskit_node().is_disabled(), "1 selected: Unlink on");
+
+        let id2 = {
+            let ws = lock(&h.state().ws);
+            ws.active_doc().unwrap().project.tasks[1].id
+        };
+        h.state_mut().st.sel.tasks.insert(id2);
+        h.run_steps(2);
+        assert!(!h.get_by_label("Link").accesskit_node().is_disabled(), "2 selected: Link on");
+        assert!(!h.get_by_label("Unlink").accesskit_node().is_disabled());
+    }
+
+    #[test]
+    fn toolbar_more_exposes_overflow_at_narrow_width() {
+        use egui_kittest::kittest::Queryable;
+        crate::lang::set_current(crate::lang::Lang::En);
+        let mut h = harness_at(960.0);
+        assert_harness_ready(&h);
+        h.state_mut().st.lang = crate::lang::Lang::En;
+        h.state_mut().st.menu_tab = crate::state::MenuTab::Task;
+        // Put something on the clipboard so Paste is enabled when it appears in More.
+        {
+            let id = lock(&h.state().ws).active_doc().unwrap().project.tasks[0].id;
+            h.state_mut().st.sel.select_task(id);
+            let ctx = h.ctx.clone();
+            h.state_mut().exec(&ctx, Command::Copy);
+        }
+        h.run_steps(2);
+        // Primary actions stay on the row; overflow is behind More (not a hidden scrollbar).
+        h.get_by_label("Task");
+        h.get_by_label("More");
+        h.get_by_label("More").click();
+        h.run_steps(2);
+        // Paste lives far right on the Task row and should appear in More at 960.
+        // Overflow rows attach a shortcut hint, so the accesskit label is "Paste Cmd+V" (etc.).
+        h.get_by_label_contains("Paste");
+    }
+
+    #[test]
+    fn toolbar_view_more_stays_inside_window_for_both_languages() {
+        use egui_kittest::kittest::Queryable;
+        for lang in crate::lang::Lang::ALL {
+            let mut h = harness_at(960.0);
+            h.state_mut().st.lang = lang;
+            h.state_mut().st.menu_tab = crate::state::MenuTab::View;
+            for width in [960.0, 1000.0, 1100.0, 1200.0, 1440.0] {
+                h.set_size(vec2(width, 900.0));
+                h.run_steps(3);
+                assert!(h.state().crash.is_none());
+                let label = crate::lang::tr(lang, "tb.more");
+                let rect = h.get_by_label(label).rect();
+                let right = h.ctx.content_rect().right() - 6.0;
+                assert!(rect.right() <= right + 0.5, "{lang:?} at {width}: More {rect:?} exceeds {right}");
+            }
+            h.get_by_label(crate::lang::tr(lang, "tb.more")).click();
+            h.run_steps(3);
+            h.get_by_label(lang.label());
+        }
+    }
+
+    #[test]
+    fn toolbar_labels_switch_with_language() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness_at(1440.0);
+        assert_harness_ready(&h);
+        h.state_mut().st.menu_tab = crate::state::MenuTab::Task;
+        crate::lang::set_current(crate::lang::Lang::En);
+        h.state_mut().st.lang = crate::lang::Lang::En;
+        h.run_steps(2);
+        h.get_by_label("Task");
+        h.get_by_label("Link");
+        crate::lang::set_current(crate::lang::Lang::Nl);
+        h.state_mut().st.lang = crate::lang::Lang::Nl;
+        h.run_steps(2);
+        h.get_by_label("Taak");
+        h.get_by_label("Koppelen");
+    }
+
+    #[test]
+    fn toolbar_tabs_and_important_actions_reachable() {
+        use egui_kittest::kittest::Queryable;
+        crate::lang::set_current(crate::lang::Lang::En);
+        let mut h = harness_at(1440.0);
+        assert_harness_ready(&h);
+        h.state_mut().st.lang = crate::lang::Lang::En;
+        for (tab, label) in [
+            (crate::state::MenuTab::Task, "Task"),
+            (crate::state::MenuTab::Resource, "Assign Resources"),
+            (crate::state::MenuTab::Project, "Project Information"),
+            (crate::state::MenuTab::Report, "Statistics"),
+            (crate::state::MenuTab::View, "Filter"),
+            (crate::state::MenuTab::Format, "Critical Path"),
+        ] {
+            h.state_mut().st.menu_tab = tab;
+            h.run_steps(2);
+            h.get_by_label(label);
+        }
+        // Entire Project often sits in View's More after the combo strip; still reachable.
+        h.state_mut().st.menu_tab = crate::state::MenuTab::View;
+        h.run_steps(1);
+        h.get_by_label("More").click();
+        h.run_steps(2);
+        h.get_by_label_contains("Entire Project");
+    }
+
+    /// Real layout: at 960 every tab keeps on-row controls inside the tool row, and remaining
+    /// actions are reachable through the single More menu (including a dispatched command).
+    #[test]
+    fn toolbar_overflow_keeps_all_tabs_discoverable_at_960() {
+        use egui_kittest::kittest::Queryable;
+        crate::lang::set_current(crate::lang::Lang::En);
+        let mut h = harness_at(960.0);
+        assert_harness_ready(&h);
+        h.state_mut().st.lang = crate::lang::Lang::En;
+        h.state_mut().st.view = ViewKind::Gantt;
+
+        // Task: primary on row, Paste via More, click dispatches.
+        h.state_mut().st.menu_tab = crate::state::MenuTab::Task;
+        {
+            let id = lock(&h.state().ws).active_doc().unwrap().project.tasks[0].id;
+            h.state_mut().st.sel.select_task(id);
+            let ctx = h.ctx.clone();
+            h.state_mut().exec(&ctx, Command::Copy);
+        }
+        h.run_steps(2);
+        h.get_by_label("Task");
+        h.get_by_label("More").click();
+        h.run_steps(2);
+        h.get_by_label_contains("Paste").click();
+        h.run_steps(2);
+
+        for (tab, on_row) in [
+            (crate::state::MenuTab::Resource, "Assign Resources"),
+            (crate::state::MenuTab::Project, "Project Information"),
+            (crate::state::MenuTab::Report, "Statistics"),
+            (crate::state::MenuTab::View, "Filter"),
+            (crate::state::MenuTab::Format, "Critical Path"),
+        ] {
+            h.state_mut().st.menu_tab = tab;
+            h.run_steps(2);
+            assert!(h.state().crash.is_none(), "{tab:?} frame crash: {:?}", h.state().crash);
+            h.get_by_label(on_row);
+        }
+
+        // View More permanently holds appearance settings; overflow holds zoom actions.
+        h.state_mut().st.menu_tab = crate::state::MenuTab::View;
+        h.run_steps(2);
+        h.get_by_label("More").click();
+        h.run_steps(3);
+        h.get_by_label_contains("Entire Project");
+        h.get_by_label_contains("English");
+
+        // Format More (or row) exposes trailing toggles; network Format keeps Critical First.
+        h.state_mut().st.menu_tab = crate::state::MenuTab::Format;
+        h.run_steps(2);
+        if h.query_all_by_label("Project Summary").next().is_none() {
+            h.get_by_label("More").click();
+            h.run_steps(2);
+            h.get_by_label_contains("Project Summary");
+        }
+        {
+            let ctx = h.ctx.clone();
+            h.state_mut().exec(&ctx, Command::SetView(ViewKind::NetworkDiagram));
+        }
+        h.state_mut().st.menu_tab = crate::state::MenuTab::Format;
+        h.run_steps(2);
+        h.get_by_label("Critical First");
+    }
+
+    /// Wide layout + 1.5 UI zoom still exposes the six tabs' primary actions.
+    #[test]
+    fn toolbar_primary_actions_survive_wide_layout_and_zoom() {
+        use egui_kittest::kittest::Queryable;
+        crate::lang::set_current(crate::lang::Lang::En);
+        let mut h = harness_at(1440.0);
+        assert_harness_ready(&h);
+        h.state_mut().st.lang = crate::lang::Lang::En;
+        h.ctx.set_zoom_factor(1.5);
+        h.run_steps(2);
+        for (tab, label) in [
+            (crate::state::MenuTab::Task, "Link"),
+            (crate::state::MenuTab::Resource, "Assign Resources"),
+            (crate::state::MenuTab::Project, "Project Information"),
+            (crate::state::MenuTab::Report, "Statistics"),
+            (crate::state::MenuTab::View, "More"),
+            (crate::state::MenuTab::Format, "Critical Path"),
+        ] {
+            h.state_mut().st.menu_tab = tab;
+            h.run_steps(2);
+            h.get_by_label(label);
+        }
+    }
+
+    /// NL More captions stay Dutch (no English tip fallback) and toggles keep checked state.
+    #[test]
+    fn toolbar_more_nl_captions_and_toggle_state() {
+        use egui_kittest::kittest::Queryable;
+        crate::lang::set_current(crate::lang::Lang::Nl);
+        let mut h = harness_at(960.0);
+        assert_harness_ready(&h);
+        h.state_mut().st.lang = crate::lang::Lang::Nl;
+        h.state_mut().st.menu_tab = crate::state::MenuTab::Task;
+        h.state_mut().st.gantt.split_mode = true;
+        {
+            let id = lock(&h.state().ws).active_doc().unwrap().project.tasks[0].id;
+            h.state_mut().st.sel.select_task(id);
+            let ctx = h.ctx.clone();
+            h.state_mut().exec(&ctx, Command::Copy);
+        }
+        h.run_steps(2);
+        h.get_by_label("Meer").click();
+        h.run_steps(2);
+        h.get_by_label_contains("Plakken");
+        // Split is a toggle: More exposes it with a checkbox reflecting active state.
+        h.get_by_label("Splitsen");
+        assert!(h.state().st.gantt.split_mode, "split mode still active for More checkbox");
     }
 
     #[test]
@@ -3600,6 +4009,262 @@ mod ui_tests {
         h.run_steps(2);
         h.state_mut().exec(&ctx, Command::ToggleHighlightPaths);
         assert!(!h.state().st.gantt.show_paths);
+    }
+
+    /// Real pointer clicks on Format toggles must flip UiState and accessible selected state.
+    /// Root cause was invert-`primary` chrome masking active wash plus `WidgetInfo::labeled`
+    /// (no toggled); exec-only tests hid that.
+    #[test]
+    fn format_critical_and_paths_toggle_via_pointer_clicks() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        crate::lang::set_current(crate::lang::Lang::En);
+        let mut h = harness_at(1440.0);
+        assert_harness_ready(&h);
+        h.state_mut().st.lang = crate::lang::Lang::En;
+        h.state_mut().st.view = ViewKind::Gantt;
+        h.state_mut().st.menu_tab = crate::state::MenuTab::Format;
+        h.state_mut().st.gantt.show_critical = false;
+        h.state_mut().st.gantt.show_paths = false;
+        h.state_mut().st.gantt.show_slack = false;
+        let task_id = {
+            let ws = lock(&h.state().ws);
+            ws.active_doc().unwrap().project.tasks[0].id
+        };
+        h.state_mut().st.sel.select_task(task_id);
+        h.run_steps(2);
+
+        let win = h.ctx.content_rect();
+        let toggled = |h: &Harness<'static, PlanCraftApp>, label: &str| -> Option<egui::accesskit::Toggled> {
+            h.query_all_by_label(label).find(|n| n.accesskit_node().role() == egui::accesskit::Role::Button).and_then(|n| {
+                let rect = n.rect();
+                assert!(rect.right() <= win.right() + 0.5 && rect.bottom() <= win.bottom() + 0.5, "{label} {rect:?} outside {win:?}");
+                n.accesskit_node().toggled()
+            })
+        };
+        let click_toggle = |h: &mut Harness<'static, PlanCraftApp>, label: &str| {
+            h.query_all_by_label(label).find(|n| n.accesskit_node().role() == egui::accesskit::Role::Button).expect(label).click();
+            h.run_steps(2);
+            assert!(h.state().crash.is_none(), "frame panic after clicking {label}: {:?}", h.state().crash);
+        };
+
+        assert_eq!(toggled(&h, "Critical Path"), Some(egui::accesskit::Toggled::False));
+        assert_eq!(toggled(&h, "Highlight Paths"), Some(egui::accesskit::Toggled::False));
+        assert!(!h.state().st.gantt.show_critical);
+        assert!(!h.state().st.gantt.show_paths);
+
+        click_toggle(&mut h, "Critical Path");
+        assert!(h.state().st.gantt.show_critical, "Critical Path pointer click must dispatch");
+        assert!(!h.state().st.gantt.show_paths, "Critical Path must not flip Highlight Paths");
+        assert!(!h.state().st.gantt.show_slack, "Critical Path must not flip Slack");
+        assert_eq!(toggled(&h, "Critical Path"), Some(egui::accesskit::Toggled::True));
+        assert_eq!(toggled(&h, "Highlight Paths"), Some(egui::accesskit::Toggled::False));
+
+        click_toggle(&mut h, "Critical Path");
+        assert!(!h.state().st.gantt.show_critical);
+        assert_eq!(toggled(&h, "Critical Path"), Some(egui::accesskit::Toggled::False));
+
+        // Path highlight stays enabled without a selection (state is remembered); with a selection it lights up.
+        click_toggle(&mut h, "Highlight Paths");
+        assert!(h.state().st.gantt.show_paths);
+        assert!(!h.state().st.gantt.show_critical, "Highlight Paths must not flip Critical Path");
+        assert_eq!(toggled(&h, "Highlight Paths"), Some(egui::accesskit::Toggled::True));
+        click_toggle(&mut h, "Highlight Paths");
+        assert!(!h.state().st.gantt.show_paths);
+        assert_eq!(toggled(&h, "Highlight Paths"), Some(egui::accesskit::Toggled::False));
+
+        // Empty selection: still clickable (enablement is document-scoped, not selection-gated).
+        h.state_mut().st.sel.tasks.clear();
+        h.run_steps(2);
+        assert!(!h.get_by_label("Highlight Paths").accesskit_node().is_disabled());
+        click_toggle(&mut h, "Highlight Paths");
+        assert!(h.state().st.gantt.show_paths);
+        click_toggle(&mut h, "Highlight Paths");
+        assert!(!h.state().st.gantt.show_paths);
+
+        // NL labels expose the same accessible selected state.
+        crate::lang::set_current(crate::lang::Lang::Nl);
+        h.state_mut().st.lang = crate::lang::Lang::Nl;
+        h.run_steps(2);
+        assert_eq!(toggled(&h, "Kritiek pad"), Some(egui::accesskit::Toggled::False));
+        click_toggle(&mut h, "Kritiek pad");
+        assert!(h.state().st.gantt.show_critical);
+        assert_eq!(toggled(&h, "Kritiek pad"), Some(egui::accesskit::Toggled::True));
+        assert_eq!(toggled(&h, "Pad markeren"), Some(egui::accesskit::Toggled::False));
+    }
+
+    /// At a width that forces Format overflow, More checkboxes still toggle Critical Path / Paths.
+    #[test]
+    fn format_critical_and_paths_toggle_via_overflow_more() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        crate::lang::set_current(crate::lang::Lang::En);
+        let mut h = harness_at(520.0);
+        assert_harness_ready(&h);
+        h.state_mut().st.lang = crate::lang::Lang::En;
+        h.state_mut().st.view = ViewKind::Gantt;
+        h.state_mut().st.menu_tab = crate::state::MenuTab::Format;
+        h.state_mut().st.gantt.show_critical = false;
+        h.state_mut().st.gantt.show_paths = false;
+        h.run_steps(2);
+        assert!(h.state().crash.is_none(), "{:?}", h.state().crash);
+        h.get_by_label("More"); // overflow chrome present at this width
+
+        let click_format_toggle = |h: &mut Harness<'static, PlanCraftApp>, label: &str| {
+            let on_row = h.query_all_by_label(label).any(|n| n.accesskit_node().role() == egui::accesskit::Role::Button);
+            if !on_row {
+                h.get_by_label("More").click();
+                h.run_steps(2);
+            }
+            let node = h
+                .query_all_by_label(label)
+                .find(|n| {
+                    let r = n.accesskit_node().role();
+                    r == egui::accesskit::Role::CheckBox || r == egui::accesskit::Role::Button
+                })
+                .unwrap_or_else(|| panic!("{label} missing on row and in More"));
+            let win = h.ctx.content_rect();
+            let rect = node.rect();
+            assert!(rect.right() <= win.right() + 0.5 && rect.bottom() <= win.bottom() + 0.5, "{label} {rect:?} outside {win:?}");
+            // Overflow toggles are checkboxes; on-row are selected buttons.
+            if !on_row {
+                assert_eq!(node.accesskit_node().role(), egui::accesskit::Role::CheckBox, "{label} in More should be a checkbox");
+            }
+            node.click();
+            h.run_steps(2);
+            assert!(h.state().crash.is_none(), "frame panic after {label}: {:?}", h.state().crash);
+        };
+
+        click_format_toggle(&mut h, "Critical Path");
+        assert!(h.state().st.gantt.show_critical);
+        assert!(!h.state().st.gantt.show_paths);
+
+        click_format_toggle(&mut h, "Highlight Paths");
+        assert!(h.state().st.gantt.show_paths);
+        assert!(h.state().st.gantt.show_critical, "Paths click must not clear Critical Path");
+
+        // At least one of the two must have been reached via More at this narrow width
+        // (Slack and later toggles overflow first; Critical/Paths stay primary — force tighter).
+        h.set_size(vec2(360.0, 900.0));
+        h.state_mut().st.gantt.show_critical = false;
+        h.state_mut().st.gantt.show_paths = false;
+        h.run_steps(3);
+        assert!(h.state().crash.is_none(), "{:?}", h.state().crash);
+        let critical_on_row = h.query_all_by_label("Critical Path").any(|n| n.accesskit_node().role() == egui::accesskit::Role::Button);
+        if critical_on_row {
+            // Still on row: exercise More with a trailing Format toggle that must overflow.
+            h.get_by_label("More").click();
+            h.run_steps(2);
+            h.get_by_label_contains("Project Summary").click();
+            h.run_steps(2);
+            assert!(h.state().st.gantt.show_project_summary);
+        } else {
+            click_format_toggle(&mut h, "Critical Path");
+            assert!(h.state().st.gantt.show_critical);
+            click_format_toggle(&mut h, "Highlight Paths");
+            assert!(h.state().st.gantt.show_paths);
+        }
+    }
+
+    /// Filter strip: one context button (Show selection ↔ Clear filter), not two side by side.
+    #[test]
+    fn selection_focus_has_only_one_clear_control() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        crate::lang::set_current(crate::lang::Lang::En);
+        let mut h = harness_at(1440.0);
+        assert_harness_ready(&h);
+        h.state_mut().st.lang = crate::lang::Lang::En;
+        let selected = leaf(&h, 0);
+        h.state_mut().st.sel.select_task(selected);
+        h.run_steps(2);
+        h.get_by_label(crate::lang::text("filter.show_selection")).click();
+        h.run_steps(3);
+        assert_eq!(h.state().st.focus.map(|f| f.task), Some(selected));
+        assert_eq!(
+            h.query_all_by_label(crate::lang::text("filter.clear_activity"))
+                .filter(|n| n.accesskit_node().role() == egui::accesskit::Role::Button)
+                .count(),
+            1
+        );
+        assert!(
+            h.query_all_by_label(crate::lang::text("filter.reset")).next().is_none(),
+            "no redundant Reset filters while the contextual Clear filter is present"
+        );
+    }
+
+    #[test]
+    fn filter_bar_show_selection_becomes_clear_filter() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        crate::lang::set_current(crate::lang::Lang::En);
+        let mut h = harness_at(1440.0);
+        assert_harness_ready(&h);
+        h.state_mut().st.lang = crate::lang::Lang::En;
+        h.state_mut().st.view = ViewKind::Gantt;
+        h.state_mut().st.focus = None;
+        h.state_mut().st.status_filter = Some(plancraft_core::model::TaskStatus::Busy);
+        h.state_mut().st.sel.tasks.clear();
+        h.run_steps(2);
+        assert!(h.state().crash.is_none(), "{:?}", h.state().crash);
+
+        let show = crate::lang::text("filter.show_selection");
+        let clear = crate::lang::text("filter.clear_activity");
+        assert!(h.query_all_by_label(show).next().is_some(), "idle: Show selection present");
+        assert!(h.query_all_by_label(clear).next().is_none(), "idle: no Clear filter");
+        assert!(h.get_by_label(show).accesskit_node().is_disabled(), "no selection: Show selection disabled");
+
+        let (id, total) = {
+            let ws = lock(&h.state().ws);
+            let p = &ws.active_doc().unwrap().project;
+            (p.tasks[0].id, p.tasks.len())
+        };
+        h.state_mut().st.sel.select_task(id);
+        h.run_steps(2);
+        assert!(!h.get_by_label(show).accesskit_node().is_disabled());
+        h.get_by_label(show).click();
+        h.run_steps(2);
+        assert!(h.state().crash.is_none(), "{:?}", h.state().crash);
+        assert_eq!(h.state().st.focus.map(|f| f.task), Some(id));
+        assert_eq!(h.state().st.focus.map(|f| f.scope), Some(crate::state::FocusScope::Subtree));
+        assert_eq!(h.state().st.status_filter, Some(plancraft_core::model::TaskStatus::Busy), "unrelated status filter preserved");
+        assert!(h.query_all_by_label(show).next().is_none(), "focused: Show selection gone");
+        assert_eq!(h.query_all_by_label(clear).count(), 1, "focused: exactly one Clear filter");
+        assert!(!h.get_by_label(clear).accesskit_node().is_disabled());
+
+        // Empty selection while focused: Clear filter stays usable.
+        h.state_mut().st.sel.tasks.clear();
+        h.run_steps(2);
+        assert!(h.state().st.focus.is_some());
+        assert!(!h.get_by_label(clear).accesskit_node().is_disabled());
+        let matching_while_focused = {
+            let ws = lock(&h.state().ws);
+            let p = &ws.active_doc().unwrap().project;
+            p.tasks.iter().filter(|t| views::task_matches(p, &h.state().st, t)).count()
+        };
+        assert!(matching_while_focused < total, "focus narrows visible rows");
+
+        h.get_by_label(clear).click();
+        h.run_steps(2);
+        assert!(h.state().crash.is_none(), "{:?}", h.state().crash);
+        assert_eq!(h.state().st.focus, None);
+        assert_eq!(
+            h.state().st.status_filter,
+            Some(plancraft_core::model::TaskStatus::Busy),
+            "clearing focus must not reset status filter"
+        );
+        assert!(h.query_all_by_label(show).next().is_some());
+        assert!(h.query_all_by_label(clear).next().is_none());
+
+        // EN/NL label swap on the same control.
+        crate::lang::set_current(crate::lang::Lang::Nl);
+        h.state_mut().st.lang = crate::lang::Lang::Nl;
+        h.state_mut().st.sel.select_task(id);
+        h.run_steps(2);
+        h.get_by_label("Toon selectie").click();
+        h.run_steps(2);
+        assert!(h.state().st.focus.is_some());
+        h.get_by_label("Filter wissen").click();
+        h.run_steps(2);
+        assert_eq!(h.state().st.focus, None);
+        assert!(h.query_all_by_label("Toon selectie").next().is_some());
+        assert!(h.query_all_by_label("Filter wissen").next().is_none());
     }
 
     /// Regression: a leftover resource selection from Resource Sheet used to suppress path
@@ -3630,37 +4295,474 @@ mod ui_tests {
         assert_eq!(roles.get(&c), Some(&PathRole::Direct));
     }
 
-    /// The Q/M/D chips preset the chart zoom and the usage buckets, remember the choice,
+    /// Change-view popup shows the shared group headers and a click dispatches SetView.
+    #[test]
+    fn change_view_popup_shows_groups_and_dispatches() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        crate::lang::set_current(crate::lang::Lang::En);
+        let mut h = harness_at(1440.0);
+        assert_harness_ready(&h);
+        h.state_mut().st.lang = crate::lang::Lang::En;
+        h.state_mut().st.view = ViewKind::Gantt;
+        h.run_steps(2);
+
+        let selector = h
+            .query_all_by_label("Gantt Chart")
+            .find(|n| n.accesskit_node().role() == egui::accesskit::Role::ComboBox)
+            .expect("view selector ComboBox");
+        selector.click();
+        h.run_steps(3);
+
+        for key in ["view.group.planning", "view.group.analysis", "view.group.reporting", "view.group.resources"] {
+            h.get_by_label(crate::lang::text(key));
+        }
+        // Selected Gantt stays marked; Overview is a Button in the popup (not the ComboBox).
+        assert!(
+            h.query_all_by_label("Gantt Chart").any(|n| {
+                let a = n.accesskit_node();
+                a.role() == egui::accesskit::Role::Button && a.toggled() == Some(egui::accesskit::Toggled::True)
+            }),
+            "current view stays checked in the popup"
+        );
+        h.query_all_by_label("Overview")
+            .find(|n| n.accesskit_node().role() == egui::accesskit::Role::Button)
+            .expect("Overview in Change view popup")
+            .click();
+        h.run_steps(3);
+        assert_eq!(h.state().st.view, ViewKind::Overview, "popup click dispatches SetView");
+        assert!(
+            h.query_all_by_label("Overview").any(|n| n.accesskit_node().role() == egui::accesskit::Role::ComboBox),
+            "selector label follows the new view"
+        );
+    }
+
+    /// Choose/Change view lists Overview before Gantt (shared groups; custom popup + native menu).
+    #[test]
+    fn overview_leads_change_view_popup_and_menu_order() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        crate::lang::set_current(crate::lang::Lang::En);
+        let ordered: Vec<_> = crate::state::view_menu_views().collect();
+        assert_eq!(ordered[0], ViewKind::Overview);
+        assert_eq!(ordered[1], ViewKind::Gantt);
+        assert_eq!(ordered.len(), 16);
+        assert_eq!(ViewKind::ALL[0], ViewKind::Gantt);
+
+        let mut h = harness_at(1440.0);
+        assert_harness_ready(&h);
+        h.state_mut().st.lang = crate::lang::Lang::En;
+        h.state_mut().st.view = ViewKind::Gantt;
+        h.run_steps(2);
+        let selector = h
+            .query_all_by_label("Gantt Chart")
+            .find(|n| n.accesskit_node().role() == egui::accesskit::Role::ComboBox)
+            .expect("view selector");
+        selector.click();
+        h.run_steps(3);
+        let popup_views: Vec<_> = h
+            .query_all_by_role(egui::accesskit::Role::Button)
+            .filter_map(|n| {
+                let label = n.accesskit_node().label()?;
+                crate::state::view_menu_views().find(|v| v.label() == label).map(|v| (v, label))
+            })
+            .collect();
+        assert!(!popup_views.is_empty(), "Change view popup lists views");
+        assert_eq!(popup_views[0].0, ViewKind::Overview, "first planning row is Overview");
+        assert!(
+            popup_views.iter().position(|(v, _)| *v == ViewKind::Overview) < popup_views.iter().position(|(v, _)| *v == ViewKind::Gantt),
+            "Overview precedes Gantt in the custom picker"
+        );
+    }
+
+    /// ArtCraft Overview: EN/NL at 960 and 1440, KPIs, Open Gantt, day filter, selection, row-mark undo.
+    #[test]
+    fn overview_artcraft_dashboard_en_nl_widths_selection_and_rowmark() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        use plancraft_core::model::RowMark;
+
+        for (lang, open_gantt, overdue) in
+            [(crate::lang::Lang::En, "Open Gantt", "Overdue"), (crate::lang::Lang::Nl, "Gantt openen", "Te laat")]
+        {
+            crate::lang::set_current(lang);
+            for width in [960.0_f32, 1440.0] {
+                let mut h = harness_at(width);
+                assert_harness_ready(&h);
+                let ctx = h.ctx.clone();
+                h.state_mut().st.lang = lang;
+                h.state_mut().st.properties_visible = true;
+                h.state_mut().exec(&ctx, Command::SetView(ViewKind::Overview));
+                h.run_steps(4);
+                assert!(h.state().crash.is_none(), "Overview {lang:?} @{width}: {:?}", h.state().crash);
+                assert!(
+                    h.query_all_by_label(crate::lang::tr(lang, "view.overview"))
+                        .any(|n| n.accesskit_node().role() == egui::accesskit::Role::Label),
+                    "Archivo Overview heading missing"
+                );
+                assert!(
+                    h.query_all_by_label(open_gantt).any(|n| n.accesskit_node().role() == egui::accesskit::Role::Button),
+                    "Open Gantt action missing"
+                );
+                for key in ["ov.overdue", "ov.this_week", "ov.milestones", "ov.waiting", "ov.status_as_of", "ov.calendar_today"] {
+                    let label = if key == "ov.overdue" { overdue } else { crate::lang::tr(lang, key) };
+                    assert!(h.query_all_by_label(label).next().is_some(), "missing dashboard label {key} ({label})");
+                }
+                // Long task names must remain reachable (no clipped-only layout).
+                {
+                    let mut ws = lock(&h.state().ws);
+                    let doc = ws.active_doc_mut().unwrap();
+                    let id =
+                        doc.project.tasks.iter().find(|t| !doc.project.has_children(doc.project.task_index(t.id).unwrap())).map(|t| t.id);
+                    if let Some(id) = id {
+                        let long = "Very long overview task name that must wrap without overlapping controls at narrow widths";
+                        let _ = doc.edit_msg("Long name", move |p| {
+                            if let Some(t) = p.task_mut(id) {
+                                t.name = long.into();
+                            }
+                            Ok(())
+                        });
+                    }
+                }
+                h.run_steps(3);
+                assert!(h.state().crash.is_none(), "long name layout {lang:?} @{width}");
+            }
+        }
+
+        crate::lang::set_current(crate::lang::Lang::En);
+        let mut h = harness_at(1440.0);
+        assert_harness_ready(&h);
+        let ctx = h.ctx.clone();
+        h.state_mut().st.lang = crate::lang::Lang::En;
+        h.state_mut().exec(&ctx, Command::SetView(ViewKind::Overview));
+        h.run_steps(4);
+
+        // Open Gantt is a command only — no document mutation.
+        let dirty_before = lock(&h.state().ws).active_doc().unwrap().dirty;
+        h.get_by_label("Open Gantt").click();
+        h.run_steps(3);
+        assert_eq!(h.state().st.view, ViewKind::Gantt);
+        assert_eq!(lock(&h.state().ws).active_doc().unwrap().dirty, dirty_before);
+        h.state_mut().exec(&ctx, Command::SetView(ViewKind::Overview));
+        h.run_steps(3);
+
+        // Day toggle filters the page; clearing restores buckets.
+        let day = plancraft_core::dates::today();
+        h.state_mut().st.agenda_day = Some(day);
+        h.run_steps(3);
+        assert_eq!(h.state().st.agenda_day, Some(day));
+        h.get_by_label(crate::lang::text("ov.day_empty"));
+        h.state_mut().st.agenda_day = None;
+        h.run_steps(2);
+
+        // Resource filter + pointer-click selection by exact task id + row-mark edit/undo.
+        let (task_id, task_name) = {
+            let ws = lock(&h.state().ws);
+            let p = &ws.active_doc().unwrap().project;
+            let item = plancraft_core::agenda::items(p).into_iter().next().expect("demo agenda item");
+            (item.id, item.name)
+        };
+        assert!(h.query_all_by_label(&task_name).next().is_some(), "agenda shows {task_name}");
+        h.state_mut().st.sel.clear_tasks();
+        h.run_steps(1);
+        h.get_by_label(&task_name).click();
+        h.run_steps(3);
+        assert_eq!(h.state().st.sel.single_task(), Some(task_id), "pointer click selects the agenda task id");
+        assert!(
+            plancraft_core::agenda::items(&lock(&h.state().ws).active_doc().unwrap().project).iter().any(|i| i.id == task_id),
+            "selected id is a real agenda row"
+        );
+
+        // Row-mark through the Overview combo (Document edit + undo).
+        {
+            let mut ws = lock(&h.state().ws);
+            let doc = ws.active_doc_mut().unwrap();
+            let id = task_id;
+            doc.edit_msg("Row mark", move |p| {
+                if let Some(t) = p.task_mut(id) {
+                    t.row_mark = Some(RowMark::Amber);
+                }
+                Ok(())
+            })
+            .unwrap();
+        }
+        h.run_steps(2);
+        assert_eq!(lock(&h.state().ws).active_doc().unwrap().project.task(task_id).and_then(|t| t.row_mark), Some(RowMark::Amber));
+        h.state_mut().exec(&ctx, Command::Undo);
+        h.run_steps(2);
+        assert_eq!(lock(&h.state().ws).active_doc().unwrap().project.task(task_id).and_then(|t| t.row_mark), None);
+
+        // Resource filter keeps the page stable (no crash); Everyone restores the full list.
+        h.state_mut().st.agenda_resource = Some("Ana Lima".into());
+        h.run_steps(3);
+        assert!(h.state().crash.is_none(), "resource filter");
+        h.state_mut().st.agenda_resource = None;
+        h.run_steps(2);
+        assert!(h.state().crash.is_none());
+    }
+
+    /// Geometry + interaction regressions: KPI frames stay in Overview viewport with Properties open,
+    /// day strip does not eat the page (Agenda visible), long name keeps Open Gantt, day count matches
+    /// filter bar, day-row body click selects the exact task id.
+    #[test]
+    fn overview_geometry_agenda_visibility_day_count_and_body_click() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        use plancraft_core::model::{Constraint, ConstraintKind};
+
+        crate::lang::set_current(crate::lang::Lang::En);
+        let long_name = "Extremely long project name that would otherwise shove Open Gantt off the header row at narrow widths";
+
+        for width in [960.0_f32, 1440.0] {
+            let mut h = harness_at(width);
+            assert_harness_ready(&h);
+            let ctx = h.ctx.clone();
+            h.state_mut().st.lang = crate::lang::Lang::En;
+            h.state_mut().st.properties_visible = true;
+            {
+                let mut ws = lock(&h.state().ws);
+                let doc = ws.active_doc_mut().unwrap();
+                let _ = doc.edit_msg("Long project name", move |p| {
+                    p.name = long_name.into();
+                    Ok(())
+                });
+            }
+            h.state_mut().exec(&ctx, Command::SetView(ViewKind::Overview));
+            h.run_steps(5);
+            assert!(h.state().crash.is_none(), "Overview @{width}");
+
+            let geom = views::overview::last_geom(&h.ctx).expect("overview geom snapshot");
+            assert!(!geom.kpi_frames.is_empty(), "KPI frames recorded @{width}");
+            for (i, frame) in geom.kpi_frames.iter().enumerate() {
+                assert!(
+                    frame.right() <= geom.viewport.right() + 0.5,
+                    "KPI {i} overflows Overview into Properties @{width}: frame={frame:?} viewport={:?}",
+                    geom.viewport
+                );
+                assert!(
+                    frame.left() >= geom.viewport.left() - 0.5,
+                    "KPI {i} left of Overview viewport @{width}: frame={frame:?} viewport={:?}",
+                    geom.viewport
+                );
+            }
+            assert!(
+                geom.day_strip.height() <= 64.0 + 24.0,
+                "day strip must stay cell-sized, not fill the viewport @{width}: {:?}",
+                geom.day_strip
+            );
+            let agenda = geom.agenda_heading.expect("Agenda heading rect");
+            let win_bottom = h.ctx.content_rect().bottom();
+            assert!(
+                agenda.top() < win_bottom - 8.0,
+                "Agenda heading must be on-screen under the day strip without scrolling blank space @{width}: agenda={agenda:?} bottom={win_bottom}"
+            );
+            assert!(
+                h.query_all_by_label("Agenda").any(|n| n.accesskit_node().role() == egui::accesskit::Role::Label),
+                "Agenda section label visible @{width}"
+            );
+            // First available agenda task should be on-screen with the heading.
+            let first_name = {
+                let ws = lock(&h.state().ws);
+                let p = &ws.active_doc().unwrap().project;
+                plancraft_core::agenda::items(p).into_iter().next().map(|i| i.name)
+            };
+            if let Some(name) = first_name {
+                let task_rect = h.get_by_label(&name).rect();
+                assert!(task_rect.top() < win_bottom - 4.0, "first agenda task on-screen @{width}: {task_rect:?}");
+            }
+            let open = h
+                .query_all_by_label("Open Gantt")
+                .find(|n| n.accesskit_node().role() == egui::accesskit::Role::Button)
+                .expect("Open Gantt");
+            let open_rect = open.rect();
+            assert!(
+                open_rect.right() <= geom.viewport.right() + 0.5 && open_rect.top() < win_bottom,
+                "Open Gantt must stay reachable with a long project name @{width}: {open_rect:?}"
+            );
+            let heading = h
+                .query_all_by_label("Overview")
+                .find(|n| n.accesskit_node().role() == egui::accesskit::Role::Label)
+                .expect("Overview heading");
+            assert!(heading.rect().left() >= geom.viewport.left() - 1.0, "heading in viewport");
+        }
+
+        // Day-row count matches filter bar (starts/dues/milestones, not finish-only agenda).
+        let mut h = harness_at(1440.0);
+        assert_harness_ready(&h);
+        let ctx = h.ctx.clone();
+        let (pick_day, day_task_id, day_task_name, expected_shown) = {
+            let mut ws = lock(&h.state().ws);
+            let doc = ws.active_doc_mut().unwrap();
+            // Guarantee a start-only day row that finish-only agenda counting would miss.
+            let start_only = doc
+                .edit_msg("Start-only day fixture", |p| {
+                    let id = p.add_task("Overview start-only fixture", None);
+                    let day = plancraft_core::dates::shift_days(plancraft_core::dates::today(), 3);
+                    if let Some(t) = p.task_mut(id) {
+                        t.duration = 480;
+                        t.constraint = Constraint { kind: ConstraintKind::Snet, date: Some(plancraft_core::dates::midnight(day)) };
+                    }
+                    Ok(id)
+                })
+                .expect("add start-only task");
+            let p = &doc.project;
+            let today = plancraft_core::dates::today();
+            let strip = plancraft_core::agenda::strip(p, None, today);
+            let items = plancraft_core::agenda::items(p);
+            let mut found = None;
+            for cell in &strip {
+                let rows = plancraft_core::agenda::on_day(p, None, cell.date);
+                let finish_only = items.iter().filter(|i| i.finish.date() == cell.date).count();
+                if rows.len() != finish_only && !rows.is_empty() {
+                    let row = rows.iter().find(|r| r.id == start_only).or_else(|| rows.first()).expect("row");
+                    found = Some((cell.date, row.id, row.name.clone(), rows.len()));
+                    break;
+                }
+            }
+            found.expect("need a day where on_day differs from finish-only agenda count")
+        };
+        h.state_mut().exec(&ctx, Command::SetView(ViewKind::Overview));
+        h.state_mut().st.agenda_day = Some(pick_day);
+        h.state_mut().st.sel.clear_tasks();
+        h.run_steps(5);
+        let geom = views::overview::last_geom(&h.ctx).expect("day geom");
+        assert_eq!(geom.filter_shown, expected_shown, "filter shown matches visible day rows");
+        assert_eq!(geom.filter_total, expected_shown, "no resource filter: shown == total day rows");
+        // When shown == total the bar hides the count; still assert geom. With a resource filter, show mismatch.
+        h.state_mut().st.agenda_resource = Some("Nobody Matching".into());
+        h.run_steps(3);
+        let filtered = {
+            let ws = lock(&h.state().ws);
+            let p = &ws.active_doc().unwrap().project;
+            plancraft_core::agenda::on_day(p, None, pick_day)
+                .into_iter()
+                .filter(|r| views::filter_bar::agenda_matches(p, &h.state().st, r.id))
+                .count()
+        };
+        let geom = views::overview::last_geom(&h.ctx).expect("filtered day geom");
+        assert_eq!(geom.filter_shown, filtered);
+        assert_eq!(geom.filter_total, expected_shown);
+        if filtered != expected_shown {
+            let label = format!("{filtered} {} {expected_shown}", crate::lang::text("bar.of"));
+            assert!(h.query_all_by_label(&label).next().is_some(), "filter bar shows {label}");
+        }
+
+        // Day-row body click (kind label, not only the name) selects the exact task id.
+        h.state_mut().st.agenda_resource = None;
+        h.state_mut().st.agenda_day = Some(pick_day);
+        h.state_mut().st.sel.clear_tasks();
+        h.run_steps(3);
+        let name_rect = h.get_by_label(&day_task_name).rect();
+        let body = egui::pos2(name_rect.right() + 36.0, name_rect.center().y);
+        h.input_mut().events.push(egui::Event::PointerMoved(body));
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: body,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(1);
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: body,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(3);
+        assert_eq!(h.state().st.sel.single_task(), Some(day_task_id), "day-row body click selects {day_task_name}");
+    }
+
+    /// Saves Overview PNG fixtures (dark/light × EN/NL × 960/1440). Rasterizes on the GPU.
+    #[test]
+    #[ignore = "renders on the GPU; run explicitly for visual review"]
+    fn overview_preview_images() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/overview-previews");
+        std::fs::create_dir_all(&dir).unwrap();
+        for (lang, tag) in [(crate::lang::Lang::En, "en"), (crate::lang::Lang::Nl, "nl")] {
+            crate::lang::set_current(lang);
+            for (theme, choice) in [("dark", crate::theme::ThemeChoice::Dark), ("light", crate::theme::ThemeChoice::Light)] {
+                for width in [960.0_f32, 1440.0] {
+                    let mut h = harness_at(width);
+                    let ctx = h.ctx.clone();
+                    h.state_mut().st.lang = lang;
+                    h.state_mut().exec(&ctx, Command::SetTheme(choice));
+                    h.state_mut().exec(&ctx, Command::SetView(ViewKind::Overview));
+                    h.run_steps(4);
+                    assert!(h.state().crash.is_none(), "{theme}/{tag}/{width}: error-banner screenshot refused: {:?}", h.state().crash);
+                    assert!(
+                        h.query_all_by_label(crate::lang::tr(lang, "view.overview"))
+                            .any(|n| n.accesskit_node().role() == egui::accesskit::Role::Label),
+                        "Overview page heading missing"
+                    );
+                    h.get_by_label(crate::lang::tr(lang, "ov.open_gantt"));
+                    assert!(h.query_all_by_label(crate::lang::tr(lang, "ov.overdue")).next().is_some());
+                    assert!(h.query_all_by_label(crate::lang::tr(lang, "ov.this_week")).next().is_some());
+                    let img = h.render().expect("rasterize Overview");
+                    img.save(dir.join(format!("{theme}-{tag}-{}.png", width as i32))).unwrap();
+                }
+            }
+        }
+    }
+
+    /// The Q/M/W/D chips preset the chart zoom and the usage buckets, remember the choice,
     /// and sit disabled (with a tooltip) on a view without a time axis.
     #[test]
-    fn the_qmd_chips_preset_the_timescales() {
+    fn the_qmwd_chips_preset_the_timescales() {
         use crate::state::Timescale;
         use egui_kittest::kittest::{NodeT, Queryable};
+        use plancraft_core::timescale::{Unit, tiers};
+        use plancraft_core::workload::Granularity;
         let mut h = harness();
         let ctx = h.ctx.clone();
         h.state_mut().st.menu_tab = crate::state::MenuTab::View;
+        h.state_mut().st.view = ViewKind::Gantt;
         h.run_steps(2);
+
+        // Q: quarter columns (Year/Quarter), usage quarters.
         h.get_by_label("Q").click();
         h.run_steps(2);
-        assert_eq!(h.state().st.gantt.px_per_day, 2.5, "Quarter preset applied to the chart");
-        assert_eq!(
-            plancraft_core::timescale::tiers(h.state().st.gantt.px_per_day),
-            (plancraft_core::timescale::Unit::Quarter, plancraft_core::timescale::Unit::Month),
-            "quarter/month header tiers"
-        );
+        assert_eq!(h.state().st.gantt.px_per_day, 1.0, "Quarter preset applied to the chart");
+        assert_eq!(tiers(h.state().st.gantt.px_per_day), (Unit::Year, Unit::Quarter), "year/quarter header tiers");
         assert_eq!(h.state().settings.timescale, Timescale::Quarter, "the choice is remembered per user");
-        assert_eq!(h.state().st.granularity, plancraft_core::workload::Granularity::Quarter, "usage buckets follow");
-        h.state_mut().exec(&ctx, Command::SetTimescale(Timescale::Month));
-        assert_eq!(h.state().st.gantt.px_per_day, 5.0, "Month preset: month-scale headers");
-        h.state_mut().exec(&ctx, Command::SetTimescale(Timescale::Day));
-        assert_eq!(h.state().st.gantt.px_per_day, 24.0, "Day preset: day columns");
+        assert_eq!(h.state().st.granularity, Granularity::Quarter, "usage buckets follow");
+
+        // M / W / D round-trip with core bottom units.
+        for (ts, px, want_tiers, gran) in [
+            (Timescale::Month, 2.5, (Unit::Quarter, Unit::Month), Granularity::Month),
+            (Timescale::Week, 5.0, (Unit::Month, Unit::Week), Granularity::Week),
+            (Timescale::Day, 24.0, (Unit::Week, Unit::Day), Granularity::Day),
+        ] {
+            h.state_mut().exec(&ctx, Command::SetTimescale(ts));
+            assert_eq!(h.state().st.gantt.px_per_day, px, "{ts:?} px");
+            assert_eq!(tiers(px), want_tiers, "{ts:?} tiers");
+            assert_eq!(Timescale::of_px(px), Some(ts), "{ts:?} of_px");
+            assert_eq!(ts.granularity(), gran, "{ts:?} granularity");
+            assert_eq!(Timescale::of_granularity(gran), Some(ts), "{ts:?} of_granularity");
+            assert_eq!(h.state().st.granularity, gran);
+            assert_eq!(h.state().settings.timescale, ts);
+        }
+
+        // W chip click on the Gantt, then again on a usage view.
+        h.get_by_label("W").click();
+        h.run_steps(2);
+        assert_eq!(h.state().st.gantt.px_per_day, 5.0);
+        assert_eq!(tiers(5.0), (Unit::Month, Unit::Week));
+        assert_eq!(Timescale::of_px(5.0), Some(Timescale::Week));
+        assert_eq!(h.state().st.granularity, Granularity::Week);
+        h.state_mut().st.view = ViewKind::ResourceUsage;
+        h.state_mut().st.granularity = Granularity::Day;
+        h.run_steps(2);
+        h.get_by_label("W").click();
+        h.run_steps(2);
+        assert_eq!(h.state().st.granularity, Granularity::Week, "usage W dispatches SetTimescale");
+        assert_eq!(Timescale::of_granularity(h.state().st.granularity), Some(Timescale::Week));
+
         // Free zoom stays: zoomed to hours, no preset claims the chip.
+        h.state_mut().st.view = ViewKind::Gantt;
         h.state_mut().st.gantt.px_per_day = 140.0;
         assert_eq!(Timescale::of_px(140.0), None);
         // A view without a time axis keeps the chips but disables them.
         h.state_mut().st.view = ViewKind::Board;
         h.run_steps(2);
         assert!(h.get_by_label("Q").accesskit_node().is_disabled(), "no time axis on the Task Board");
+        assert!(h.get_by_label("W").accesskit_node().is_disabled(), "W also disabled without a time axis");
     }
 
     #[test]
@@ -4098,11 +5200,11 @@ mod ui_tests {
         use TaskCol::*;
         assert_eq!(
             rendered(&h),
-            vec![b(Indicators), b(Name), b(Duration), b(Start), b(Finish), b(Predecessors), b(Resources)],
+            vec![b(Indicators), b(Name), b(Duration), b(LevelingDelay), b(Start), b(Finish), b(Predecessors), b(Resources)],
             "Mode is hidden for this user"
         );
 
-        // Drag the Duration header (rendered column 2) and drop it before Finish (boundary 4).
+        // Drag the Duration header (rendered column 2) and drop it before Finish (boundary 5).
         let (body, widths) = {
             let s = h.state();
             (s.st.task_grid.body.unwrap(), s.st.task_grid.widths.clone())
@@ -4110,7 +5212,7 @@ mod ui_tests {
         let y = body.top() - theme::HEADER_HEIGHT / 2.0;
         let left = |i: usize| body.left() + crate::widgets::grid::ROW_NUM_W + widths.iter().take(i).sum::<f32>();
         let from = pos2(left(2) + widths[2] / 2.0, y);
-        let to = pos2(left(4) + 2.0, y);
+        let to = pos2(left(5) + 2.0, y);
         let button =
             |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
         h.event(egui::Event::PointerMoved(from));
@@ -4125,12 +5227,12 @@ mod ui_tests {
         h.run_steps(3);
         assert_eq!(
             layout(&h),
-            vec![b(Indicators), b(Mode), b(Name), b(Start), b(Duration), b(Finish), b(Predecessors), b(Resources)],
+            vec![b(Indicators), b(Mode), b(Name), b(LevelingDelay), b(Start), b(Duration), b(Finish), b(Predecessors), b(Resources)],
             "the plan's layout reordered; the hidden Mode column kept its place"
         );
         assert_eq!(
             rendered(&h),
-            vec![b(Indicators), b(Name), b(Start), b(Duration), b(Finish), b(Predecessors), b(Resources)],
+            vec![b(Indicators), b(Name), b(LevelingDelay), b(Start), b(Duration), b(Finish), b(Predecessors), b(Resources)],
             "Mode stays hidden for this user after the reorder"
         );
         h.state_mut().exec(&ctx, Command::Undo);
@@ -5520,8 +6622,9 @@ mod ui_tests {
         let mut h = harness();
         let before = { h.state().ws.lock().unwrap().active_doc().unwrap().project.tasks.clone() };
         let history = { h.state().ws.lock().unwrap().active_doc().unwrap().history().len() };
-        // Entry table: 3 = Duration, 4 = Start, 5 = Finish.
-        for col in [3, 4, 5] {
+        // Resolve editable fields by identity so inserting a read-only column cannot shift the test.
+        for field in [crate::columns::TaskCol::Duration, crate::columns::TaskCol::Start, crate::columns::TaskCol::Finish] {
+            let col = column_of(&h, field);
             h.state_mut().st.task_grid.cursor = Some((3, col));
             focus_task_grid(&mut h);
             h.key_press(egui::Key::F2);
