@@ -100,7 +100,12 @@ pub fn command_enabled(cmd: &Command, s: &MenuSnapshot) -> bool {
         // Link needs two or more selected tasks; Unlink may validly act on a single selection.
         Command::LinkSelected => linkable,
         Command::UnlinkSelected | Command::SetPercent(_) | Command::MarkOnTrack | Command::ToggleActive => sel,
-        Command::SetMode(_) | Command::TaskInfo | Command::TaskNotes | Command::ToggleTimeline | Command::ScrollToTask => sel,
+        Command::SetMode(_)
+        | Command::ClearDates
+        | Command::TaskInfo
+        | Command::TaskNotes
+        | Command::ToggleTimeline
+        | Command::ScrollToTask => sel,
         Command::InsertTask
         | Command::InsertMilestone
         | Command::InsertSummary

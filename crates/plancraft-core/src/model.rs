@@ -121,10 +121,10 @@ pub enum ConstraintKind {
     Mfo,
 }
 
-/// Stretch (remaining space in a group) and span (percent of the group), used together.
+/// Optional project-wide stretch/span flags (Project Planner JSON import turns them on).
 ///
-/// Both flags are off unless a project turns the ruleset on, so an existing plan schedules
-/// exactly as it did before these fields existed.
+/// Size-in-group (`fills_group` / `duration_percent`) no longer requires these; they still force
+/// a share-resolution pass for older opted-in plans.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct ScheduleRules {
@@ -616,15 +616,19 @@ pub struct Task {
     /// Both start bounds and both finish bounds. Empty bounds leave the single [`Constraint`] in charge.
     #[serde(default, skip_serializing_if = "DateBounds::is_empty")]
     pub bounds: DateBounds,
-    /// Share the parent group's remaining space. Used only while [`ScheduleRules::stretch`] is on.
+    /// Share the parent group's remaining space (Size-in-group → Remaining space).
+    ///
     /// Stretching applies when both start and finish are [`DateMode::Unrestricted`] (Project Planner
     /// `groupShare`); any own date on either side keeps the stored duration instead.
+    /// New tasks default to `true` (Swift `fillsGroup`); missing field on deserialize stays `false`
+    /// so old PlanCraft files keep stored durations until the user opts in.
     #[serde(default, skip_serializing_if = "is_false")]
     pub fills_group: bool,
     /// Fixed (typed) vs Auto (window-calculated) duration. Absent on old files → Fixed.
     #[serde(default, skip_serializing_if = "DurationMode::is_fixed")]
     pub duration_mode: DurationMode,
-    /// Duration as a percentage of the parent group's share. Used only while [`ScheduleRules::span`] is on.
+    /// Duration as a percentage of the parent group's span (Size-in-group → % of group).
+    /// Applies whenever set; project-wide [`ScheduleRules::span`] is not required.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_percent: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -791,6 +795,58 @@ impl Task {
         DateMode::of(min, max)
     }
 
+    /// Whether the row carries any user-imposed date (bounds, dated constraint, deadline, or
+    /// manual anchors). Placement (ASAP/ALAP) alone does not count. Swift `hasDateConstraints`.
+    pub fn has_date_constraints(&self) -> bool {
+        !self.bounds.is_empty()
+            || self.constraint.kind.needs_date()
+            || self.deadline.is_some()
+            || self.manual_start.is_some()
+            || self.manual_finish.is_some()
+            || self.mode == ScheduleMode::Manual
+    }
+
+    /// Paired dates that drive working duration before share resolution (Swift `dateDurationBounds`):
+    /// both sides **On**, or a hard start-floor + fixed finish-deadline window.
+    pub fn date_duration_bounds(&self) -> Option<(DateTime, DateTime)> {
+        if self.is_milestone() {
+            return None;
+        }
+        let (s_min, s_max) = self.start_window();
+        let (f_min, f_max) = self.finish_window();
+        let start = s_min?;
+        let finish = f_max?;
+        let start_mode = DateMode::of(s_min, s_max);
+        let end_mode = DateMode::of(f_min, f_max);
+        let exact = start_mode == DateMode::On && end_mode == DateMode::On;
+        let fixed_window = self.bounds.start_earliest.is_some()
+            && self.bounds.finish_latest_fixed
+            && matches!(start_mode, DateMode::NoEarlier | DateMode::On)
+            && matches!(end_mode, DateMode::NoLater | DateMode::On);
+        if !(exact || fixed_window) || finish < start {
+            return None;
+        }
+        Some((start, finish))
+    }
+
+    /// Clears every user-imposed date so only the group, predecessors and placement position the
+    /// activity (both sides Unrestricted). Keeps ASAP/ALAP placement, `fills_group` and
+    /// `duration_percent`. Used for Remaining space and Clear Dates (Swift `clearDateConstraints`).
+    pub fn clear_date_constraints(&mut self) {
+        self.bounds = DateBounds::default();
+        if self.constraint.kind.needs_date() {
+            self.constraint = Constraint::default();
+        }
+        // Soft hand deadline clears with other date limits (Swift `latestFinish`).
+        self.deadline = None;
+        self.manual_start = None;
+        self.manual_finish = None;
+        if self.mode == ScheduleMode::Manual {
+            self.mode = ScheduleMode::Auto;
+        }
+        // Keeps `fills_group` / `duration_percent` so Remaining space / % of group stay eligible.
+    }
+
     /// Whether one side takes its date from dependencies/group rollup (`true`) or from its own
     /// exact anchor (`false`).
     ///
@@ -821,7 +877,8 @@ impl Task {
             effort_driven: false,
             constraint: Constraint::default(),
             bounds: DateBounds::default(),
-            fills_group: false,
+            // Swift `fillsGroup = true`. Serde missing-field default stays false for old files.
+            fills_group: true,
             duration_mode: DurationMode::Fixed,
             duration_percent: None,
             deadline: None,

@@ -85,6 +85,8 @@ fn build(start: Date) -> PlanResult<Project> {
             t.outline_level = level;
             t.duration = (days * day as f64) as i64;
             t.estimated = false;
+            // Demo rows keep typed durations (Size in group → Own), not the fills_group default.
+            t.fills_group = false;
         }
         id
     };

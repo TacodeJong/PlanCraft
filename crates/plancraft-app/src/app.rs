@@ -1511,6 +1511,12 @@ impl PlanCraftApp {
                     report(st, r);
                 }
             }
+            Command::ClearDates => {
+                if !sel.is_empty() {
+                    let r = doc.try_edit("Clear Dates", ChangeSource::User, |p| p.clear_dates(&sel));
+                    report(st, r);
+                }
+            }
             // A recurring task opens its Recurring Task Information instead.
             Command::TaskInfo
                 if sel.len() <= 1

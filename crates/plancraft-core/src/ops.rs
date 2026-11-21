@@ -982,12 +982,35 @@ impl Project {
     }
 
     /// Sets the leveling delay of one task, in working minutes.
+    /// Nested summaries may carry a delay too (editable on Planning even when General hides it).
     pub fn set_leveling_delay(&mut self, id: TaskId, minutes: Minutes) -> PlanResult<()> {
         if !(0..=MAX_MINUTES).contains(&minutes) {
             return invalid("leveling delay must be between 0 and 5 years");
         }
         let idx = self.require_task(id)?;
         self.row_mut(idx)?.leveling_delay = minutes;
+        Ok(())
+    }
+
+    /// Clear Dates for parented rows (Swift §9.3): drop user date constraints while keeping
+    /// placement, `fills_group` and `duration_percent`. Top-level rows are skipped so the plan
+    /// keeps an anchor.
+    pub fn clear_dates(&mut self, ids: &[TaskId]) -> PlanResult<()> {
+        let parent = crate::schedule::parents(self);
+        for &id in ids {
+            let Some(idx) = self.task_index(id) else {
+                continue;
+            };
+            if parent.get(idx).copied().flatten().is_none() {
+                continue;
+            }
+            let Some(t) = self.tasks.get_mut(idx) else {
+                continue;
+            };
+            if t.has_date_constraints() {
+                t.clear_date_constraints();
+            }
+        }
         Ok(())
     }
 
@@ -1032,10 +1055,12 @@ impl Project {
         let task_type = t.task_type;
         t.duration = minutes;
         t.estimated = estimated;
-        // Typing a duration opts out of Auto: the stored value is the plan again.
+        // Typing a duration opts out of Auto and Size-in-group fill (Swift: Own duration).
         if t.duration_mode == DurationMode::Auto {
             t.duration_mode = DurationMode::Fixed;
         }
+        t.fills_group = false;
+        t.duration_percent = None;
         // A zero duration makes a milestone, whether the task is scheduled automatically or
         // manually (a summary, handled above, never becomes one).
         if minutes == 0 && t.kind == TaskKind::Task {
@@ -2142,5 +2167,56 @@ mod dutch_dates {
         let finish = p.parse_datetime("30-11-2026 17:00", true).unwrap();
         assert_eq!(finish.date(), crate::dates::ymd(2026, 11, 30).unwrap());
         assert_eq!((finish.hour(), finish.minute()), (17, 0));
+    }
+}
+
+#[cfg(test)]
+mod clear_dates_and_own {
+    use super::*;
+
+    #[test]
+    fn typing_duration_clears_fill_and_percent() {
+        let mut p = Project::new("Own", crate::dates::ymd(2026, 1, 5).unwrap());
+        let _g = p.add_task("Group", None);
+        let child = p.add_task("Child", None);
+        {
+            let t = p.task_mut(child).unwrap();
+            t.outline_level = 2;
+            t.fills_group = true;
+            t.duration_percent = Some(25.0);
+        }
+        p.set_duration(child, 480, false).unwrap();
+        let t = p.task(child).unwrap();
+        assert!(!t.fills_group);
+        assert!(t.duration_percent.is_none());
+        assert_eq!(t.duration, 480);
+    }
+
+    #[test]
+    fn clear_dates_keeps_share_flags_on_parented_rows() {
+        let mut p = Project::new("Clear", crate::dates::ymd(2026, 1, 5).unwrap());
+        let root = p.add_task("Root", None);
+        let child = p.add_task("Child", None);
+        let start = p.start;
+        {
+            let t = p.task_mut(child).unwrap();
+            t.outline_level = 2;
+            t.fills_group = true;
+            t.duration_percent = Some(40.0);
+            t.deadline = Some(start);
+            t.bounds.start_earliest = Some(start);
+        }
+        {
+            let t = p.task_mut(root).unwrap();
+            t.deadline = Some(start);
+        }
+        p.clear_dates(&[root, child]).unwrap();
+        let child = p.task(child).unwrap();
+        assert!(child.fills_group);
+        assert_eq!(child.duration_percent, Some(40.0));
+        assert!(child.deadline.is_none());
+        assert!(child.bounds.is_empty());
+        // Top-level rows keep their dates so the plan still has an anchor.
+        assert!(p.task(root).unwrap().deadline.is_some());
     }
 }

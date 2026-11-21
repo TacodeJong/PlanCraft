@@ -179,7 +179,9 @@ fn task_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState) {
         ui.add_space(4.0);
     }
     let snap = snapshot(&doc.project, &ids);
-    let share = doc.project.settings.rules.enabled() && ids.iter().all(|id| can_share(&doc.project, *id));
+    // Size in group whenever every selected row has a parent and is not a leaf milestone
+    // (nested summaries included). Does not require project-wide stretch/span rules.
+    let share = ids.iter().all(|id| can_share(&doc.project, *id));
     let any_summary = ids.iter().any(|id| doc.project.task_index(*id).is_some_and(|i| doc.project.has_children(i)));
     // Only milestones selected: one moment instead of separate start and finish fields.
     let milestone_only = !any_summary && snap.milestone == Some(true);
@@ -193,7 +195,7 @@ fn task_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState) {
     ui.separator();
     match st.properties_tab {
         PropTab::General => general_tab(ui, doc, st, &ids, &snap, first, multi, any_summary, milestone_only, share),
-        PropTab::Planning => planning_tab(ui, doc, st, &ids, &snap, first, multi),
+        PropTab::Planning => planning_tab(ui, doc, st, &ids, &snap, first, multi, share),
         PropTab::Resources => resources_tab(ui, doc, st, &ids, &snap, first, multi, any_summary),
         PropTab::Progress => progress_tab(ui, doc, st, &ids, &snap, first, multi, any_summary, milestone_only),
         PropTab::Notes => notes_block(ui, doc, st, &ids, &snap, first, multi),
@@ -283,7 +285,7 @@ fn general_tab(
             }
         }
     });
-    placement_row(ui, doc, st, ids, first, multi, any_summary);
+    placement_row(ui, doc, st, ids, first, multi, any_summary, share);
     // The everyday fields, like the Swift inspector: no tab-hopping for normal work.
     schedule_fields(ui, doc, st, ids, snap, first, multi, any_summary, milestone_only, share);
     label(ui, st.t("prop.predecessors"));
@@ -490,48 +492,182 @@ fn schedule_fields(
         }
     }
     if share {
-        // Stretch and percent-of-group both size a share: setting one clears the other.
-        let mut stretch = snap.stretch.unwrap_or(false);
-        if ui.checkbox(&mut stretch, st.t("prop.stretch")).changed() {
-            let ids = ids.to_vec();
-            edit(doc, st, "Stretch", move |p| {
-                for id in &ids {
-                    if let Some(t) = p.task_mut(*id) {
-                        t.fills_group = stretch;
-                        if stretch {
-                            t.duration_percent = None;
+        size_in_group_row(ui, doc, st, ids, first, multi);
+    }
+}
+
+/// How a row inside a group gets its length (Swift `GroupSizeChoice`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GroupSizeChoice {
+    Own,
+    Percent,
+    Fill,
+}
+
+fn group_size_choice(t: &Task) -> GroupSizeChoice {
+    if t.duration_percent.is_some_and(|pct| pct.is_finite() && pct > 0.0) {
+        return GroupSizeChoice::Percent;
+    }
+    let wants_fill = t.duration_mode == DurationMode::Auto || t.fills_group;
+    if wants_fill && t.start_mode() == DateMode::Unrestricted && t.finish_mode() == DateMode::Unrestricted {
+        return GroupSizeChoice::Fill;
+    }
+    GroupSizeChoice::Own
+}
+
+fn initial_group_percent(p: &Project, id: TaskId) -> f64 {
+    let Some(idx) = p.task_index(id) else {
+        return 100.0;
+    };
+    let Some(t) = p.task(id) else {
+        return 100.0;
+    };
+    let base = p.parent_index(idx).and_then(|pi| p.tasks.get(pi)).map(|g| g.sched.duration).unwrap_or(0);
+    if base > 0 {
+        let value = (t.sched.duration as f64 / base as f64 * 100.0).min(1000.0);
+        (value * 100.0).round() / 100.0
+    } else {
+        100.0
+    }
+}
+
+fn apply_group_size(p: &mut Project, id: TaskId, choice: GroupSizeChoice, is_summary: bool) -> Result<(), String> {
+    let resolved = p.task(id).map(|t| t.sched.duration).unwrap_or(0);
+    let pct = match choice {
+        GroupSizeChoice::Percent => Some(initial_group_percent(p, id)),
+        _ => None,
+    };
+    let Some(t) = p.task_mut(id) else {
+        return Ok(());
+    };
+    match choice {
+        GroupSizeChoice::Own => {
+            t.duration_percent = None;
+            t.fills_group = false;
+            t.duration_mode = DurationMode::Fixed;
+            if !is_summary {
+                t.duration = resolved.max(0);
+                t.estimated = false;
+            }
+        }
+        GroupSizeChoice::Percent => {
+            t.duration_percent = pct;
+            t.fills_group = false;
+            t.duration_mode = DurationMode::Fixed;
+        }
+        GroupSizeChoice::Fill => {
+            t.duration_percent = None;
+            t.fills_group = true;
+            t.clear_date_constraints();
+        }
+    }
+    Ok(())
+}
+
+/// A hierarchical Size-of-group edit belongs to the highest selected rows. If a selected
+/// summary has selected descendants (including descendants hidden by collapse), those
+/// descendants keep their own percentage/fill policy.
+fn size_group_targets(p: &Project, ids: &[TaskId]) -> Vec<TaskId> {
+    ids.iter()
+        .copied()
+        .filter(|id| {
+            let Some(mut i) = p.task_index(*id) else {
+                return false;
+            };
+            while let Some(pi) = p.parent_index(i) {
+                if p.tasks.get(pi).is_some_and(|ancestor| ids.contains(&ancestor.id)) {
+                    return false;
+                }
+                i = pi;
+            }
+            true
+        })
+        .collect()
+}
+
+fn size_in_group_row(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], first: TaskId, multi: bool) {
+    let targets = size_group_targets(&doc.project, ids);
+    let current = {
+        let choices: Vec<GroupSizeChoice> =
+            targets.iter().filter_map(|id| doc.project.task(*id).map(group_size_choice)).collect();
+        common_eq(choices.into_iter())
+    };
+    let all_summary = targets.iter().all(|id| doc.project.task_index(*id).is_some_and(|i| doc.project.has_children(i)));
+    let percent_group = common(
+        targets
+            .iter()
+            .filter_map(|id| doc.project.task(*id))
+            .map(|t| t.duration_percent.map(|n| n.to_string()).unwrap_or_default()),
+    );
+    let own_label = if all_summary { st.t("prop.size_spans") } else { st.t("prop.size_own") };
+    let shown = match current {
+        Some(GroupSizeChoice::Own) => own_label.to_string(),
+        Some(GroupSizeChoice::Percent) => st.t("prop.size_percent").to_string(),
+        Some(GroupSizeChoice::Fill) => st.t("prop.size_fill").to_string(),
+        None => st.t("common.multiple").to_string(),
+    };
+    label(ui, st.t("prop.size_in_group"));
+    egui::ComboBox::from_id_salt(("task_size_group", first, multi))
+        .selected_text(shown)
+        .show_ui(ui, |ui| {
+            for (choice, text) in [
+                (GroupSizeChoice::Own, own_label),
+                (GroupSizeChoice::Percent, st.t("prop.size_percent")),
+                (GroupSizeChoice::Fill, st.t("prop.size_fill")),
+            ] {
+                if ui.selectable_label(current == Some(choice), text).clicked() && current != Some(choice) {
+                    let ids = targets.clone();
+                    edit(doc, st, "Size of group", move |p| {
+                        for id in &ids {
+                            let summary = p.task_index(*id).is_some_and(|i| p.has_children(i));
+                            apply_group_size(p, *id, choice, summary)?;
+                        }
+                        Ok(())
+                    });
+                }
+            }
+        })
+        .response
+        .on_hover_text(st.t("prop.size_fill_help"));
+    if all_summary {
+        // Nested summary alignment positions its allotted Size-of-group block in the parent
+        // window, so keep the two controls together.
+        label(ui, st.t("prop.placement"));
+        placement_combo(ui, doc, st, &targets, first, multi, "task_group_placement");
+    }
+    if current == Some(GroupSizeChoice::Percent) || percent_group.as_deref().is_some_and(|s| !s.is_empty()) {
+        label(ui, st.t("prop.size_percent_field"));
+        ui.horizontal(|ui| {
+            if let Some(text) =
+                line(ui, ("task_pct_group", first, multi), percent_group.as_deref().unwrap_or(""), st.t("common.none_lc"))
+            {
+                let ids = targets.clone();
+                edit(doc, st, "Percent of group", move |p| {
+                    let pct = if text.trim().is_empty() {
+                        None
+                    } else {
+                        let value = text.trim().parse::<f64>().map_err(|_| "Percent of group must be a number")?;
+                        Some(if value.is_finite() { value.clamp(0.0, 1000.0) } else { 0.0 })
+                    };
+                    for id in &ids {
+                        if let Some(t) = p.task_mut(*id) {
+                            t.duration_percent = pct;
+                            if pct.is_some() {
+                                t.fills_group = false;
+                                t.duration_mode = DurationMode::Fixed;
+                            }
                         }
                     }
-                }
-                Ok(())
-            });
-        }
-        label(ui, st.t("prop.percent_group"));
-        if let Some(text) = line(ui, ("task_pct_group", first, multi), snap.percent_group.as_deref().unwrap_or(""), st.t("common.none_lc"))
-        {
-            let ids = ids.to_vec();
-            edit(doc, st, "Percent of group", move |p| {
-                let pct = if text.trim().is_empty() {
-                    None
-                } else {
-                    Some(text.trim().parse::<f64>().map_err(|_| "Percent of group must be a number")?)
-                };
-                for id in &ids {
-                    if let Some(t) = p.task_mut(*id) {
-                        t.duration_percent = pct;
-                        if pct.is_some() {
-                            t.fills_group = false;
-                        }
-                    }
-                }
-                Ok(())
-            });
-        }
+                    Ok(())
+                });
+            }
+            ui.label(RichText::new(st.t("prop.size_percent_suffix")).color(theme::pal().TEXT_WEAK));
+        });
     }
 }
 
 /// Advanced fields, in parity with Task Information's Advanced tab.
-fn planning_tab(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], snap: &Snap, first: TaskId, multi: bool) {
+fn planning_tab(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], snap: &Snap, first: TaskId, multi: bool, share: bool) {
     let mut active = snap.active.unwrap_or(true);
     if ui.checkbox(&mut active, st.t("prop.active")).changed() {
         let ids = ids.to_vec();
@@ -675,6 +811,13 @@ fn planning_tab(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId
             }
             Ok(())
         });
+    }
+    // Swift §9: Clear Dates for in-group rows; keep Size-in-group fill/% flags.
+    if share
+        && ui.button(st.t("prop.clear_dates")).on_hover_text(st.t("prop.clear_dates_hint")).clicked()
+    {
+        let ids = ids.to_vec();
+        edit(doc, st, "Clear Dates", move |p| p.clear_dates(&ids).map_err(|e| e.to_string()));
     }
     label(ui, st.t("prop.task_type"));
     let type_name = |t: TaskType| match t {
@@ -913,12 +1056,40 @@ fn placement_kind_for_ui(kind: ConstraintKind) -> ConstraintKind {
     if matches!(kind, ConstraintKind::Alap) { ConstraintKind::Alap } else { ConstraintKind::Asap }
 }
 
-fn placement_row(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], first: TaskId, multi: bool, any_summary: bool) {
+fn placement_row(
+    ui: &mut Ui,
+    doc: &mut Document,
+    st: &mut UiState,
+    ids: &[TaskId],
+    first: TaskId,
+    multi: bool,
+    any_summary: bool,
+    share: bool,
+) {
     if any_summary {
+        // A nested summary's placement belongs beside Size of group below.
+        if share {
+            return;
+        }
         label(ui, st.t("prop.placement"));
         derived_line(ui, st.t("common.multiple_lc"), st.t("prop.from_children"));
         return;
     }
+    ui.horizontal_wrapped(|ui| {
+        compact_label(ui, st.t("prop.placement"));
+        placement_combo(ui, doc, st, ids, first, multi, "task_placement");
+    });
+}
+
+fn placement_combo(
+    ui: &mut Ui,
+    doc: &mut Document,
+    st: &mut UiState,
+    ids: &[TaskId],
+    first: TaskId,
+    multi: bool,
+    salt: &'static str,
+) {
     let tasks: Vec<&Task> = ids.iter().filter_map(|id| doc.project.task(*id)).collect();
     let all_manual = tasks.iter().all(|t| t.mode == ScheduleMode::Manual);
     let current = common_eq(tasks.iter().map(|t| placement_kind_for_ui(t.constraint.kind)));
@@ -929,10 +1100,8 @@ fn placement_row(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskI
             _ => k.label().to_string(),
         })
         .unwrap_or_else(|| st.t("common.multiple").to_string());
-    ui.horizontal_wrapped(|ui| {
-        compact_label(ui, st.t("prop.placement"));
-        let width = (ui.available_width() - 104.0).clamp(120.0, 280.0);
-        egui::ComboBox::from_id_salt(("task_placement", first, multi)).width(width).selected_text(shown).show_ui(ui, |ui| {
+    let width = ui.available_width().clamp(120.0, 280.0);
+    egui::ComboBox::from_id_salt((salt, first, multi)).width(width).selected_text(shown).show_ui(ui, |ui| {
             for kind in [ConstraintKind::Asap, ConstraintKind::Alap] {
                 let selected = current == Some(kind);
                 let label = match kind {
@@ -951,7 +1120,6 @@ fn placement_row(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskI
                     });
                 }
             }
-        });
     });
     if all_manual {
         ui.label(RichText::new(st.t("prop.placement_hint_manual")).size(11.0).color(theme::pal().TEXT_WEAK));
@@ -1175,8 +1343,6 @@ struct Snap {
     finish_latest: Option<Option<DateTime>>,
     start_fixed: Option<bool>,
     finish_fixed: Option<bool>,
-    stretch: Option<bool>,
-    percent_group: Option<String>,
     resources: Option<String>,
     percent: Option<String>,
     status: Option<TaskStatus>,
@@ -1248,8 +1414,6 @@ fn snapshot(p: &Project, ids: &[TaskId]) -> Snap {
         finish_latest: common_dt(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.finish_window().1)),
         start_fixed: flag(&|t| t.bounds.start_latest_fixed),
         finish_fixed: flag(&|t| t.bounds.finish_latest_fixed),
-        stretch: flag(&|t| t.fills_group),
-        percent_group: text(&|t| t.duration_percent.map(|n| n.to_string()).unwrap_or_default()),
         resources: text(&|t| p.format_resource_names_only(t.id)),
         percent: text(&|t| t.percent_complete.to_string()),
         status: common_status(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.status)),
@@ -1309,7 +1473,8 @@ fn common_mark(mut values: impl Iterator<Item = Option<RowMark>>) -> Option<Opti
 fn can_share(p: &Project, id: TaskId) -> bool {
     let Some(idx) = p.task_index(id) else { return false };
     let Some(task) = p.task(id) else { return false };
-    p.parent_index(idx).is_some() && !p.has_children(idx) && !task.is_milestone()
+    // Swift sizeRows: every row with a parent except leaf milestones (nested summaries included).
+    p.parent_index(idx).is_some() && (p.has_children(idx) || !task.is_milestone())
 }
 
 fn set_milestones(p: &mut Project, ids: &[TaskId], milestone: bool) -> Result<(), String> {
@@ -1330,9 +1495,10 @@ pub(crate) fn effective_duration_mode_for_ui(p: &Project, id: TaskId, t: &Task) 
     if p.has_children(idx) || t.is_milestone() || !has_parent {
         return (DurationMode::Fixed, false);
     }
-    let percent_derived = p.settings.rules.span && t.duration_percent.is_some_and(|pct| pct.is_finite() && pct > 0.0);
+    // Size-in-group fill/percent derive a calculated duration without project-wide rules.
+    let percent_derived = t.duration_percent.is_some_and(|pct| pct.is_finite() && pct > 0.0);
     let stretch_derived =
-        p.settings.rules.stretch && t.fills_group && t.start_mode() == DateMode::Unrestricted && t.finish_mode() == DateMode::Unrestricted;
+        t.fills_group && t.start_mode() == DateMode::Unrestricted && t.finish_mode() == DateMode::Unrestricted;
     if percent_derived || stretch_derived { (DurationMode::Auto, true) } else { (DurationMode::Fixed, false) }
 }
 
@@ -1785,7 +1951,9 @@ mod tests {
         let prep = p.add_task("Preparation", None);
         let send = p.add_task("Send", None);
         for id in [pred, prep, send] {
-            p.task_mut(id).unwrap().outline_level = 2;
+            let t = p.task_mut(id).unwrap();
+            t.outline_level = 2;
+            t.fills_group = false;
         }
         {
             let t = p.task_mut(pred).unwrap();
@@ -1885,9 +2053,8 @@ mod tests {
     }
 
     #[test]
-    fn legacy_derived_duration_is_shown_as_auto_mode() {
-        let mut p = Project::new("Legacy", ymd(2026, 12, 7).unwrap());
-        p.settings.rules.stretch = true;
+    fn size_in_group_fill_is_shown_as_auto_mode() {
+        let mut p = Project::new("Size", ymd(2026, 12, 7).unwrap());
         let _g = p.add_task("Group", None);
         let t = p.add_task("Task", None);
         {
@@ -1902,5 +2069,65 @@ mod tests {
         assert_eq!(snap.duration_mode, Some(DurationMode::Fixed));
         assert_eq!(snap.duration_mode_effective, Some(DurationMode::Auto));
         assert_eq!(snap.legacy_duration_derived, Some(true));
+        assert_eq!(group_size_choice(p.task(t).unwrap()), GroupSizeChoice::Fill);
+    }
+
+    #[test]
+    fn size_in_group_labels_for_summary_and_leaf() {
+        let mut p = Project::new("Labels", ymd(2026, 12, 7).unwrap());
+        let root = p.add_task("Root", None);
+        let nest = p.add_task("Nest", None);
+        let leaf = p.add_task("Leaf", None);
+        p.task_mut(nest).unwrap().outline_level = 2;
+        p.task_mut(leaf).unwrap().outline_level = 3;
+        p.task_mut(nest).unwrap().fills_group = false;
+        p.task_mut(leaf).unwrap().fills_group = false;
+        recalculate(&mut p);
+        assert!(can_share(&p, nest), "nested summary shows Size in group");
+        assert!(can_share(&p, leaf), "nested leaf shows Size in group");
+        assert!(!can_share(&p, root), "top-level has no Size in group");
+        assert_eq!(group_size_choice(p.task(nest).unwrap()), GroupSizeChoice::Own);
+        assert_eq!(group_size_choice(p.task(leaf).unwrap()), GroupSizeChoice::Own);
+
+        p.task_mut(leaf).unwrap().duration_percent = Some(50.0);
+        assert_eq!(group_size_choice(p.task(leaf).unwrap()), GroupSizeChoice::Percent);
+        p.task_mut(nest).unwrap().fills_group = true;
+        assert_eq!(group_size_choice(p.task(nest).unwrap()), GroupSizeChoice::Fill);
+    }
+
+    #[test]
+    fn apply_group_size_own_clears_fill_on_summary() {
+        let mut p = Project::new("Own", ymd(2026, 12, 7).unwrap());
+        let _root = p.add_task("Root", None);
+        let nest = p.add_task("Nest", None);
+        let leaf = p.add_task("Leaf", None);
+        p.task_mut(nest).unwrap().outline_level = 2;
+        p.task_mut(leaf).unwrap().outline_level = 3;
+        assert!(p.task(nest).unwrap().fills_group);
+        apply_group_size(&mut p, nest, GroupSizeChoice::Own, true).unwrap();
+        assert!(!p.task(nest).unwrap().fills_group);
+        assert!(p.task(nest).unwrap().duration_percent.is_none());
+    }
+
+    #[test]
+    fn size_of_group_edit_targets_summary_not_selected_descendants() {
+        let mut p = Project::new("Hierarchy", ymd(2026, 12, 7).unwrap());
+        let root = p.add_task("Root", None);
+        let nest = p.add_task("Nest", None);
+        let child = p.add_task("Child", None);
+        p.task_mut(nest).unwrap().outline_level = 2;
+        p.task_mut(child).unwrap().outline_level = 3;
+        p.task_mut(nest).unwrap().duration_percent = Some(33.33);
+        p.task_mut(child).unwrap().duration_percent = Some(100.0);
+
+        let targets = size_group_targets(&p, &[nest, child]);
+        assert_eq!(targets, vec![nest], "a selected descendant keeps its own Size-of-group policy");
+        for id in targets {
+            p.task_mut(id).unwrap().duration_percent = Some(20.0);
+        }
+
+        assert_eq!(p.task(nest).unwrap().duration_percent, Some(20.0));
+        assert_eq!(p.task(child).unwrap().duration_percent, Some(100.0));
+        assert_eq!(size_group_targets(&p, &[root, nest, child]), vec![root]);
     }
 }

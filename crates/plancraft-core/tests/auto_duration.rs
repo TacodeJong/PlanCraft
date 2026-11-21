@@ -26,7 +26,10 @@ fn synthetic_plan() -> (Project, TaskId, TaskId, TaskId, TaskId, TaskId) {
     let send = p.add_task("Send", None);
     let succ = p.add_task("Successor", None);
     for id in [pred, prep, send, succ] {
-        p.task_mut(id).unwrap().outline_level = 2;
+        let t = p.task_mut(id).unwrap();
+        t.outline_level = 2;
+        // Opt out of the Swift fills_group default so these tests isolate DurationMode::Auto.
+        t.fills_group = false;
     }
     {
         let t = p.task_mut(pred).unwrap();
@@ -41,6 +44,7 @@ fn synthetic_plan() -> (Project, TaskId, TaskId, TaskId, TaskId, TaskId) {
         t.estimated = false;
         // Unrestricted dates alone must not convert Fixed → Auto.
         assert_eq!(t.duration_mode, DurationMode::Fixed);
+        assert!(!t.fills_group);
         assert_eq!(t.start_mode(), DateMode::Unrestricted);
         assert_eq!(t.finish_mode(), DateMode::Unrestricted);
     }
@@ -223,15 +227,15 @@ fn leveling_delay_on_send_is_not_silently_cleared() {
 }
 
 #[test]
-fn sibling_fills_group_stays_inert_when_only_prep_is_auto() {
+fn sibling_fills_group_with_finish_bound_stays_own_duration() {
     let (mut p, _g, _pred, prep, send, _succ) = synthetic_plan();
-    // fills_group + unrestricted would stretch if project rules were on; Auto on prep must not
-    // enable those rules. Keep send's FNLT so prep still has a 2-day window.
+    // fills_group alone fills only while both sides are Unrestricted; send has FNLT so it stays
+    // Own. Auto on prep must not require project-wide rules.
     p.task_mut(send).unwrap().fills_group = true;
     p.set_duration_mode(prep, DurationMode::Auto).unwrap();
     recalculate(&mut p);
     assert!(p.settings.rules.is_off());
-    assert_eq!(p.task(send).unwrap().sched.duration, DAY, "fills_group without global stretch stays fixed");
+    assert_eq!(p.task(send).unwrap().sched.duration, DAY, "finish-bound fill keeps stored duration");
     assert!(p.task(send).unwrap().fills_group);
     assert_eq!(p.task(prep).unwrap().sched.duration, 2 * DAY);
 }
@@ -393,8 +397,8 @@ fn auto_with_own_start_rule_warns_when_it_falls_back() {
 }
 
 #[test]
-fn legacy_percent_and_stretch_still_need_global_rules() {
-    let mut p = Project::new("Legacy", ymd(2026, 1, 5).unwrap());
+fn fills_group_and_percent_work_without_global_rules() {
+    let mut p = Project::new("Size in group", ymd(2026, 1, 5).unwrap());
     let g = p.add_task("Group", None);
     let a = p.add_task("A", None);
     p.task_mut(a).unwrap().outline_level = 2;
@@ -408,11 +412,13 @@ fn legacy_percent_and_stretch_still_need_global_rules() {
         t.bounds.start_earliest = Some(start);
         t.bounds.finish_latest = Some(end);
     }
-    recalculate(&mut p);
-    assert_eq!(p.task(a).unwrap().sched.duration, DAY, "without rules, fills_group is inert");
-
-    p.settings.rules = ScheduleRules::on();
+    assert!(!p.settings.rules.enabled());
     recalculate(&mut p);
     let window = plancraft_core::schedule::project_calendar(&p).between(p.start, end);
-    assert!((p.task(a).unwrap().sched.duration - window).abs() <= 1);
+    assert!((p.task(a).unwrap().sched.duration - window).abs() <= 1, "fills_group fills without rules");
+
+    p.task_mut(a).unwrap().fills_group = false;
+    p.task_mut(a).unwrap().duration_percent = Some(25.0);
+    recalculate(&mut p);
+    assert!((p.task(a).unwrap().sched.duration - window / 4).abs() <= 1, "percent spans without rules");
 }

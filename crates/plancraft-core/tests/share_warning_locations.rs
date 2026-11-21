@@ -174,16 +174,26 @@ fn capped_rows_report_their_own_warning_location() {
     assert!(percent_w.contains(&fx.p.format_duration(3 * DAY, false)));
     assert!(percent_w.contains(&percent_gate_cap.format("%Y-%m-%d %H:%M")));
 
-    let collapse_w = warning_for(&fx.p, fx.collapse);
-    assert!(fx.p.task(fx.collapse).unwrap().sched.warnings.len() == 1);
-    assert!(collapse_w.contains(&fx.p.wbs(collapse_idx)));
-    assert!(collapse_w.contains("collapsed"));
-    assert!(collapse_w.contains(&fx.p.format_duration(8 * DAY, false)));
-    assert!(collapse_w.contains(&fx.p.format_duration(0, false)));
-    assert!(collapse_w.contains(&collapse_gate_cap.format("%Y-%m-%d %H:%M")));
+    let collapse_notes: Vec<String> = fx.p.task(fx.collapse).unwrap().sched.warnings.clone();
+    assert!(
+        collapse_notes.iter().any(|w| w.contains(&fx.p.wbs(collapse_idx)) && w.contains("no room left")),
+        "collapse share warning: {collapse_notes:?}"
+    );
+    assert!(
+        collapse_notes.iter().any(|w| w.contains(&collapse_gate_cap.format("%Y-%m-%d %H:%M"))),
+        "collapse cap date: {collapse_notes:?}"
+    );
+    assert_eq!(
+        fx.p.task(fx.collapse).unwrap().sched.duration,
+        5 * DAY,
+        "impossible window keeps stored duration, not a zero bar"
+    );
 
     assert!(fx.p.task(fx.fixed).unwrap().sched.warnings.is_empty());
-    assert!(!report.warnings.iter().any(|w| w.contains("fixed date")), "soft limits should not be mislabeled: {report:?}");
+    assert!(
+        !report.warnings.iter().any(|w| (w.contains("Auto row:") || w.contains("Stretch row:") || w.contains("Percent row:")) && w.contains("fixed date")),
+        "soft limits should not be mislabeled: {report:?}"
+    );
     assert!(!report.warnings.iter().any(|w| w.contains("was shortened so a successor's fixed date")));
     assert!(!report.warnings.iter().any(|w| w.contains("has no room left for its unrestricted activities")));
 

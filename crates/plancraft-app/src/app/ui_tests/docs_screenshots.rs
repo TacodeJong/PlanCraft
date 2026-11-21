@@ -149,7 +149,9 @@ fn make_auto_duration_project() -> (Project, TaskId) {
     let send = p.add_task("Send", None);
     let review = p.add_milestone("Review", None);
     for id in [milestone, preparation, send, review] {
-        p.task_mut(id).unwrap().outline_level = 2;
+        let t = p.task_mut(id).unwrap();
+        t.outline_level = 2;
+        t.fills_group = false;
     }
 
     {
@@ -187,8 +189,8 @@ fn make_auto_duration_project() -> (Project, TaskId) {
 
     let prep = p.task(preparation).unwrap();
     assert_eq!(prep.duration, 5 * day, "stored duration must stay old value");
-    assert!(!prep.fills_group, "global stretch remains false");
-    assert!(prep.duration_percent.is_none(), "global span/percent remains false");
+    assert_eq!(prep.duration_mode, DurationMode::Auto, "demo uses Auto duration");
+    assert!(prep.duration_percent.is_none(), "percent stays clear under Auto");
     let shown = p.format_task_duration(prep);
     assert_eq!(shown, p.format_duration(2 * day, false), "calculated duration must be 2 days");
     assert!(p.tasks.iter().all(|task| task.sched.warnings.is_empty()), "the Auto-duration demo must have no task constraint violations");

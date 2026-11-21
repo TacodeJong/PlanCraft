@@ -52,6 +52,14 @@ enum EstKind {
     Work,
 }
 
+/// Size in group (Swift `GroupSizeChoice`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SizeChoice {
+    Own,
+    Percent,
+    Fill,
+}
+
 #[derive(Clone, PartialEq)]
 pub struct TaskInfo {
     /// The fields as the dialog opened: OK writes only what was changed since, so changes an
@@ -521,11 +529,12 @@ impl TaskInfo {
             if self.finish_latest_fixed != o.finish_latest_fixed {
                 t.bounds.finish_latest_fixed = self.finish_latest_fixed;
             }
-            // Stretch and percent-of-group both size a share: setting one clears the other.
+            // Size in group: fill clears percent; percent clears fill; Remaining space clears dates.
             if self.fills_group != o.fills_group {
                 t.fills_group = self.fills_group;
                 if self.fills_group {
                     t.duration_percent = None;
+                    t.clear_date_constraints();
                 }
             }
             if let Some(pct) = percent {
@@ -861,14 +870,72 @@ impl TaskInfo {
     }
 
     fn share_fields(&self, p: &Project) -> bool {
-        if !p.settings.rules.enabled() {
-            return false;
-        }
+        // Size in group: any selected row with a parent that is not a leaf milestone.
         std::iter::once(self.id).chain(self.others.iter().copied()).all(|id| {
             let Some(idx) = p.task_index(id) else { return false };
             let Some(task) = p.task(id) else { return false };
-            p.parent_index(idx).is_some() && !p.has_children(idx) && !task.is_milestone()
+            p.parent_index(idx).is_some() && (p.has_children(idx) || !task.is_milestone())
         })
+    }
+
+    fn size_choice(&self, p: &Project) -> SizeChoice {
+        if self.group_percent.trim().parse::<f64>().ok().is_some_and(|pct| pct.is_finite() && pct > 0.0)
+            || (!self.group_percent.trim().is_empty() && self.group_percent.trim().parse::<f64>().is_ok())
+        {
+            return SizeChoice::Percent;
+        }
+        let unrestricted = DateMode::of(self.side_window(p, false).0, self.side_window(p, false).1) == DateMode::Unrestricted
+            && DateMode::of(self.side_window(p, true).0, self.side_window(p, true).1) == DateMode::Unrestricted;
+        let wants_fill = self.duration_mode == DurationMode::Auto || self.fills_group;
+        if wants_fill && unrestricted && self.group_percent.trim().is_empty() {
+            SizeChoice::Fill
+        } else {
+            SizeChoice::Own
+        }
+    }
+
+    fn set_size_choice(&mut self, p: &Project, choice: SizeChoice) {
+        match choice {
+            SizeChoice::Own => {
+                self.group_percent.clear();
+                self.fills_group = false;
+                self.duration_mode = DurationMode::Fixed;
+            }
+            SizeChoice::Percent => {
+                if self.group_percent.trim().is_empty() {
+                    let base = p
+                        .task_index(self.id)
+                        .and_then(|i| p.parent_index(i))
+                        .and_then(|pi| p.tasks.get(pi))
+                        .map(|g| g.sched.duration)
+                        .unwrap_or(0);
+                    let span = p.task(self.id).map(|t| t.sched.duration).unwrap_or(0);
+                    let value = if base > 0 {
+                        ((span as f64 / base as f64) * 100.0).min(1000.0)
+                    } else {
+                        100.0
+                    };
+                    self.group_percent = format!("{}", (value * 100.0).round() / 100.0);
+                }
+                self.fills_group = false;
+                self.duration_mode = DurationMode::Fixed;
+            }
+            SizeChoice::Fill => {
+                self.group_percent.clear();
+                self.fills_group = true;
+                self.start_earliest = None;
+                self.start_latest = None;
+                self.start_latest_fixed = false;
+                self.finish_earliest = None;
+                self.finish_latest = None;
+                self.finish_latest_fixed = false;
+                if self.constraint.needs_date() {
+                    self.constraint = ConstraintKind::Asap;
+                    self.constraint_date.clear();
+                }
+                self.mode = ScheduleMode::Auto;
+            }
+        }
     }
 
     /// One side's minimum and maximum as edited here: the bound fields plus the legacy
@@ -1211,18 +1278,71 @@ impl TaskInfo {
         let share = self.share_fields(p);
         if share {
             ui.add_space(6.0);
-            // Mutually exclusive with percent-of-group: ticking one clears the other.
-            if ui.checkbox(&mut self.fills_group, "Stretch to fill the group").changed() && self.fills_group {
-                self.group_percent.clear();
-            }
+            let current = self.size_choice(p);
+            let own_label = if self.summary {
+                crate::lang::text("prop.size_spans")
+            } else {
+                crate::lang::text("prop.size_own")
+            };
+            let shown = match current {
+                SizeChoice::Own => own_label,
+                SizeChoice::Percent => crate::lang::text("prop.size_percent"),
+                SizeChoice::Fill => crate::lang::text("prop.size_fill"),
+            };
             ui.horizontal(|ui| {
-                ui.label("Percent of group:");
-                if ui.add(egui::TextEdit::singleline(&mut self.group_percent).desired_width(60.0).hint_text("none")).changed()
-                    && !self.group_percent.trim().is_empty()
-                {
-                    self.fills_group = false;
-                }
+                ui.label(crate::lang::text("prop.size_in_group"));
+                egui::ComboBox::from_id_salt("ti_size_group").selected_text(shown).show_ui(ui, |ui| {
+                    for (choice, text) in [
+                        (SizeChoice::Own, own_label),
+                        (SizeChoice::Percent, crate::lang::text("prop.size_percent")),
+                        (SizeChoice::Fill, crate::lang::text("prop.size_fill")),
+                    ] {
+                        if ui.selectable_label(current == choice, text).clicked() && current != choice {
+                            self.set_size_choice(p, choice);
+                        }
+                    }
+                });
             });
+            if self.summary {
+                ui.horizontal(|ui| {
+                    ui.label(crate::lang::text("prop.placement"));
+                    let placement = if self.constraint == ConstraintKind::Alap {
+                        ConstraintKind::Alap
+                    } else {
+                        ConstraintKind::Asap
+                    };
+                    let shown = if placement == ConstraintKind::Alap {
+                        crate::lang::text("prop.placement_alap")
+                    } else {
+                        crate::lang::text("prop.placement_asap")
+                    };
+                    egui::ComboBox::from_id_salt("ti_group_placement").selected_text(shown).show_ui(ui, |ui| {
+                        for kind in [ConstraintKind::Asap, ConstraintKind::Alap] {
+                            let text = if kind == ConstraintKind::Alap {
+                                crate::lang::text("prop.placement_alap")
+                            } else {
+                                crate::lang::text("prop.placement_asap")
+                            };
+                            if ui.selectable_label(placement == kind, text).clicked() && placement != kind {
+                                self.constraint = kind;
+                                self.constraint_date.clear();
+                            }
+                        }
+                    });
+                });
+            }
+            if matches!(current, SizeChoice::Percent) || !self.group_percent.trim().is_empty() {
+                ui.horizontal(|ui| {
+                    ui.label(crate::lang::text("prop.size_percent_field"));
+                    if ui.add(egui::TextEdit::singleline(&mut self.group_percent).desired_width(60.0).hint_text("100")).changed()
+                        && !self.group_percent.trim().is_empty()
+                    {
+                        self.fills_group = false;
+                        self.duration_mode = DurationMode::Fixed;
+                    }
+                    ui.label(RichText::new(crate::lang::text("prop.size_percent_suffix")).color(theme::pal().TEXT_WEAK));
+                });
+            }
         }
         if self.mode == ScheduleMode::Auto {
             let hint = if self.is_multi() {
@@ -1673,7 +1793,9 @@ mod tests {
         let prep = p.add_task("Preparation", None);
         let send = p.add_task("Send", None);
         for id in [pred, prep, send] {
-            p.task_mut(id).unwrap().outline_level = 2;
+            let t = p.task_mut(id).unwrap();
+            t.outline_level = 2;
+            t.fills_group = false;
         }
         {
             let t = p.task_mut(pred).unwrap();

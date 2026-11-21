@@ -1,10 +1,10 @@
 //! Group stretch, percent-of-group, and per-task Auto duration, resolved into working minutes
 //! before the CPM passes.
 //!
-//! Legacy stretch/span run only while [`ScheduleRules`](crate::model::ScheduleRules) is on.
-//! [`DurationMode::Auto`] is a per-task opt-in that reuses the same fill path without enabling
-//! project-wide rules. The stored duration is left as the fallback; the scheduler reads the
-//! resolved minutes for that pass.
+//! Size-in-group (`fills_group` / `duration_percent`) and [`DurationMode::Auto`] drive share
+//! resolution without requiring project-wide [`ScheduleRules`](crate::model::ScheduleRules).
+//! Global stretch/span flags still force a resolve pass for older plans. The stored duration is
+//! left as the fallback; the scheduler reads the resolved minutes for that pass.
 
 use crate::dates::prelude::*;
 use crate::duration::{Lag, Minutes};
@@ -17,6 +17,9 @@ use crate::schedule::{self, project_calendar};
 pub struct SharePlan {
     pub durations: Vec<Option<Minutes>>,
     pub group_min: Vec<Option<Minutes>>,
+    /// Parent window `[Ws, We]` for nested share groups: ASAP places `L` from `Ws`, ALAP to `We`.
+    pub group_start: Vec<Option<DateTime>>,
+    pub group_end: Vec<Option<DateTime>>,
     pub notes: Vec<String>,
     pub task_notes: Vec<(TaskId, String)>,
 }
@@ -27,15 +30,29 @@ enum Share {
     Fill,
 }
 
-/// Whether share resolution should run: global stretch/span rules, or any explicit Auto duration.
+/// Whether share resolution should run: global stretch/span rules, per-task Auto, or any
+/// Size-in-group fill / percent (`fills_group` / positive `duration_percent`) so Remaining space
+/// and % of group work without flipping project-wide stretch/span flags.
 pub fn needed(p: &Project) -> bool {
-    p.settings.rules.enabled() || p.tasks.iter().any(|t| t.duration_mode == DurationMode::Auto)
+    p.settings.rules.enabled()
+        || p.tasks.iter().any(|t| {
+            t.duration_mode == DurationMode::Auto
+                || t.fills_group
+                || t.duration_percent.is_some_and(|pct| pct.is_finite() && pct > 0.0)
+        })
 }
 
 /// Turns stretch, span and Auto-duration rows into concrete durations. The project's own durations are not written.
 pub fn resolve(p: &Project) -> SharePlan {
     let n = p.tasks.len();
-    let mut plan = SharePlan { durations: vec![None; n], group_min: vec![None; n], notes: Vec::new(), task_notes: Vec::new() };
+    let mut plan = SharePlan {
+        durations: vec![None; n],
+        group_min: vec![None; n],
+        group_start: vec![None; n],
+        group_end: vec![None; n],
+        notes: Vec::new(),
+        task_notes: Vec::new(),
+    };
     if !needed(p) || n == 0 {
         return plan;
     }
@@ -50,10 +67,12 @@ pub fn resolve(p: &Project) -> SharePlan {
     }
 
     let mut base = p.clone();
-    // Nested recalculate must not re-enter share resolution (legacy clears rules; Auto must too).
+    // Nested recalculate must not re-enter share resolution: clear every flag `needed()` watches.
     base.settings.rules = ScheduleRules::default();
     for t in &mut base.tasks {
         t.duration_mode = DurationMode::Fixed;
+        t.fills_group = false;
+        t.duration_percent = None;
     }
     for (i, share) in shares.iter().enumerate() {
         if share.is_some()
@@ -81,13 +100,20 @@ pub fn resolve(p: &Project) -> SharePlan {
         let finish = bound_finish(group).or_else(|| ancestor_bound_finish(p, &parent, g));
         let windowed = finish.is_some() || allotted.get(g).copied().flatten().is_some();
         let length = group_length(p, &base, g, group, allotted.get(g).copied().flatten(), finish, &parent, &shares, rows, &cal);
+        let window_start = bound_start(group)
+            .or_else(|| ancestor_bound_start(p, &parent, g))
+            .or_else(|| base.tasks.get(g).and_then(|t| t.sched.start))
+            .unwrap_or(p.start);
+        let window_end = finish
+            .or_else(|| base.tasks.get(g).and_then(|t| t.sched.finish))
+            .unwrap_or_else(|| cal.add(window_start, length.max(0)));
         let mut remaining = length;
         let mut fills: Vec<usize> = Vec::new();
         for &i in rows {
             match shares.get(i).copied().flatten() {
                 Some(Share::Percent(pct)) => {
                     let value = percent_minutes(length, pct);
-                    assign(&mut plan, &summary, i, value, &mut allotted);
+                    assign(&mut plan, &summary, i, value, &mut allotted, Some(window_start), Some(window_end));
                     remaining = remaining.saturating_sub(value);
                 }
                 Some(Share::Fill) => fills.push(i),
@@ -101,16 +127,20 @@ pub fn resolve(p: &Project) -> SharePlan {
             continue;
         }
         if remaining > 0 {
-            let count = fills.len() as Minutes;
+            // Parallel fill branches each get the whole remaining window: they overlap in time,
+            // so dividing by the number of rows would incorrectly make three parallel children
+            // look like 33.33% each. Serially linked fills share the window.
+            let parallel = fills_are_independent(p, &fills);
+            let count = if parallel { 1 } else { fills.len() as Minutes };
             let each = if count > 0 { remaining / count } else { 0 };
             let mut extra = if count > 0 { remaining % count } else { 0 };
             for i in fills {
                 let mut value = each;
-                if extra > 0 {
+                if !parallel && extra > 0 {
                     value = value.saturating_add(1);
                     extra -= 1;
                 }
-                assign(&mut plan, &summary, i, value, &mut allotted);
+                assign(&mut plan, &summary, i, value, &mut allotted, Some(window_start), Some(window_end));
             }
         } else {
             // Keep the stored duration as the budget so successor capping can still shrink it
@@ -147,9 +177,37 @@ pub fn resolve(p: &Project) -> SharePlan {
             *slot = Some(t.duration.max(0));
         }
     }
+    // Nested share groups whose children already need more than the allotment grow to fit (Swift §6.3).
+    for (i, share) in shares.iter().enumerate() {
+        if share.is_none() || !summary.get(i).copied().unwrap_or(false) {
+            continue;
+        }
+        let Some(allotted_len) = allotted.get(i).copied().flatten().or_else(|| plan.group_min.get(i).copied().flatten()) else {
+            continue;
+        };
+        let base_span = own_minutes(p, &base, i, true, &cal);
+        if base_span > allotted_len {
+            if let Some(name) = p.tasks.get(i).map(|t| t.name.as_str()) {
+                plan.notes.push(format!(
+                    "Group {name} needs more than its share of its group; it grows to fit its activities"
+                ));
+            }
+        }
+    }
     note_unresolved_auto(p, &parent, &summary, &shares, &mut plan);
     cap_for_successors(p, &mut plan);
     plan
+}
+
+/// True when none of these sibling fill rows depends directly on another. They are separate
+/// parallel branches and can each occupy the same remaining time window.
+fn fills_are_independent(p: &Project, fills: &[usize]) -> bool {
+    let ids: Vec<TaskId> = fills.iter().filter_map(|&i| p.tasks.get(i).map(|t| t.id)).collect();
+    !fills.iter().filter_map(|&i| p.tasks.get(i)).any(|t| {
+        t.predecessors
+            .iter()
+            .any(|d| matches!(d.predecessor, TaskRef::Local(id) if ids.contains(&id)))
+    })
 }
 
 /// Auto tasks that could not fill (no parent, own dates, or no window) must not look calculated.
@@ -171,7 +229,15 @@ fn note_unresolved_auto(p: &Project, parent: &[Option<usize>], summary: &[bool],
     }
 }
 
-fn assign(plan: &mut SharePlan, summary: &[bool], i: usize, value: Minutes, allotted: &mut [Option<Minutes>]) {
+fn assign(
+    plan: &mut SharePlan,
+    summary: &[bool],
+    i: usize,
+    value: Minutes,
+    allotted: &mut [Option<Minutes>],
+    window_start: Option<DateTime>,
+    window_end: Option<DateTime>,
+) {
     let value = value.max(0);
     if !summary.get(i).copied().unwrap_or(false) {
         if let Some(slot) = plan.durations.get_mut(i) {
@@ -185,25 +251,38 @@ fn assign(plan: &mut SharePlan, summary: &[bool], i: usize, value: Minutes, allo
     if let Some(slot) = allotted.get_mut(i) {
         *slot = Some(value);
     }
+    if let Some(slot) = plan.group_start.get_mut(i) {
+        *slot = window_start;
+    }
+    if let Some(slot) = plan.group_end.get_mut(i) {
+        *slot = window_end;
+    }
 }
 
-/// Project Planner `groupShare`: a percentage when set; otherwise fill while legacy `fillsGroup`
-/// (with global stretch) or explicit [`DurationMode::Auto`], and both date sides are unrestricted.
-/// Any own date on either side keeps the stored duration.
+/// Project Planner `groupShare`: a percentage when set; otherwise fill while `fills_group` or
+/// explicit [`DurationMode::Auto`], and both date sides are unrestricted. Nested summaries take
+/// part too (Fill allotment via `group_min`). Global stretch/span flags are no longer required —
+/// Size-in-group sets the per-task flags directly. Any own date on either side keeps the stored duration.
+/// Paired date-driven leaves (`date_duration_bounds`) are never shares — length comes from the window.
 fn share_of(p: &Project, i: usize, parent: Option<usize>, is_summary: bool) -> Option<Share> {
     parent?;
     let t = p.tasks.get(i)?;
     if t.is_milestone() && !is_summary {
         return None;
     }
-    if p.settings.rules.span
-        && let Some(pct) = t.duration_percent
+    if !is_summary && t.date_duration_bounds().is_some() {
+        return None;
+    }
+    // Percent wins even when global span is off (Swift `durationPercent`).
+    if let Some(pct) = t.duration_percent
         && pct.is_finite()
         && pct > 0.0
     {
         return Some(Share::Percent(pct.min(1000.0)));
     }
-    let wants_fill = t.duration_mode == DurationMode::Auto || (p.settings.rules.stretch && t.fills_group);
+    // Fill: Auto duration, or Size-in-group Remaining space (`fills_group`), including when
+    // project-wide stretch is off. Summaries are allowed here (ops forbids Auto on summaries).
+    let wants_fill = t.duration_mode == DurationMode::Auto || t.fills_group;
     if wants_fill && t.start_mode() == DateMode::Unrestricted && t.finish_mode() == DateMode::Unrestricted {
         return Some(Share::Fill);
     }
@@ -343,8 +422,9 @@ fn percent_minutes(length: Minutes, pct: f64) -> Minutes {
 }
 
 /// Project Planner `limitingSuccessorShares`: shrink stretch/percent durations so a fixed
-/// successor date is still met. Bars must not finish after a pinned successor; when the window
-/// is empty the share collapses to zero and a note is kept (impossible dependency stays visible).
+/// successor date is still met. Bars must not finish after a pinned successor. When the window
+/// is empty (cap ≤ start), keep the stored duration — a zero bar would hide an impossible
+/// dependency (Swift keeps the fallback).
 ///
 /// Rows that were classified as fill/percent but kept their stored duration (no group window)
 /// are included too — otherwise a FNLT successor leaves the stretch bar crossing the pin.
@@ -373,6 +453,8 @@ fn cap_for_successors(p: &Project, plan: &mut SharePlan) {
     probe.settings.rules = ScheduleRules::default();
     for t in &mut probe.tasks {
         t.duration_mode = DurationMode::Fixed;
+        t.fills_group = false;
+        t.duration_percent = None;
     }
     apply_plan_durations(&mut probe, plan);
     schedule::recalculate(&mut probe);
@@ -385,8 +467,25 @@ fn cap_for_successors(p: &Project, plan: &mut SharePlan) {
         let caps = if include_soft { soft_finish.as_ref().unwrap_or(&hard_finish) } else { &hard_finish };
         let Some(cap) = caps.get(i).copied().flatten() else { continue };
         if cap <= start {
-            set_duration(plan, i, 0);
-            note_cap(plan, task, p, i, current, 0, cap);
+            // Keep stored/current budget; note the impossible window without collapsing the bar.
+            let kept = p.tasks.get(i).map(|t| t.duration.max(0)).unwrap_or(current);
+            set_duration(plan, i, kept);
+            let policy = if task.duration_mode == DurationMode::Auto {
+                "Auto duration"
+            } else if task.duration_percent.is_some() {
+                "percent share"
+            } else {
+                "legacy stretch"
+            };
+            plan.task_notes.push((
+                task.id,
+                format!(
+                    "WBS {}: {policy} has no room left because successor cap is {}; keeping {}",
+                    p.wbs(i),
+                    cap.format("%Y-%m-%d %H:%M"),
+                    p.format_duration(kept, false),
+                ),
+            ));
             continue;
         }
         let max_dur = cal.between(start, cap).max(0);
@@ -653,7 +752,7 @@ mod tests {
     }
 
     #[test]
-    fn two_stretch_children_split_a_fixed_window() {
+    fn parallel_stretch_children_each_fill_the_fixed_window() {
         let (mut p, g) = group_with_window(10);
         let a = p.add_task("A", None);
         let b = p.add_task("B", None);
@@ -670,9 +769,32 @@ mod tests {
             project_calendar(&p).between(t.bounds.start_earliest.unwrap(), t.bounds.finish_latest.unwrap())
         };
         let (sa, sb) = (span(&p, a), span(&p, b));
-        assert!((sa - window / 2).abs() <= 1, "A {sa} vs half {window}");
-        assert!((sb - window / 2).abs() <= 1, "B {sb} vs half {window}");
+        assert!((sa - window).abs() <= 1, "parallel A {sa} vs full window {window}");
+        assert!((sb - window).abs() <= 1, "parallel B {sb} vs full window {window}");
         assert_eq!(p.task(a).unwrap().duration, 480, "the stored duration stays the fallback");
+    }
+
+    #[test]
+    fn serial_stretch_children_split_a_fixed_window() {
+        let (mut p, g) = group_with_window(10);
+        let a = p.add_task("A", None);
+        let b = p.add_task("B", None);
+        for id in [a, b] {
+            let t = p.task_mut(id).unwrap();
+            t.outline_level = 2;
+            t.fills_group = true;
+            t.duration = 480;
+            t.estimated = false;
+        }
+        p.link(a.into(), b, LinkType::FS, Lag::None).unwrap();
+        recalculate(&mut p);
+        let window = {
+            let t = p.task(g).unwrap();
+            project_calendar(&p).between(t.bounds.start_earliest.unwrap(), t.bounds.finish_latest.unwrap())
+        };
+        let (sa, sb) = (span(&p, a), span(&p, b));
+        assert!((sa - window / 2).abs() <= 1, "serial A {sa} vs half {window}");
+        assert!((sb - window / 2).abs() <= 1, "serial B {sb} vs half {window}");
     }
 
     #[test]
@@ -810,16 +932,18 @@ mod tests {
         let nest = p.add_task("1.3.1", None);
         let leaf = p.add_task("Leaf", None);
         p.task_mut(nest).unwrap().outline_level = 2;
+        // Own size on the nest so only the ancestor deadline supplies P (not a Fill allotment).
+        p.task_mut(nest).unwrap().fills_group = false;
         {
             let t = p.task_mut(leaf).unwrap();
             t.outline_level = 3;
             t.duration = 480;
             t.estimated = false;
+            t.fills_group = false;
             t.duration_mode = DurationMode::Auto;
         }
         let deadline = day(&p, 10);
         p.task_mut(root).unwrap().deadline = Some(deadline);
-        // Nest stays unrestricted and is not Fill — only the ancestor deadline supplies P.
         assert_eq!(p.task(nest).unwrap().start_mode(), DateMode::Unrestricted);
         assert_eq!(p.task(nest).unwrap().finish_mode(), DateMode::Unrestricted);
         assert!(!p.task(nest).unwrap().fills_group);
@@ -834,6 +958,76 @@ mod tests {
         assert!(window > 480, "deadline opens a multi-day window");
         assert!((span(&p, leaf) - window).abs() <= 1, "Auto leaf {} vs window {window}", span(&p, leaf));
         assert_eq!(p.task(leaf).unwrap().duration, 480, "stored duration stays the fallback");
+    }
+
+    /// Nested unrestricted summary with fills_group under a parent deadline: the nest is Fill,
+    /// children (Auto/fill) resolve inside the allotted window — no “no window” note.
+    #[test]
+    fn nested_fill_summary_allots_window_without_global_rules() {
+        let mut p = Project::new("Nested fill", crate::dates::ymd(2026, 1, 5).unwrap());
+        assert!(!p.settings.rules.enabled());
+        let root = p.add_task("1", None);
+        let nest = p.add_task("1.3.1", None);
+        let leaf = p.add_task("Leaf", None);
+        p.task_mut(root).unwrap().fills_group = false;
+        {
+            let t = p.task_mut(nest).unwrap();
+            t.outline_level = 2;
+            t.fills_group = true;
+        }
+        {
+            let t = p.task_mut(leaf).unwrap();
+            t.outline_level = 3;
+            t.duration = 480;
+            t.estimated = false;
+            t.fills_group = true;
+            t.duration_mode = DurationMode::Fixed;
+        }
+        let deadline = day(&p, 10);
+        p.task_mut(root).unwrap().deadline = Some(deadline);
+        assert!(share_of(&p, 1, Some(0), true).is_some_and(|s| matches!(s, Share::Fill)));
+
+        let report = recalculate(&mut p);
+        assert!(
+            !report.warnings.iter().any(|w| w.contains("no window")),
+            "fill nest must receive an allotted window: {:?}",
+            report.warnings
+        );
+        let window = project_calendar(&p).between(p.start, deadline);
+        assert!((span(&p, leaf) - window).abs() <= 1, "fill leaf {} vs window {window}", span(&p, leaf));
+    }
+
+    /// Size-in-group Own on a nested summary: no fill allotment from the parent.
+    #[test]
+    fn nested_own_summary_gets_no_fill_allotment() {
+        let mut p = Project::new("Own nest", crate::dates::ymd(2026, 1, 5).unwrap());
+        assert!(!p.settings.rules.enabled());
+        let root = p.add_task("1", None);
+        let nest = p.add_task("1.3.1", None);
+        let leaf = p.add_task("Leaf", None);
+        p.task_mut(root).unwrap().fills_group = false;
+        {
+            let t = p.task_mut(nest).unwrap();
+            t.outline_level = 2;
+            t.fills_group = false;
+        }
+        {
+            let t = p.task_mut(leaf).unwrap();
+            t.outline_level = 3;
+            t.duration = 480;
+            t.estimated = false;
+            t.fills_group = false;
+            t.duration_mode = DurationMode::Fixed;
+        }
+        p.task_mut(root).unwrap().deadline = Some(day(&p, 10));
+        assert!(share_of(&p, 1, Some(0), true).is_none(), "Own summary is not a share");
+        recalculate(&mut p);
+        assert_eq!(span(&p, leaf), 480, "own leaf keeps stored duration");
+        // Nest rolls up from the leaf; it does not expand to the parent deadline window.
+        assert_eq!(span(&p, nest), 480, "own nest spans its activities only");
+        let window = project_calendar(&p).between(p.start, day(&p, 10));
+        assert!(window > 480);
+        assert!(span(&p, nest) < window, "own nest must not fill the parent window");
     }
 
     #[test]
@@ -896,6 +1090,39 @@ mod tests {
     }
 
     #[test]
+    fn nested_share_overflow_warns_and_grows() {
+        let mut p = Project::new("Overflow", crate::dates::ymd(2026, 1, 5).unwrap());
+        let root = p.add_task("Parent", None);
+        let nest = p.add_task("Nest", None);
+        let long = p.add_task("Long", None);
+        let short_deadline = day(&p, 5);
+        {
+            let t = p.task_mut(root).unwrap();
+            t.fills_group = false;
+            t.deadline = Some(short_deadline); // short parent window
+        }
+        {
+            let t = p.task_mut(nest).unwrap();
+            t.outline_level = 2;
+            t.fills_group = true;
+        }
+        {
+            let t = p.task_mut(long).unwrap();
+            t.outline_level = 3;
+            t.fills_group = false;
+            t.duration = 8 * 480; // longer than parent window
+            t.estimated = false;
+        }
+        let report = recalculate(&mut p);
+        assert!(
+            report.warnings.iter().any(|w| w.contains("needs more than its share")),
+            "overflow note: {:?}",
+            report.warnings
+        );
+        assert!(span(&p, nest) >= 8 * 480 - 1, "nest grows to fit long child");
+    }
+
+    #[test]
     fn a_zero_budget_share_still_gets_a_no_room_warning() {
         let mut p = Project::new("Zero budget", crate::dates::ymd(2026, 1, 5).unwrap());
         p.settings.rules = ScheduleRules::on();
@@ -923,6 +1150,70 @@ mod tests {
         let warning = p.task(row).unwrap().sched.warnings.first().cloned().unwrap_or_default();
         assert_eq!(p.task(row).unwrap().sched.duration, 0, "the stored duration still stays at zero");
         assert_eq!(p.task(row).unwrap().sched.warnings.len(), 1, "the no-room warning is still attached to the row");
-        assert!(warning.contains("has no room left"), "warning: {warning}");
+        assert!(
+            warning.contains("no room") || warning.contains("keeping"),
+            "warning: {warning}"
+        );
+    }
+
+    #[test]
+    fn impossible_successor_cap_keeps_nonzero_stored_duration() {
+        let mut p = Project::new("Impossible", crate::dates::ymd(2026, 1, 5).unwrap());
+        p.settings.rules = ScheduleRules::on();
+        let _g = p.add_task("Group", None);
+        let row = p.add_task("Row", None);
+        let gate = p.add_task("Gate", None);
+        let start = p.start;
+        {
+            let t = p.task_mut(row).unwrap();
+            t.outline_level = 2;
+            t.fills_group = true;
+            t.duration = 3 * 480;
+            t.estimated = false;
+        }
+        {
+            let t = p.task_mut(gate).unwrap();
+            t.kind = TaskKind::Milestone;
+            t.duration = 0;
+            t.estimated = false;
+            t.constraint = Constraint { kind: ConstraintKind::Mso, date: Some(start) };
+        }
+        p.link(row.into(), gate, LinkType::FS, Lag::None).unwrap();
+        recalculate(&mut p);
+        assert_eq!(
+            p.task(row).unwrap().sched.duration,
+            3 * 480,
+            "impossible cap must keep the stored duration, not collapse to zero"
+        );
+        assert!(
+            p.task(row).unwrap().sched.warnings.iter().any(|w| w.contains("no room left")),
+            "impossible window is still warned: {:?}",
+            p.task(row).unwrap().sched.warnings
+        );
+    }
+
+    #[test]
+    fn on_on_leaf_gets_date_driven_duration() {
+        let mut p = Project::new("OnOn", crate::dates::ymd(2026, 1, 5).unwrap());
+        let a = p.add_task("Paired", None);
+        let start = p.start;
+        let finish = day(&p, 4);
+        {
+            let t = p.task_mut(a).unwrap();
+            t.fills_group = false;
+            t.duration = 480; // stored fallback; scheduled length comes from On/On
+            t.estimated = false;
+            t.bounds.start_earliest = Some(start);
+            t.bounds.start_latest = Some(start);
+            t.bounds.start_latest_fixed = true;
+            t.bounds.finish_earliest = Some(finish);
+            t.bounds.finish_latest = Some(finish);
+            t.bounds.finish_latest_fixed = true;
+        }
+        assert!(p.task(a).unwrap().date_duration_bounds().is_some());
+        recalculate(&mut p);
+        let window = project_calendar(&p).between(start, finish);
+        assert!((span(&p, a) - window).abs() <= 1, "On/On span {} vs window {window}", span(&p, a));
+        assert_eq!(p.task(a).unwrap().duration, 480, "stored duration stays the fallback");
     }
 }

@@ -1294,20 +1294,23 @@ fn stretch_span_successor_matrix() {
             },
         },
         Case {
-            name: "ruleset off ignores fills",
+            // Size-in-group fill works without project-wide stretch/span (Swift parity).
+            name: "fills_group works with ruleset off",
             window_days: Some(10),
             children: &[Child::Fill { stored_days: 2 }, Child::Fill { stored_days: 2 }],
             link_last_two_fs: false,
             expect: |p, ids| {
-                assert_eq!(span_of(p, ids[0]), 2 * DAY);
-                assert_eq!(span_of(p, ids[1]), 2 * DAY);
+                let w = 10 * DAY;
+                assert!((span_of(p, ids[0]) - w / 2).abs() <= 1);
+                assert!((span_of(p, ids[1]) - w / 2).abs() <= 1);
+                assert_eq!(p.task(ids[0]).unwrap().duration, 2 * DAY, "stored duration stays the fallback");
             },
         },
     ];
 
     for case in cases {
         let mut p = Project::new(case.name, plancraft_core::dates::ymd(2026, 1, 5).unwrap());
-        if case.name != "ruleset off ignores fills" {
+        if case.name != "fills_group works with ruleset off" {
             p.settings.rules = ScheduleRules::on();
         }
         let g = p.add_task("Group", None);

@@ -58,6 +58,7 @@ fn general_placement_picker_round_trips_with_undo_without_changing_windows() {
         {
             let t = p.task_mut(id).unwrap();
             t.outline_level = 2;
+            t.fills_group = false;
             t.constraint = Constraint {
                 kind: ConstraintKind::Fnlt,
                 date: Some(plancraft_core::dates::ymd(2026, 12, 11).unwrap().and_hms_opt(17, 0, 0).unwrap()),
@@ -189,7 +190,11 @@ fn summary_edges_expose_dynamic_vs_fixed_per_side_and_keep_sides_independent() {
         let mut p = Project::new("Summary edges", plancraft_core::dates::ymd(2026, 10, 19).unwrap());
         let group = p.add_task("Group", None);
         let child = p.add_task("Child", None);
-        p.task_mut(child).unwrap().duration = 2 * 480;
+        {
+            let t = p.task_mut(child).unwrap();
+            t.duration = 2 * 480;
+            t.fills_group = false;
+        }
         p.indent(child).unwrap();
         p.set_placement(group, ConstraintKind::Alap).unwrap();
         p.set_date_mode(group, true, DateMode::Between).unwrap();
@@ -349,6 +354,80 @@ fn general_compact_rows_keep_start_mode_and_result_on_one_line_when_roomy() {
 }
 
 #[test]
+fn size_in_group_picker_shows_for_nested_leaf_and_summary_en_nl() {
+    for lang in [crate::lang::Lang::En, crate::lang::Lang::Nl] {
+        crate::lang::set_current(lang);
+        let mut p = Project::new("Size in group", plancraft_core::dates::ymd(2026, 12, 7).unwrap());
+        let root = p.add_task("Root", None);
+        let nest = p.add_task("Nest", None);
+        let leaf = p.add_task("Leaf", None);
+        p.task_mut(nest).unwrap().outline_level = 2;
+        p.task_mut(leaf).unwrap().outline_level = 3;
+        p.task_mut(nest).unwrap().fills_group = false;
+        p.task_mut(leaf).unwrap().fills_group = false;
+        plancraft_core::schedule::recalculate(&mut p);
+
+        let mut ws = Workspace::default();
+        ws.add(p, None);
+        let mut h = super::harness_with(ws);
+        super::assert_harness_ready(&h);
+        h.state_mut().st.lang = lang;
+        h.state_mut().st.properties_visible = true;
+        h.state_mut().st.properties_tab = crate::state::PropTab::General;
+
+        let size_label = crate::lang::tr(lang, "prop.size_in_group");
+        let spans = crate::lang::tr(lang, "prop.size_spans");
+        let own = crate::lang::tr(lang, "prop.size_own");
+        let fill = crate::lang::tr(lang, "prop.size_fill");
+        let placement_label = crate::lang::tr(lang, "prop.placement");
+        let asap = crate::lang::tr(lang, "prop.placement_asap");
+        let alap = crate::lang::tr(lang, "prop.placement_alap");
+
+        h.state_mut().st.sel.select_task(root);
+        h.run_steps(3);
+        assert!(h.query_all_by_label(size_label).next().is_none(), "{lang:?}: top-level has no Size in group");
+
+        h.state_mut().st.sel.select_task(nest);
+        h.run_steps(2);
+        assert!(h.query_all_by_label(size_label).next().is_some(), "{lang:?}: nested summary shows Size in group");
+        assert!(h.query_all_by_value(spans).next().is_some(), "{lang:?}: summary own label is Spans its activities");
+        assert!(h.query_all_by_label(placement_label).next().is_some(), "{lang:?}: nested summary shows Placement beside Size of group");
+        h.get_by_value(asap).click_accesskit();
+        h.run_steps(2);
+        h.get_by_label(alap).click_accesskit();
+        h.run_steps(3);
+        {
+            let ws = lock(&h.state().ws);
+            assert_eq!(
+                ws.active_doc().unwrap().project.task(nest).unwrap().constraint.kind,
+                ConstraintKind::Alap,
+                "{lang:?}: nested summary placement is editable"
+            );
+        }
+
+        h.state_mut().st.sel.select_task(leaf);
+        h.run_steps(2);
+        assert!(h.query_all_by_label(size_label).next().is_some(), "{lang:?}: nested leaf shows Size in group");
+        assert!(h.query_all_by_value(own).next().is_some(), "{lang:?}: leaf own label is Own duration");
+
+        // Open the combo and pick Remaining space.
+        h.get_by_value(own).click_accesskit();
+        h.run_steps(2);
+        h.get_by_label(fill).click_accesskit();
+        h.run_steps(3);
+        {
+            let ws = lock(&h.state().ws);
+            let t = ws.active_doc().unwrap().project.task(leaf).unwrap();
+            assert!(t.fills_group, "{lang:?}: Remaining space sets fills_group");
+            assert!(t.duration_percent.is_none());
+            assert_eq!(t.start_mode(), DateMode::Unrestricted);
+            assert_eq!(t.finish_mode(), DateMode::Unrestricted);
+        }
+        assert!(h.query_all_by_value(fill).next().is_some(), "{lang:?}: picker shows Remaining space");
+    }
+}
+
+#[test]
 fn general_preview_geometry_stays_inside_pane_en_nl() {
     let base = {
         let mut p = Project::new("General previews", plancraft_core::dates::ymd(2026, 12, 7).unwrap());
@@ -356,7 +435,9 @@ fn general_preview_geometry_stays_inside_pane_en_nl() {
         let prep = p.add_task("Preparation", None);
         let send = p.add_task("Send", None);
         for id in [prep, send] {
-            p.task_mut(id).unwrap().outline_level = 2;
+            let t = p.task_mut(id).unwrap();
+            t.outline_level = 2;
+            t.fills_group = false;
         }
         p.task_mut(send).unwrap().bounds.finish_latest =
             Some(plancraft_core::dates::ymd(2026, 12, 15).unwrap().and_hms_opt(17, 0, 0).unwrap());
@@ -467,7 +548,9 @@ fn general_properties_preview_images() {
     let prep = p.add_task("Preparation", None);
     let send = p.add_task("Send", None);
     for id in [prep, send] {
-        p.task_mut(id).unwrap().outline_level = 2;
+        let t = p.task_mut(id).unwrap();
+        t.outline_level = 2;
+        t.fills_group = false;
     }
     p.task_mut(send).unwrap().bounds.finish_latest = Some(plancraft_core::dates::ymd(2026, 12, 15).unwrap().and_hms_opt(17, 0, 0).unwrap());
     p.link(prep.into(), send, LinkType::FS, Lag::None).unwrap();

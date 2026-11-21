@@ -48,6 +48,10 @@ struct Edge {
     succ: usize,
     kind: LinkType,
     lag: Lag,
+    /// When the dependency was inherited from an ancestor summary, that summary's
+    /// `fixedStartCap` limits how late this drive may push the leaf (Swift: drive through
+    /// capped `S(group)` before `S(group)→S(child)`).
+    via_summary_cap: Option<DateTime>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -416,6 +420,9 @@ struct Engine<'a> {
     manual_summary: Vec<Option<(DateTime, DateTime)>>,
     /// Working minutes resolved from stretch and percent-of-group. `None` uses the stored duration.
     resolved: Vec<Option<Minutes>>,
+    /// Earliest fixed latest-start among the task and its descendants (Swift `fixedStartCap`).
+    /// A group cannot start after a hard SNLT / fixed start-latest inside it.
+    fixed_start_cap: Vec<Option<DateTime>>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -662,6 +669,17 @@ impl<'a> Engine<'a> {
         let manual_summary: Vec<Option<(DateTime, DateTime)>> =
             p.tasks.iter().zip(&is_leaf).map(|(t, leaf)| manual_summary_dates(t, !leaf, &proj_cal)).collect();
         let inherited = inherited_from_summaries(p, &parent, &manual_summary);
+        // Own fixed latest-start / SNLT / MSO, then roll min up so a child's hard start caps
+        // every ancestor group (Swift `fixedStartCap`).
+        let mut fixed_start_cap: Vec<Option<DateTime>> = (0..n).map(|i| p.tasks.get(i).and_then(own_fixed_start_cap)).collect();
+        for i in (0..n).rev() {
+            let Some(pi) = parent.get(i).copied().flatten() else { continue };
+            let child = fixed_start_cap.get(i).copied().flatten();
+            let slot = fixed_start_cap.get_mut(pi);
+            if let (Some(c), Some(slot)) = (child, slot) {
+                *slot = Some(slot.map_or(c, |p| p.min(c)));
+            }
+        }
         Self {
             p,
             proj_cal,
@@ -681,6 +699,7 @@ impl<'a> Engine<'a> {
             inherited,
             manual_summary,
             resolved: vec![None; n],
+            fixed_start_cap,
         }
     }
 
@@ -882,8 +901,10 @@ impl<'a> Engine<'a> {
         }
         for succ in self.leaves.clone() {
             let Some(task) = self.task(succ) else { continue };
-            // Own links, links inherited from ancestor summaries, and milestone membership.
-            let mut deps: Vec<Dependency> = task.predecessors.clone();
+            // Own links (no summary cap), then links inherited from ancestor summaries (capped by
+            // that summary's fixedStartCap), then milestone membership.
+            let mut deps: Vec<(Dependency, Option<DateTime>)> =
+                task.predecessors.iter().copied().map(|d| (d, None)).collect();
             // Links into a manually scheduled summary stop at it (it doesn't move, and its
             // subtasks follow its start instead), and so do links into the summaries around it.
             let mut anc = self.parent.get(succ).copied().flatten();
@@ -892,12 +913,19 @@ impl<'a> Engine<'a> {
                     break;
                 }
                 if let Some(t) = p.tasks.get(a) {
-                    deps.extend(t.predecessors.iter().copied().filter(|d| !matches!(d.kind, LinkType::FF | LinkType::SF)));
+                    let cap = self.fixed_start_cap.get(a).copied().flatten();
+                    deps.extend(
+                        t.predecessors
+                            .iter()
+                            .copied()
+                            .filter(|d| !matches!(d.kind, LinkType::FF | LinkType::SF))
+                            .map(|d| (d, cap)),
+                    );
                 }
                 anc = self.parent.get(a).copied().flatten();
             }
-            deps.extend(task.members.iter().map(|m| Dependency::fs(*m)));
-            for d in deps {
+            deps.extend(task.members.iter().map(|m| (Dependency::fs(*m), None)));
+            for (d, via_summary_cap) in deps {
                 for src in self.resolve_pred(&d.predecessor, d.kind, &task.name) {
                     if let PredSource::Leaf(pi) = src
                         && pi == succ
@@ -919,7 +947,7 @@ impl<'a> Engine<'a> {
                     if let Some(inc) = self.incoming.get_mut(succ) {
                         inc.push(e);
                     }
-                    self.edges.push(Edge { pred: src, succ, kind: d.kind, lag: d.lag });
+                    self.edges.push(Edge { pred: src, succ, kind: d.kind, lag: d.lag, via_summary_cap });
                 }
             }
         }
@@ -1092,12 +1120,18 @@ impl<'a> Engine<'a> {
                 let Some((ps, pf, pdur)) = self.pred_dates(&edge.pred) else {
                     continue;
                 };
-                let cand_start = match edge.kind {
+                let mut cand_start = match edge.kind {
                     LinkType::FS => apply_lag(&self.proj_cal, pf, edge.lag, pdur),
                     LinkType::SS => apply_lag(&self.proj_cal, ps, edge.lag, pdur),
                     LinkType::FF => along(apply_lag(&self.proj_cal, pf, edge.lag, pdur), false),
                     LinkType::SF => along(apply_lag(&self.proj_cal, ps, edge.lag, pdur), false),
                 };
+                // Inherited summary deps drive through the group's capped start (Swift fixedStartCap).
+                if let Some(cap) = edge.via_summary_cap
+                    && cand_start > cap
+                {
+                    cand_start = cap;
+                }
                 if cand_start > es {
                     es = cand_start;
                     driven_by_link = true;
@@ -1150,6 +1184,21 @@ impl<'a> Engine<'a> {
 
             es = apply_date_bounds(t, es, dur, &along, warn, &mut warnings);
 
+            // Own fixedStartCap only. Ancestor caps reach unrestricted siblings through
+            // inherited summary edges (`via_summary_cap`), not as a blanket upper bound —
+            // otherwise an in-group MSO would wrongly pull every sibling earlier.
+            if let Some(cap) = self.fixed_start_cap.get(i).copied().flatten()
+                && es > cap
+            {
+                if warn && driven_by_link {
+                    warnings.push("Cannot start by a fixed no-later-than date inside its group".to_string());
+                }
+                es = match t.bounds.start_earliest {
+                    Some(floor) => cap.max(floor),
+                    None => cap,
+                };
+            }
+
             if let Some(pin) = alap_pins.get(&i) {
                 es = es.max(*pin);
             }
@@ -1170,18 +1219,40 @@ impl<'a> Engine<'a> {
                 }
             }
 
-            if t.leveling_delay > 0 {
-                es = cal.add(cal.snap_forward(es), t.leveling_delay);
+            // Own delay plus ancestor summary delays (nested group delay shifts children ES).
+            let mut delay = t.leveling_delay.max(0);
+            let mut anc = self.parent.get(i).copied().flatten();
+            while let Some(pi) = anc {
+                delay = delay.saturating_add(self.task(pi).map(|a| a.leveling_delay.max(0)).unwrap_or(0));
+                anc = self.parent.get(pi).copied().flatten();
+            }
+            if delay > 0 {
+                es = cal.add(cal.snap_forward(es), delay);
             }
 
             let (mut s, mut f) = place(es);
-            let parts = parts_of(t, cal, dur);
+            let mut parts = parts_of(t, cal, dur);
             if let Some(a) = t.actual_start {
-                s = a;
+                // A positioned nested share moves its children with the allotted block. This
+                // is a group-window floor, not ALAP inherited by the leaf: the leaf remains
+                // ASAP/own-placement inside that moved window.
+                s = alap_pins.get(&i).copied().map_or(a, |pin| a.max(pin));
+                if s != a {
+                    // Progress parts were calculated from the old actual start. Translate every
+                    // derived point with the moved group window so start/finish cannot invert.
+                    let shift = cal.between(a, s);
+                    parts = parts.map(|mut pt| {
+                        pt.stop = cal.add(pt.stop, shift);
+                        pt.resume = cal.add(pt.resume, shift);
+                        pt.finish = cal.add(pt.finish, shift);
+                        pt.last.0 = cal.add(pt.last.0, shift);
+                        pt
+                    });
+                }
                 f = match parts {
                     Some(pt) => pt.finish,
-                    None if dur > 0 => along(a, true),
-                    None => a,
+                    None if dur > 0 => along(s, true),
+                    None => s,
                 };
             }
             if let Some(af) = t.actual_finish {
@@ -1198,8 +1269,8 @@ impl<'a> Engine<'a> {
                 warnings.push(self.inherited_finish_cap_warning(cap));
             }
             let segments: Vec<(DateTime, DateTime)> = match (parts, t.actual_start, t.actual_finish) {
-                (Some(pt), Some(a), _) if pt.split => {
-                    segments_of(a, &t.splits, &t.gaps, cal, dur).into_iter().map(|(s, f, _)| (s, f)).collect()
+                (Some(pt), Some(_), _) if pt.split => {
+                    segments_of(s, &t.splits, &t.gaps, cal, dur).into_iter().map(|(s, f, _)| (s, f)).collect()
                 }
                 // Planned splits in a task not under way (or finished as planned): its parts from its start.
                 (None, _, None) if span > dur => {
@@ -1499,7 +1570,9 @@ fn calculate(p: &mut Project) -> ScheduleReport {
     }
     rollup_tracking(p);
 
-    let share = if crate::shares::needed(p) { crate::shares::resolve(p) } else { crate::shares::SharePlan::default() };
+    let mut share = if crate::shares::needed(p) { crate::shares::resolve(p) } else { crate::shares::SharePlan::default() };
+    // Paired On/On (and hard start-floor + finish-deadline) set working duration before CPM (Swift dateDurationBounds).
+    apply_date_driven_durations(p, &mut share.durations);
 
     let (dates, eng_warnings, total_slack, free_slack, mut segments) = {
         let mut eng = Engine::new(p);
@@ -1510,16 +1583,47 @@ fn calculate(p: &mut Project) -> ScheduleReport {
         eng.backward();
         // As-late-as-possible tasks are pinned to their late start and the forward pass is repeated
         // so successors stay consistent.
-        let pins: HashMap<usize, DateTime> = eng
+        let parent_idx = parents(p);
+        let mut pins: HashMap<usize, DateTime> = eng
             .order
             .iter()
             .copied()
             .filter(|&i| {
-                eng.task(i)
-                    .is_some_and(|t| t.mode == ScheduleMode::Auto && t.constraint.kind == ConstraintKind::Alap && t.actual_start.is_none())
+                eng.task(i).is_some_and(|t| {
+                    t.mode == ScheduleMode::Auto
+                        && t.actual_start.is_none()
+                        && !eng.p.has_children(i)
+                        && t.constraint.kind == ConstraintKind::Alap
+                })
             })
             .filter_map(|i| eng.date(i).ls.map(|ls| (i, ls)))
             .collect();
+        // A nested summary's share is a positioned parent window, not merely a summary-bar pad.
+        // Its positioned start is an S(parent)→S(child) floor at every depth. Children keep their
+        // own placement inside that window; they do not inherit the parent's ASAP/ALAP policy.
+        // Manual/rule-based parent starts already enter through summary edges; share placement
+        // contributes the same kind of edge after resolving the parent window.
+        let pc = project_calendar(eng.p);
+        for &i in &eng.order {
+            if eng.p.has_children(i) || eng.task(i).is_some_and(|t| t.actual_finish.is_some()) {
+                continue;
+            }
+            let mut anc = parent_idx.get(i).copied().flatten();
+            while let Some(a) = anc {
+                let min = share.group_min.get(a).copied().flatten();
+                if let Some(min) = min {
+                    let positioned_start = if effective_alap(eng.p, &parent_idx, a) {
+                        share.group_end.get(a).copied().flatten().map(|end| pc.sub(end, min))
+                    } else {
+                        share.group_start.get(a).copied().flatten()
+                    };
+                    if let Some(floor) = positioned_start {
+                        pins.entry(i).and_modify(|old| *old = (*old).max(floor)).or_insert(floor);
+                    }
+                }
+                anc = parent_idx.get(a).copied().flatten();
+            }
+        }
         eng.forward(&pins, true);
         eng.backward();
         let (total_slack, free_slack) = eng.slack();
@@ -1582,7 +1686,7 @@ fn calculate(p: &mut Project) -> ScheduleReport {
 
     // Summaries' own fixed costs and assignments (active summaries only), counted once at the
     // project level on top of the leaves.
-    let own = rollup_summaries(p, &share.group_min);
+    let own = rollup_summaries(p, &share.group_min, &share.group_start, &share.group_end);
     for (task_id, warning) in &share.task_notes {
         if let Some(i) = p.task_index(*task_id) {
             if let Some(task) = p.tasks.get_mut(i) {
@@ -1694,9 +1798,61 @@ fn rollup_of(p: &Project, children: &[usize], own: Own, weights: &[(f64, f64)]) 
     }
 }
 
+/// Effective ALAP: own placement, or inherited from the nearest ancestor with ALAP (Swift §5.4).
+fn effective_alap(p: &Project, parent: &[Option<usize>], mut i: usize) -> bool {
+    loop {
+        if p.tasks.get(i).is_some_and(|t| t.constraint.kind == ConstraintKind::Alap) {
+            return true;
+        }
+        match parent.get(i).copied().flatten() {
+            Some(pi) => i = pi,
+            None => return false,
+        }
+    }
+}
+
+/// Own hard latest-start that seeds `fixedStartCap` (fixed start_latest, SNLT, or MSO).
+fn own_fixed_start_cap(t: &Task) -> Option<DateTime> {
+    if t.bounds.start_latest_fixed {
+        return t.bounds.start_latest;
+    }
+    t.constraint.date.filter(|_| matches!(t.constraint.kind, ConstraintKind::Snlt | ConstraintKind::Mso))
+}
+
+/// Working duration implied by paired date rules on a leaf (before share / CPM).
+fn date_driven_duration(t: &Task, cal: &WorkCal<'_>) -> Option<Minutes> {
+    if t.is_milestone() || t.sched.is_summary {
+        return None;
+    }
+    let (start, finish) = t.date_duration_bounds()?;
+    Some(cal.between(start, finish).max(0))
+}
+
+fn apply_date_driven_durations(p: &Project, resolved: &mut Vec<Option<Minutes>>) {
+    let cal = project_calendar(p);
+    if resolved.len() < p.tasks.len() {
+        resolved.resize(p.tasks.len(), None);
+    }
+    for (i, t) in p.tasks.iter().enumerate() {
+        if p.has_children(i) {
+            continue;
+        }
+        if let Some(mins) = date_driven_duration(t, &cal)
+            && let Some(slot) = resolved.get_mut(i)
+        {
+            *slot = Some(mins);
+        }
+    }
+}
+
 /// Rolls subtasks up into their summaries. Returns the summaries' own work and cost (fixed costs
 /// and assignments on summary rows), totalled over active summaries for the project level.
-fn rollup_summaries(p: &mut Project, group_min: &[Option<Minutes>]) -> Own {
+fn rollup_summaries(
+    p: &mut Project,
+    group_min: &[Option<Minutes>],
+    group_start: &[Option<DateTime>],
+    group_end: &[Option<DateTime>],
+) -> Own {
     let parent = parents(p);
     let proj_cal = project_calendar(p);
     let manual_summary: Vec<Option<(DateTime, DateTime)>> = p
@@ -1745,7 +1901,7 @@ fn rollup_summaries(p: &mut Project, group_min: &[Option<Minutes>]) -> Own {
         let manual = manual_summary_dates(t, true, &pc);
         let start_dynamic = t.side_is_dynamic(false);
         let finish_dynamic = t.side_is_dynamic(true);
-        let (start, mut finish) = match manual {
+        let (mut start, mut finish) = match manual {
             Some((s, f)) => (Some(s), Some(f)),
             None => {
                 let start = if start_dynamic { r.start } else { t.side_anchor(false).or(r.start) };
@@ -1757,16 +1913,48 @@ fn rollup_summaries(p: &mut Project, group_min: &[Option<Minutes>]) -> Own {
             (Some(s), Some(f)) => pc.between(s, f),
             _ => 0,
         };
-        // A nested group that stretches is at least as long as its share, even when its children are shorter.
+        // Nested share placement (Size of group % / Remaining): allotted length L inside the
+        // parent window [Ws, We]. Alignment picks which end of the window the block occupies;
+        // children shorter than L leave empty space on the other side. Children longer than L
+        // already grew the rollup — no pad.
+        //
+        //   ASAP: S = Ws (earlier if children already start before Ws), F = S + L
+        //   ALAP: F = We (later if children already finish after We),  S = F − L
         if manual.is_none()
-            && finish_dynamic
             && let Some(min) = group_min.get(i).copied().flatten()
-            && duration < min
-            && let Some(s) = start
+            // Equality still needs alignment: children can exactly fill L at the ASAP end,
+            // while the nested summary itself is ALAP and must re-anchor that block at We.
+            && duration <= min
+            && finish_dynamic
+            && start_dynamic
         {
-            let f = pc.add(s, min);
-            duration = pc.between(s, f);
-            finish = Some(f);
+            let alap = effective_alap(p, &parent, i);
+            let window_end = group_end.get(i).copied().flatten();
+            let window_start = group_start.get(i).copied().flatten();
+            if alap {
+                if let Some(f) = match (finish, window_end) {
+                    (Some(child_f), Some(end)) => Some(child_f.max(end)),
+                    (Some(child_f), None) => Some(child_f),
+                    (None, Some(end)) => Some(end),
+                    (None, None) => None,
+                } {
+                    let s = pc.sub(f, min);
+                    duration = pc.between(s, f);
+                    start = Some(s);
+                    finish = Some(f);
+                }
+            } else if let Some(s) = match (start, window_start) {
+                // Prefer the parent-window start; only pull earlier to cover children that began before Ws.
+                (Some(child_s), Some(ws)) => Some(child_s.min(ws)),
+                (None, Some(ws)) => Some(ws),
+                (Some(child_s), None) => Some(child_s),
+                (None, None) => None,
+            } {
+                let f = pc.add(s, min);
+                duration = pc.between(s, f);
+                start = Some(s);
+                finish = Some(f);
+            }
         }
         let limits = ancestor_limits.get(i).copied().unwrap_or_default();
         let mut summary_boundary_warnings = Vec::new();

@@ -409,3 +409,183 @@ fn parent_check_dynamic_outer_group_links_include_fixed_nested_group_edges() {
         assert_eq!(p.task(child).unwrap().leveling_delay, DAY);
     }
 }
+
+#[test]
+fn date_driven_on_on_sets_working_duration() {
+    let mut p = project();
+    let id = top_task(&mut p, "Windowed", 1);
+    set_on(&mut p, id, false, dt(2026, 10, 19, 8));
+    set_on(&mut p, id, true, dt(2026, 10, 23, 17));
+    recalculate(&mut p);
+    let cal = plancraft_core::schedule::project_calendar(&p);
+    let expect = cal.between(dt(2026, 10, 19, 8), dt(2026, 10, 23, 17));
+    assert_eq!(p.task(id).unwrap().sched.duration, expect, "On/On drives working duration");
+    assert_eq!(p.task(id).unwrap().duration, DAY, "stored duration stays the typed fallback");
+}
+
+#[test]
+fn child_fixed_snlt_caps_group_start() {
+    let mut p = project();
+    let group = top_task(&mut p, "Group", 5);
+    let child = top_task(&mut p, "Capped child", 1);
+    let sibling = top_task(&mut p, "Sibling", 1);
+    p.indent(child).unwrap();
+    p.indent(sibling).unwrap();
+    {
+        let t = p.task_mut(child).unwrap();
+        t.bounds.start_latest = Some(dt(2026, 10, 21, 8));
+        t.bounds.start_latest_fixed = true;
+    }
+    // Push the group later via a predecessor so the SNLT must pull starts back.
+    let pred = top_task(&mut p, "Pred", 3);
+    while p.task(pred).unwrap().outline_level > 1 {
+        p.outdent(pred).unwrap();
+    }
+    p.link(pred.into(), group, LinkType::FS, Lag::None).unwrap();
+    recalculate(&mut p);
+    let cap = dt(2026, 10, 21, 8);
+    assert!(start(&p, group) <= cap, "group start {} must respect child SNLT {cap}", start(&p, group));
+    assert!(start(&p, sibling) <= cap, "unrestricted sibling follows the capped group");
+}
+
+#[test]
+fn nested_share_alap_pads_leading_empty_allotment() {
+    let mut p = project();
+    let root = top_task(&mut p, "Root", 1);
+    let nest = top_task(&mut p, "Nest", 1);
+    let leaf = top_task(&mut p, "Leaf", 1);
+    p.indent(nest).unwrap();
+    p.indent(leaf).unwrap();
+    p.indent(leaf).unwrap();
+    p.task_mut(root).unwrap().fills_group = false;
+    p.task_mut(root).unwrap().deadline = Some(dt(2026, 10, 30, 17));
+    {
+        let t = p.task_mut(nest).unwrap();
+        t.fills_group = true;
+        t.constraint.kind = ConstraintKind::Alap;
+    }
+    {
+        let t = p.task_mut(leaf).unwrap();
+        t.fills_group = false;
+        t.duration = DAY;
+        t.estimated = false;
+        t.constraint.kind = ConstraintKind::Asap;
+    }
+    recalculate(&mut p);
+    let nest_span = plancraft_core::schedule::project_calendar(&p).between(start(&p, nest), finish(&p, nest));
+    let leaf_span = plancraft_core::schedule::project_calendar(&p).between(start(&p, leaf), finish(&p, leaf));
+    assert!(nest_span > leaf_span, "ALAP nest occupies allotment wider than its short child");
+    assert_eq!(finish(&p, nest), finish(&p, root), "ALAP fill nest finishes with the parent window");
+}
+
+#[test]
+fn nested_percent_asap_starts_at_parent_window() {
+    let mut p = project();
+    let root = top_task(&mut p, "Root", 1);
+    let late = top_task(&mut p, "Late own", 2);
+    let nest = top_task(&mut p, "Nest", 1);
+    let leaf = top_task(&mut p, "Leaf", 1);
+    p.task_mut(late).unwrap().outline_level = 2;
+    p.task_mut(nest).unwrap().outline_level = 2;
+    p.task_mut(leaf).unwrap().outline_level = 3;
+    let stale_start = p.start;
+    let parent_start = dt(2026, 10, 21, 8);
+    let parent_end = dt(2026, 10, 30, 17);
+    {
+        let t = p.task_mut(root).unwrap();
+        t.fills_group = false;
+        t.bounds.start_earliest = Some(parent_start);
+        t.deadline = Some(parent_end);
+    }
+    {
+        // A late sibling so the parent window stays wide while the nest's short child
+        // would otherwise leave the ASAP nest looking like it only spans the leaf.
+        let t = p.task_mut(late).unwrap();
+        t.fills_group = false;
+        t.duration = 2 * DAY;
+        t.estimated = false;
+        t.constraint.kind = ConstraintKind::Alap;
+    }
+    {
+        let t = p.task_mut(nest).unwrap();
+        t.fills_group = false;
+        t.duration_percent = Some(20.0);
+        t.constraint.kind = ConstraintKind::Asap;
+    }
+    {
+        let t = p.task_mut(leaf).unwrap();
+        t.fills_group = false;
+        t.duration = DAY;
+        t.estimated = false;
+        t.constraint.kind = ConstraintKind::Asap;
+        // A stale/imported progress start before the parent edge must move with the window.
+        t.actual_start = Some(stale_start);
+    }
+    recalculate(&mut p);
+    assert_eq!(start(&p, nest), parent_start, "20% ASAP nest starts at the parent window start");
+    assert_eq!(start(&p, leaf), parent_start, "ASAP child follows the positioned parent start edge");
+    let cal = plancraft_core::schedule::project_calendar(&p);
+    let window = cal.between(parent_start, parent_end);
+    let nest_span = cal.between(start(&p, nest), finish(&p, nest));
+    let expect = ((window as f64) * 0.20).round() as i64;
+    assert!(
+        (nest_span - expect).abs() <= 1,
+        "nest span {nest_span} should be 20% of window {window} (expect {expect})"
+    );
+    assert!(finish(&p, nest) < parent_end, "ASAP percent nest finishes before the parent end");
+}
+
+#[test]
+fn nested_percent_alap_finishes_with_parent_window() {
+    let mut p = project();
+    let root = top_task(&mut p, "Root", 1);
+    let early = top_task(&mut p, "Early own", 2);
+    let nest = top_task(&mut p, "Nest", 1);
+    let leaf = top_task(&mut p, "Leaf", 1);
+    p.task_mut(early).unwrap().outline_level = 2;
+    p.task_mut(nest).unwrap().outline_level = 2;
+    p.task_mut(leaf).unwrap().outline_level = 3;
+    let parent_start = dt(2026, 10, 19, 8);
+    let parent_end = dt(2026, 10, 30, 17);
+    {
+        let t = p.task_mut(root).unwrap();
+        t.fills_group = false;
+        t.bounds.start_earliest = Some(parent_start);
+        t.deadline = Some(parent_end);
+    }
+    {
+        let t = p.task_mut(early).unwrap();
+        t.fills_group = false;
+        t.duration = 2 * DAY;
+        t.estimated = false;
+    }
+    {
+        let t = p.task_mut(nest).unwrap();
+        t.fills_group = false;
+        t.duration_percent = Some(20.0);
+        t.constraint.kind = ConstraintKind::Alap;
+    }
+    {
+        let t = p.task_mut(leaf).unwrap();
+        t.fills_group = false;
+        // Exactly equals the 20% allotment and has an actual start. The leaf remains ASAP;
+        // the nested group's ALAP placement moves the window containing it.
+        t.duration = 2 * DAY;
+        t.estimated = false;
+        t.constraint.kind = ConstraintKind::Asap;
+        t.actual_start = Some(parent_start);
+    }
+    recalculate(&mut p);
+    assert_eq!(finish(&p, nest), parent_end, "20% ALAP nest ends at the parent deadline");
+    assert_eq!(start(&p, leaf), start(&p, nest), "ASAP child starts inside the moved ALAP group window");
+    assert_eq!(finish(&p, leaf), finish(&p, nest), "full-window child fills the moved group without becoming ALAP");
+    let cal = plancraft_core::schedule::project_calendar(&p);
+    let window = cal.between(parent_start, parent_end);
+    let nest_span = cal.between(start(&p, nest), finish(&p, nest));
+    let expect = ((window as f64) * 0.20).round() as i64;
+    assert!(
+        (nest_span - expect).abs() <= 1,
+        "nest span {nest_span} should be 20% of window {window} (expect {expect})"
+    );
+    assert!(start(&p, nest) > parent_start, "ALAP percent nest starts after the parent start");
+}

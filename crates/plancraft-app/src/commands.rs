@@ -66,6 +66,8 @@ pub enum Command {
     MarkOnTrack,
     ToggleActive,
     SetMode(ScheduleMode),
+    /// Clear user date limits on the selection (keeps Size-in-group fill / percent).
+    ClearDates,
     TaskInfo,
     TaskNotes,
     ToggleTimeline,
