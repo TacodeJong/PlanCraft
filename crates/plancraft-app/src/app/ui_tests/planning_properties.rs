@@ -133,6 +133,51 @@ fn planning_reset_discards_pending_focused_delay() {
 }
 
 #[test]
+fn planning_constraint_before_deadline_for_summary_and_leaf() {
+    let lang = crate::lang::Lang::En;
+    crate::lang::set_current(lang);
+    let mut p = Project::new("Planning order", plancraft_core::dates::ymd(2026, 10, 1).unwrap());
+    let group = p.add_task("Group", None);
+    let leaf = p.add_task("Leaf", None);
+    p.indent(leaf).unwrap();
+    let snet = plancraft_core::dates::ymd(2026, 10, 15).unwrap().and_hms_opt(8, 0, 0).unwrap();
+    let deadline = plancraft_core::dates::ymd(2026, 12, 31).unwrap().and_hms_opt(17, 0, 0).unwrap();
+    for id in [group, leaf] {
+        let t = p.task_mut(id).unwrap();
+        t.mode = ScheduleMode::Manual;
+        t.constraint = Constraint { kind: ConstraintKind::Snet, date: Some(snet) };
+        t.deadline = Some(deadline);
+    }
+    plancraft_core::schedule::recalculate(&mut p);
+
+    let mut ws = Workspace::default();
+    ws.add(p, None);
+    let mut h = super::harness_with(ws);
+    super::assert_harness_ready(&h);
+    h.state_mut().st.lang = lang;
+    h.state_mut().st.properties_visible = true;
+    h.state_mut().st.properties_tab = crate::state::PropTab::Planning;
+
+    let mode = crate::lang::tr(lang, "prop.mode");
+    let constraint = crate::lang::tr(lang, "prop.constraint");
+    let constraint_date = crate::lang::tr(lang, "prop.constraint_date");
+    let deadline_label = crate::lang::tr(lang, "prop.deadline");
+
+    for (id, kind) in [(group, "summary"), (leaf, "leaf")] {
+        h.state_mut().st.sel.select_task(id);
+        h.run_steps(3);
+        let mode_y = h.get_by_label(mode).rect().center().y;
+        let constraint_y = h.get_by_label(constraint).rect().center().y;
+        let constraint_date_y = h.get_by_label(constraint_date).rect().center().y;
+        let deadline_y = h.get_by_label(deadline_label).rect().center().y;
+        assert!(
+            mode_y < constraint_y && constraint_y < constraint_date_y && constraint_date_y < deadline_y,
+            "{kind}: expected Schedule mode → Constraint → Constraint date → Deadline, got y={mode_y}/{constraint_y}/{constraint_date_y}/{deadline_y}"
+        );
+    }
+}
+
+#[test]
 #[ignore = "renders on the GPU; run explicitly for visual review"]
 fn planning_properties_preview_images() {
     use std::path::Path;

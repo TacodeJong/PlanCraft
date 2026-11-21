@@ -1423,9 +1423,7 @@ impl TaskInfo {
 
     fn advanced(&mut self, ui: &mut Ui, p: &Project) {
         egui::Grid::new("ti_adv").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-            ui.label("Deadline:");
-            pick_date_iso(ui, p, "ti_deadline", &mut self.deadline, true, true, "NA");
-            ui.end_row();
+            // Same order as the Planning properties tab: constraint (start-side bound) before deadline.
             ui.label("Constraint type:");
             egui::ComboBox::from_id_salt("ti_ctype").selected_text(self.constraint.label()).width(200.0).show_ui(ui, |ui| {
                 for k in ConstraintKind::ALL {
@@ -1444,6 +1442,9 @@ impl TaskInfo {
                 self.constraint.needs_date(),
                 "geen",
             );
+            ui.end_row();
+            ui.label("Deadline:");
+            pick_date_iso(ui, p, "ti_deadline", &mut self.deadline, true, true, "NA");
             ui.end_row();
             ui.label("Task type:");
             egui::ComboBox::from_id_salt("ti_ttype")

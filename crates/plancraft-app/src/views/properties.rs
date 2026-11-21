@@ -621,19 +621,9 @@ fn planning_tab(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId
             }
         }
     });
-    label(ui, st.t("prop.deadline"));
-    let deadline_minute = doc.project.settings.time.default_finish_time;
-    if let Some(next) = show_date(ui, &format!("task_deadline{first}"), snap.deadline, true, true, deadline_minute) {
-        let ids = ids.to_vec();
-        edit(doc, st, "Deadline", move |p| {
-            for id in &ids {
-                if let Some(t) = p.task_mut(*id) {
-                    t.deadline = next;
-                }
-            }
-            Ok(())
-        });
-    }
+    // Constraint / constraint date before deadline: start-side bounds (e.g. SNET) chronologically
+    // precede the soft finish limit, matching General's start-then-finish ordering for every task
+    // kind (leaf, nested group, top summary).
     label(ui, st.t("prop.constraint"));
     let kind_label = snap.constraint.map(|k| k.label()).unwrap_or(st.t("common.multiple"));
     egui::ComboBox::from_id_salt(("task_constraint", first, multi)).selected_text(kind_label).show_ui(ui, |ui| {
@@ -672,6 +662,19 @@ fn planning_tab(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId
                 Ok(())
             });
         }
+    }
+    label(ui, st.t("prop.deadline"));
+    let deadline_minute = doc.project.settings.time.default_finish_time;
+    if let Some(next) = show_date(ui, &format!("task_deadline{first}"), snap.deadline, true, true, deadline_minute) {
+        let ids = ids.to_vec();
+        edit(doc, st, "Deadline", move |p| {
+            for id in &ids {
+                if let Some(t) = p.task_mut(*id) {
+                    t.deadline = next;
+                }
+            }
+            Ok(())
+        });
     }
     label(ui, st.t("prop.task_type"));
     let type_name = |t: TaskType| match t {
@@ -1360,7 +1363,7 @@ struct DateSide {
     fixed: Option<bool>,
 }
 
-fn side_mode_name<'a>(st: &'a UiState, mode: DateMode, summary_side: bool) -> &'a str {
+fn side_mode_name(st: &UiState, mode: DateMode, summary_side: bool) -> &'static str {
     if !summary_side {
         return crate::lang::date_mode_name(mode);
     }
@@ -1371,9 +1374,16 @@ fn side_mode_name<'a>(st: &'a UiState, mode: DateMode, summary_side: bool) -> &'
     }
 }
 
-/// One side's date rule, the Project Planner way: a mode picker (Unrestricted, On, no earlier,
-/// no later, Between), only the date editors that mode needs, and the calculated date greyed
-/// when the mode doesn't pin it. An unrestricted side explains itself on hover.
+/// One side's date rule: mode picker + one date slot on the same row.
+///
+/// A finish/start bound can come from a **rule** or **by hand**:
+/// - **By rule** ([`DateMode`] On / NET / NLT / Between): the mode carries the date(s). Edit them
+///   here (mode-row slot for a single constraint date; from–to under the row for Between). Do
+///   **not** also show a separate Start/Finish limit row — that would duplicate the rule.
+/// - **By hand** ([`Task::deadline`]): a soft finish limit independent of the side's date mode.
+///   That lives on the Planning tab's Deadline field, not under this mode row.
+///
+/// Unrestricted: the mode-row slot is the read-only scheduled result.
 fn date_mode_side(
     ui: &mut Ui,
     doc: &mut Document,
@@ -1386,8 +1396,20 @@ fn date_mode_side(
     summary_side: bool,
 ) {
     let DateSide { finish, minute, scheduled, mode, min, max, fixed } = side;
-    let shown = mode.map(|m| side_mode_name(st, m, summary_side)).unwrap_or_else(|| st.t("common.multiple_lc"));
+    let shown = mode.map(|m| side_mode_name(st, m, summary_side)).unwrap_or_else(|| st.t("common.multiple_lc")).to_string();
     let mut pick = None;
+    let write = |doc: &mut Document, st: &mut UiState, ids: &[TaskId], to_min: bool, date: DateTime| {
+        let ids = ids.to_vec();
+        edit(doc, st, if finish { "Finish rule" } else { "Start rule" }, move |p| {
+            for id in &ids {
+                let Some(t) = p.task(*id) else { continue };
+                let (mn, mx) = if finish { t.finish_window() } else { t.start_window() };
+                let (mn, mx) = if to_min { (Some(date), mx) } else { (mn, Some(date)) };
+                p.set_date_window(*id, finish, mn, mx).map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        });
+    };
     ui.horizontal_wrapped(|ui| {
         compact_label(ui, title);
         let width = (ui.available_width() - 192.0).clamp(96.0, 210.0);
@@ -1398,12 +1420,43 @@ fn date_mode_side(
                 }
             }
         });
-        let resp = ui.scope(|ui| show_date(ui, &format!("sched_{finish}{first}"), scheduled, false, false, minute)).response;
-        if mode == Some(DateMode::Unrestricted) {
-            let why = if summary_side { st.t("prop.from_children") } else { st.t("dm.calc_deps") };
-            resp.on_hover_text(format!("{}\n{}", st.t("prop.scheduled_result"), why));
-        } else {
-            resp.on_hover_text(st.t("prop.scheduled_result"));
+        match mode {
+            Some(DateMode::On) => {
+                // Fixed date: the field sets the pin (both window ends).
+                let shown = min.or(max).or(scheduled);
+                if let Some(Some(date)) = show_date(ui, &format!("on_{finish}{first}"), shown, false, true, minute) {
+                    let ids = ids.to_vec();
+                    edit(doc, st, if finish { "Finish rule" } else { "Start rule" }, move |p| {
+                        for id in &ids {
+                            p.set_date_window(*id, finish, Some(date), Some(date)).map_err(|e| e.to_string())?;
+                        }
+                        Ok(())
+                    });
+                }
+            }
+            Some(DateMode::NoEarlier) => {
+                // Same slot: edit the no-earlier-than (minimum) date.
+                let shown = min.or(scheduled);
+                if let Some(Some(date)) = show_date(ui, &format!("min_{finish}{first}"), shown, false, true, minute) {
+                    write(doc, st, ids, true, date);
+                }
+            }
+            Some(DateMode::NoLater) => {
+                // Same slot: edit the no-later-than (maximum) date — that is the effective end/start bound.
+                let shown = max.or(scheduled);
+                if let Some(Some(date)) = show_date(ui, &format!("max_{finish}{first}"), shown, false, true, minute) {
+                    write(doc, st, ids, false, date);
+                }
+            }
+            Some(DateMode::Between) | Some(DateMode::Unrestricted) | None => {
+                let resp = ui.scope(|ui| show_date(ui, &format!("sched_{finish}{first}"), scheduled, false, false, minute)).response;
+                if mode == Some(DateMode::Unrestricted) {
+                    let why = if summary_side { st.t("prop.from_children") } else { st.t("dm.calc_deps") };
+                    resp.on_hover_text(format!("{}\n{}", st.t("prop.scheduled_result"), why));
+                } else {
+                    resp.on_hover_text(st.t("prop.scheduled_result"));
+                }
+            }
         }
     });
     if let Some(m) = pick
@@ -1418,56 +1471,16 @@ fn date_mode_side(
         });
         return; // the editors below would show the old mode's fields this frame
     }
-    let write = |doc: &mut Document, st: &mut UiState, ids: &[TaskId], to_min: bool, date: DateTime| {
-        let ids = ids.to_vec();
-        edit(doc, st, if finish { "Finish rule" } else { "Start rule" }, move |p| {
-            for id in &ids {
-                let Some(t) = p.task(*id) else { continue };
-                let (mn, mx) = if finish { t.finish_window() } else { t.start_window() };
-                let (mn, mx) = if to_min { (Some(date), mx) } else { (mn, Some(date)) };
-                p.set_date_window(*id, finish, mn, mx).map_err(|e| e.to_string())?;
-            }
-            Ok(())
-        });
-    };
-    match mode {
-        Some(DateMode::On) => {
-            label(ui, st.t(if finish { "prop.finish_limit" } else { "prop.start_limit" }));
-            // The single pinned date: picking one writes both the minimum and the maximum.
-            if let Some(Some(date)) = show_date(ui, &format!("on_{finish}{first}"), min, false, true, minute) {
-                let ids = ids.to_vec();
-                edit(doc, st, if finish { "Finish rule" } else { "Start rule" }, move |p| {
-                    for id in &ids {
-                        p.set_date_window(*id, finish, Some(date), Some(date)).map_err(|e| e.to_string())?;
-                    }
-                    Ok(())
-                });
-            }
+    // Between is still a rule: two constraint dates under the row (not a hand "Finish limit").
+    if mode == Some(DateMode::Between) {
+        label(ui, st.t("prop.limit_from"));
+        if let Some(Some(date)) = show_date(ui, &format!("min_{finish}{first}"), min, false, true, minute) {
+            write(doc, st, ids, true, date);
         }
-        Some(DateMode::NoEarlier) => {
-            label(ui, st.t(if finish { "prop.finish_limit" } else { "prop.start_limit" }));
-            if let Some(Some(date)) = show_date(ui, &format!("min_{finish}{first}"), min, false, true, minute) {
-                write(doc, st, ids, true, date);
-            }
+        label(ui, st.t("prop.limit_to"));
+        if let Some(Some(date)) = show_date(ui, &format!("max_{finish}{first}"), max, false, true, minute) {
+            write(doc, st, ids, false, date);
         }
-        Some(DateMode::NoLater) => {
-            label(ui, st.t(if finish { "prop.finish_limit" } else { "prop.start_limit" }));
-            if let Some(Some(date)) = show_date(ui, &format!("max_{finish}{first}"), max, false, true, minute) {
-                write(doc, st, ids, false, date);
-            }
-        }
-        Some(DateMode::Between) => {
-            label(ui, st.t(if finish { "prop.finish_limit" } else { "prop.start_limit" }));
-            label(ui, st.t("prop.limit_from"));
-            if let Some(Some(date)) = show_date(ui, &format!("min_{finish}{first}"), min, false, true, minute) {
-                write(doc, st, ids, true, date);
-            }
-            label(ui, st.t("prop.limit_to"));
-            if let Some(Some(date)) = show_date(ui, &format!("max_{finish}{first}"), max, false, true, minute) {
-                write(doc, st, ids, false, date);
-            }
-        }
-        Some(DateMode::Unrestricted) | None => {}
     }
     // The "moves the plan" tick belongs to the side's maximum, so it hides with it.
     if matches!(mode, Some(DateMode::On) | Some(DateMode::NoLater) | Some(DateMode::Between)) {

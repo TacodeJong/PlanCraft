@@ -104,9 +104,25 @@ fn general_date_labels_distinguish_scheduled_result_and_limit_in_en_nl() {
         let mut p = Project::new("Date labels", plancraft_core::dates::ymd(2026, 10, 19).unwrap());
         let free = p.add_task("Free", None);
         let limited = p.add_task("Limited", None);
+        let fixed = p.add_task("Fixed", None);
+        let hand = p.add_task("Hand deadline", None);
         {
             let t = p.task_mut(limited).unwrap();
             t.bounds.finish_latest = Some(plancraft_core::dates::ymd(2026, 11, 11).unwrap().and_hms_opt(17, 0, 0).unwrap());
+        }
+        {
+            let day = plancraft_core::dates::ymd(2026, 10, 15).unwrap().and_hms_opt(8, 0, 0).unwrap();
+            let t = p.task_mut(fixed).unwrap();
+            t.bounds.start_earliest = Some(day);
+            t.bounds.start_latest = Some(day);
+            let end = plancraft_core::dates::ymd(2026, 12, 31).unwrap().and_hms_opt(17, 0, 0).unwrap();
+            t.bounds.finish_earliest = Some(end);
+            t.bounds.finish_latest = Some(end);
+        }
+        {
+            // Hand-set finish limit: Task.deadline, independent of DateMode (side stays Unrestricted).
+            let t = p.task_mut(hand).unwrap();
+            t.deadline = Some(plancraft_core::dates::ymd(2026, 11, 20).unwrap().and_hms_opt(17, 0, 0).unwrap());
         }
         plancraft_core::schedule::recalculate(&mut p);
         let mut ws = Workspace::default();
@@ -117,14 +133,52 @@ fn general_date_labels_distinguish_scheduled_result_and_limit_in_en_nl() {
         h.state_mut().st.properties_visible = true;
         h.state_mut().st.properties_tab = crate::state::PropTab::General;
 
+        let start_limit = crate::lang::tr(lang, "prop.start_limit");
+        let finish_limit = crate::lang::tr(lang, "prop.finish_limit");
+        let deadline = crate::lang::tr(lang, "prop.deadline");
+        let hand_deadline = crate::widgets::date_picker::format_dutch(
+            plancraft_core::dates::ymd(2026, 11, 20).unwrap().and_hms_opt(17, 0, 0).unwrap(),
+        );
+        let nlt = crate::widgets::date_picker::format_dutch(
+            plancraft_core::dates::ymd(2026, 11, 11).unwrap().and_hms_opt(17, 0, 0).unwrap(),
+        );
+
         h.state_mut().st.sel.select_task(free);
         h.run_steps(3);
-        let limit = crate::lang::tr(lang, "prop.finish_limit");
-        assert!(h.query_all_by_label(limit).next().is_none(), "{lang:?}: unrestricted task must not expose a fake finish limit");
+        assert!(h.query_all_by_label(finish_limit).next().is_none(), "{lang:?}: unrestricted task must not expose a fake finish limit");
 
+        // Rule NoLater: edit the constraint in the mode-row date — no separate Finish limit row.
         h.state_mut().st.sel.select_task(limited);
         h.run_steps(2);
-        assert!(h.query_all_by_label(limit).next().is_some(), "{lang:?}: NoLater task must expose its finish limit");
+        assert!(
+            h.query_all_by_label(finish_limit).next().is_none(),
+            "{lang:?}: rule NoLater uses the mode-row date, not a Finish limit label"
+        );
+        assert!(!h.get_by_label(&nlt).accesskit_node().is_disabled(), "{lang:?}: rule NLT date must be editable in the mode row");
+
+        // Rule Fixed (On): same — mode-row pin only.
+        h.state_mut().st.sel.select_task(fixed);
+        h.run_steps(2);
+        assert!(h.query_all_by_label(start_limit).next().is_none(), "{lang:?}: Fixed start must not show a second Start limit field");
+        assert!(h.query_all_by_label(finish_limit).next().is_none(), "{lang:?}: Fixed finish must not show a second Finish limit field");
+
+        // Hand finish limit = Task.deadline on the Planning tab; finish DateMode stays Unrestricted.
+        h.state_mut().st.sel.select_task(hand);
+        h.state_mut().st.properties_tab = crate::state::PropTab::Planning;
+        h.run_steps(2);
+        assert_eq!(
+            {
+                let ws = lock(&h.state().ws);
+                ws.active_doc().unwrap().project.task(hand).unwrap().finish_mode()
+            },
+            DateMode::Unrestricted,
+            "{lang:?}: hand deadline must not flip the finish side into a DateMode rule"
+        );
+        assert!(h.query_all_by_label(deadline).next().is_some(), "{lang:?}: hand deadline control lives on Planning");
+        assert!(!h.get_by_label(&hand_deadline).accesskit_node().is_disabled(), "{lang:?}: hand deadline must stay editable");
+        h.state_mut().st.properties_tab = crate::state::PropTab::General;
+        h.run_steps(2);
+        assert!(h.query_all_by_label(finish_limit).next().is_none(), "{lang:?}: hand deadline must not invent a Finish limit row on General");
     }
 }
 
@@ -251,9 +305,10 @@ fn general_auto_tasks_hide_stale_manual_dates_but_manual_tasks_show_theirs_in_en
         assert!(h.query_all_by_label(&auto_start_text).next().is_none(), "{lang:?}: stale auto start must stay hidden");
         assert!(h.query_all_by_label(&auto_finish_text).next().is_none(), "{lang:?}: stale auto finish must stay hidden");
 
+        // Manual pins show as Fixed (On) in the mode-row date slot — no second Finish limit row.
         h.state_mut().st.sel.select_task(manual);
         h.run_steps(2);
-        assert!(h.query_all_by_label(limit).next().is_some(), "{lang:?}: finish limit label missing for manual task");
+        assert!(h.query_all_by_label(limit).next().is_none(), "{lang:?}: Fixed manual finish must not show a second Finish limit field");
         assert!(h.query_all_by_label(&manual_start_text).next().is_some(), "{lang:?}: manual start must show for manual task");
         assert!(h.query_all_by_label(&manual_finish_text).next().is_some(), "{lang:?}: manual finish must show for manual task");
     }
@@ -341,13 +396,6 @@ fn general_preview_geometry_stays_inside_pane_en_nl() {
                 doc.project.task(send).unwrap().sched.start.expect("send should have a scheduled start"),
             )
         };
-        let send_finish = {
-            let ws = lock(&h.state().ws);
-            let doc = ws.active_doc().unwrap();
-            crate::widgets::date_picker::format_dutch(
-                doc.project.task(send).unwrap().sched.finish.expect("send should have a scheduled finish"),
-            )
-        };
         let send_limit = {
             let ws = lock(&h.state().ws);
             let doc = ws.active_doc().unwrap();
@@ -368,18 +416,12 @@ fn general_preview_geometry_stays_inside_pane_en_nl() {
         assert_rect_inside(pane, start_value.rect(), "start value");
 
         let finish_label = h.get_by_label(crate::lang::text("prop.finish"));
-        let finish_mode = h
-            .query_all_by_value(crate::lang::text("dm.unrestricted"))
-            .min_by(|a, b| {
-                let da = (a.rect().center().y - finish_label.rect().center().y).abs();
-                let db = (b.rect().center().y - finish_label.rect().center().y).abs();
-                da.partial_cmp(&db).expect("comparable y distances")
-            })
-            .expect("finish mode");
-        let finish_value = h.get_by_label(&send_finish);
+        let finish_mode = h.get_by_value(crate::lang::text("dm.no_later"));
+        // NoLater: mode-row date is the constraint (NLT), not a separate scheduled-result field.
+        let finish_value = h.get_by_label(&send_limit);
         assert_rect_inside(pane, finish_label.rect(), "finish label");
         assert_rect_inside(pane, finish_mode.rect(), "finish mode");
-        assert_rect_inside(pane, finish_value.rect(), "finish value");
+        assert_rect_inside(pane, finish_value.rect(), "finish constraint date");
 
         let duration_label = h.get_by_label(crate::lang::text("prop.duration"));
         let duration_mode = h.get_by_value(crate::lang::text("prop.duration_fixed"));
@@ -472,15 +514,15 @@ fn general_properties_preview_images() {
         h.state_mut().st.sel.select_task(send);
         h.run_steps(4);
         assert!(h.state().crash.is_none(), "preview frame crashed: {:?}", h.state().crash);
+        // NoLater: constraint date lives in the mode-row slot — no separate Finish limit label / scheduled pair.
         let limit_label = crate::lang::tr(lang, "prop.finish_limit");
-        assert!(h.query_all_by_label(limit_label).next().is_some(), "finish limit label missing");
-        assert!(h.get_by_label(&send_finish).accesskit_node().is_disabled(), "scheduled result must be read-only");
-        assert!(!h.get_by_label(&send_limit).accesskit_node().is_disabled(), "finish limit must remain editable");
+        assert!(h.query_all_by_label(limit_label).next().is_none(), "NoLater must not show a second Finish limit field");
+        assert!(!h.get_by_label(&send_limit).accesskit_node().is_disabled(), "NLT constraint date must remain editable");
         assert!(
             h.query_all_by_label(crate::lang::tr(lang, "prop.leveling_delay")).next().is_none(),
             "General tab should not show leveling delay editor"
         );
-        assert_ne!(send_finish, send_limit, "the detail capture should show distinct result and limit values");
+        assert_ne!(send_finish, send_limit, "scheduled finish and NLT should differ for this fixture");
         let status = h.query_all_by_label(crate::lang::text("prop.status")).next().expect("status label");
         let name_field =
             h.query_all_by_value("Send").find(|n| n.accesskit_node().role() == egui::accesskit::Role::TextInput).expect("name text input");
@@ -496,12 +538,11 @@ fn general_properties_preview_images() {
         assert_rect_inside(pane, start_label.rect(), "start label");
         assert_rect_inside(pane, start_mode.rect(), "start mode");
         assert_rect_inside(pane, start_value.rect(), "start value");
-        let result_rect = h.get_by_label(&send_finish).rect();
+        let finish_mode = h.get_by_value(crate::lang::text("dm.no_later"));
         let limit_rect = h.get_by_label(&send_limit).rect();
-        assert!(result_rect.width() > 0.0 && result_rect.height() > 0.0, "scheduled result should be painted");
-        assert!(limit_rect.width() > 0.0 && limit_rect.height() > 0.0, "finish limit should be painted");
-        assert_rect_inside(pane, result_rect, "scheduled result");
-        assert_rect_inside(pane, limit_rect, "finish limit");
+        assert!(limit_rect.width() > 0.0 && limit_rect.height() > 0.0, "NLT constraint date should be painted");
+        assert_rect_inside(pane, finish_mode.rect(), "finish mode");
+        assert_rect_inside(pane, limit_rect, "finish NLT date");
         let img = h.render().expect("render general preview");
         img.save(out.join(filename)).expect("save general preview");
         wheel(&mut h, -240.0);

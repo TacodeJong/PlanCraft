@@ -76,8 +76,11 @@ pub fn resolve(p: &Project) -> SharePlan {
     for g in 0..n {
         let Some(rows) = children.get(g).filter(|r| !r.is_empty()) else { continue };
         let Some(group) = p.tasks.get(g) else { continue };
-        let windowed = bound_finish(group).is_some() || allotted.get(g).copied().flatten().is_some();
-        let length = group_length(p, &base, g, group, allotted.get(g).copied().flatten(), &shares, rows, &cal);
+        // Own deadline/FNLT/finish_latest, else the earliest ancestor finish bound (trickles through
+        // unrestricted intermediate summaries so nested Auto/fill can still see a window).
+        let finish = bound_finish(group).or_else(|| ancestor_bound_finish(p, &parent, g));
+        let windowed = finish.is_some() || allotted.get(g).copied().flatten().is_some();
+        let length = group_length(p, &base, g, group, allotted.get(g).copied().flatten(), finish, &parent, &shares, rows, &cal);
         let mut remaining = length;
         let mut fills: Vec<usize> = Vec::new();
         for &i in rows {
@@ -220,12 +223,38 @@ fn bound_finish(t: &Task) -> Option<DateTime> {
         .or_else(|| t.constraint.date.filter(|_| matches!(t.constraint.kind, ConstraintKind::Fnlt | ConstraintKind::Mfo)))
 }
 
+/// Earliest finish bound on an ancestor (deadline / FNLT / MFO / finish_latest). Walks parents only.
+fn ancestor_bound_finish(p: &Project, parent: &[Option<usize>], mut i: usize) -> Option<DateTime> {
+    let mut best = None;
+    while let Some(pi) = parent.get(i).copied().flatten() {
+        if let Some(fin) = p.tasks.get(pi).and_then(bound_finish) {
+            best = Some(best.map_or(fin, |b: DateTime| b.min(fin)));
+        }
+        i = pi;
+    }
+    best
+}
+
+/// Latest start bound on an ancestor (SNET / MSO / start_earliest). Walks parents only.
+fn ancestor_bound_start(p: &Project, parent: &[Option<usize>], mut i: usize) -> Option<DateTime> {
+    let mut best = None;
+    while let Some(pi) = parent.get(i).copied().flatten() {
+        if let Some(s) = p.tasks.get(pi).and_then(bound_start) {
+            best = Some(best.map_or(s, |b: DateTime| b.max(s)));
+        }
+        i = pi;
+    }
+    best
+}
+
 fn group_length(
     p: &Project,
     base: &Project,
     g: usize,
     group: &Task,
     allotted: Option<Minutes>,
+    finish: Option<DateTime>,
+    parent: &[Option<usize>],
     shares: &[Option<Share>],
     rows: &[usize],
     cal: &crate::calendar::WorkCal<'_>,
@@ -234,8 +263,11 @@ fn group_length(
         return n.max(0);
     }
     let base_start = base.tasks.get(g).and_then(|t| t.sched.start);
-    let start = bound_start(group).or(base_start).unwrap_or(p.start);
-    if let Some(fin) = bound_finish(group) {
+    let start = bound_start(group)
+        .or_else(|| ancestor_bound_start(p, parent, g))
+        .or(base_start)
+        .unwrap_or(p.start);
+    if let Some(fin) = finish {
         return cal.between(start, fin).max(0);
     }
     let mut own_start: Option<DateTime> = None;
@@ -766,6 +798,42 @@ mod tests {
             "the missing window is reported: {:?}",
             report.warnings
         );
+    }
+
+    /// Parent deadline → unrestricted intermediate summary → Auto leaf: the ancestor finish bound
+    /// trickles down so the nested Auto fills the window (no “no window” note).
+    #[test]
+    fn ancestor_deadline_windows_auto_under_unrestricted_summary() {
+        let mut p = Project::new("Trickle", crate::dates::ymd(2026, 1, 5).unwrap());
+        assert!(!p.settings.rules.enabled(), "Auto alone; no project-wide stretch");
+        let root = p.add_task("1", None);
+        let nest = p.add_task("1.3.1", None);
+        let leaf = p.add_task("Leaf", None);
+        p.task_mut(nest).unwrap().outline_level = 2;
+        {
+            let t = p.task_mut(leaf).unwrap();
+            t.outline_level = 3;
+            t.duration = 480;
+            t.estimated = false;
+            t.duration_mode = DurationMode::Auto;
+        }
+        let deadline = day(&p, 10);
+        p.task_mut(root).unwrap().deadline = Some(deadline);
+        // Nest stays unrestricted and is not Fill — only the ancestor deadline supplies P.
+        assert_eq!(p.task(nest).unwrap().start_mode(), DateMode::Unrestricted);
+        assert_eq!(p.task(nest).unwrap().finish_mode(), DateMode::Unrestricted);
+        assert!(!p.task(nest).unwrap().fills_group);
+
+        let report = recalculate(&mut p);
+        assert!(
+            !report.warnings.iter().any(|w| w.contains("no window")),
+            "ancestor deadline must supply a window: {:?}",
+            report.warnings
+        );
+        let window = project_calendar(&p).between(p.start, deadline);
+        assert!(window > 480, "deadline opens a multi-day window");
+        assert!((span(&p, leaf) - window).abs() <= 1, "Auto leaf {} vs window {window}", span(&p, leaf));
+        assert_eq!(p.task(leaf).unwrap().duration, 480, "stored duration stays the fallback");
     }
 
     #[test]

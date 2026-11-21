@@ -16,8 +16,9 @@ upstream Microsoft Project–style behaviour are unchanged until a project turns
 | `fills_group`, both sides **Unrestricted** | Stored duration | **Fill**: equal share of remaining group window `P` |
 | `fills_group` with any own start/finish date | Stored duration | **Not a fill** (`groupShare` is nil); stored duration |
 | `duration_percent = q` | Stored duration | **Span**: `P × q / 100` (still applies with date bounds) |
-| Group window `P` | — | Allotted share, else start→latest finish, else span of non-share children (share children measured at zero), else successor hard-date window |
+| Group window `P` | — | Allotted share, else start→latest finish (own or earliest ancestor deadline/FNLT/finish_latest; start may use ancestor SNET), else span of non-share children (share children measured at zero), else successor hard-date window |
 | Nested fill/percent group | — | Parent allotment becomes child `P`; `group_min` keeps the nested span |
+| Nested Auto under unrestricted summary | Stored / no window | Ancestor finish/start bounds trickle into the nested group’s `P` (summary need not be Fill) |
 | Percent sum ≤ / = / > 100% | — | No hard cap; group grows; slack/deadline shows the overrun |
 | No room for fills in a windowed group | — | Fills keep stored duration; note on the group |
 | No window at all | — | Fills keep stored duration; “no window” note |
