@@ -372,7 +372,7 @@ fn build_binaries(root: &Path) -> Result<Vec<(&'static Arch, PathBuf)>> {
         .arg(format!("{0}:{0}:ro", toolchain.display()))
         .arg(BUILD_IMAGE.tag)
         .arg(&cargo)
-        .args(["build", "--release", "--locked", "-p", "plancraft-app", "-p", "plancraft-mcp"]);
+        .args(["build", "--release", "--locked", "-p", "plancraft", "-p", "plancraft-mcp"]);
     for arch in &ARCHES {
         c.args(["--target", arch.triple]);
     }

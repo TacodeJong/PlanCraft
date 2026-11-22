@@ -1,0 +1,51 @@
+[package]
+name = "plancraft-ui-egui"
+description = "PlanCraft egui desktop shell (Craft L6)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+name = "plancraft_ui_egui"
+path = "src/lib.rs"
+
+[dependencies]
+plancraft-core.workspace = true
+plancraft-engine.workspace = true
+plancraft-mcp.workspace = true
+plancraft-server.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+anyhow.workspace = true
+# PhotoCraft pin (storytold/craft-libs @ 77c7c623): window frame + TitleBar.
+craft-window = { workspace = true }
+craft-ui-shell = { workspace = true }
+craft-theme = { workspace = true }
+craft-host = { git = "https://github.com/storytold/craft-libs", rev = "77c7c62345c1f4213f59a07d9fdc156ecde0b540" }
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "wgpu", "wayland", "x11", "accesskit"] }
+egui = { version = "0.37", default-features = false }
+rfd = "0.17"
+image = { version = "0.25", default-features = false, features = ["png"] }
+egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+keyring = "3"
+
+[dev-dependencies]
+egui_kittest = { version = "0.37", features = ["eframe", "wgpu", "snapshot"] }
+resvg = { version = "0.45", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = { version = "0.21.2", default-features = false }
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "objc2-core-services", "NSAppleEventDescriptor", "NSAppleEventManager", "NSNotification", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem"] }
+craft-window = { workspace = true, features = ["ui", "appkit"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
+
+[lints]
+workspace = true

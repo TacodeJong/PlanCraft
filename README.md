@@ -139,7 +139,7 @@ cd PlanCraft
 ```
 
 ```bash
-cargo run --release -p plancraft-app
+cargo run --release -p plancraft
 ```
 
 ## Features

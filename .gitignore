@@ -7,3 +7,4 @@
 /target-*/
 /.claude/worktrees/
 .*.plancraft.lock
+/vendor/

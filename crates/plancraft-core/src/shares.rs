@@ -186,12 +186,12 @@ pub fn resolve(p: &Project) -> SharePlan {
             continue;
         };
         let base_span = own_minutes(p, &base, i, true, &cal);
-        if base_span > allotted_len {
-            if let Some(name) = p.tasks.get(i).map(|t| t.name.as_str()) {
-                plan.notes.push(format!(
-                    "Group {name} needs more than its share of its group; it grows to fit its activities"
-                ));
-            }
+        if base_span > allotted_len
+            && let Some(name) = p.tasks.get(i).map(|t| t.name.as_str())
+        {
+            plan.notes.push(format!(
+                "Group {name} needs more than its share of its group; it grows to fit its activities"
+            ));
         }
     }
     note_unresolved_auto(p, &parent, &summary, &shares, &mut plan);

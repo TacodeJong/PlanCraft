@@ -1,0 +1,22 @@
+[package]
+name = "plancraft-cli"
+description = "PlanCraft headless CLI (commands, run, mcp)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "plancraft-cli"
+path = "src/main.rs"
+
+[dependencies]
+plancraft-core.workspace = true
+plancraft-engine.workspace = true
+plancraft-mcp.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+
+[lints]
+workspace = true

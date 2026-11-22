@@ -1,0 +1,339 @@
+//! Resource Information dialog: general details, availability and time off.
+
+use egui::{Context, RichText};
+use plancraft_core::dates::prelude::*;
+use plancraft_core::prelude::*;
+use plancraft_core::workspace::Document;
+
+use crate::edit::EditExt;
+use crate::format;
+use crate::theme;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    General,
+    TimeOff,
+    Availability,
+    Notes,
+}
+
+pub struct ResourceInfo {
+    id: ResourceId,
+    tab: Tab,
+    /// The resource as the dialog opened, and the number fields' text then: OK writes only the
+    /// fields changed since, so changes an agent made meanwhile are kept.
+    orig: Resource,
+    orig_numbers: [String; 4],
+    draft: Resource,
+    max_units: String,
+    rate: String,
+    ovt: String,
+    per_use: String,
+    new_off_name: String,
+    new_off_start: String,
+    new_off_end: String,
+    new_off_hours: String,
+    new_avail_from: String,
+    new_avail_to: String,
+    new_avail_units: String,
+    error: Option<String>,
+}
+
+impl ResourceInfo {
+    pub fn new(p: &Project, id: ResourceId) -> Option<Self> {
+        let r = p.resource(id)?.clone();
+        let numbers = [
+            format::units(r.max_units),
+            format!("{:.2}", r.standard_rate),
+            format!("{:.2}", r.overtime_rate),
+            format!("{:.2}", r.cost_per_use),
+        ];
+        let [max_units, rate, ovt, per_use] = numbers.clone();
+        Some(Self {
+            id,
+            tab: Tab::General,
+            max_units,
+            rate,
+            ovt,
+            per_use,
+            orig_numbers: numbers,
+            orig: r.clone(),
+            draft: r,
+            new_off_name: "Vacation".into(),
+            new_off_start: String::new(),
+            new_off_end: String::new(),
+            new_off_hours: String::new(),
+            new_avail_from: String::new(),
+            new_avail_to: String::new(),
+            new_avail_units: "50%".into(),
+            error: None,
+        })
+    }
+
+    pub fn show(&mut self, ctx: &Context, doc: &mut Document) -> bool {
+        let mut open = true;
+        let mut close = false;
+        egui::Window::new("Resource Information")
+            .id(egui::Id::unique("resource_info"))
+            .pivot(egui::Align2::CENTER_TOP)
+            .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 120.0))
+            .title_bar(false)
+            .default_width(560.0)
+            .show(ctx, |ui| {
+                open = crate::widgets::craft::dialog_header(ui, "Resource Information");
+                ui.horizontal(|ui| {
+                    for (t, l) in [(Tab::General, "General"), (Tab::TimeOff, "Time Off & Working Time"), (Tab::Availability, "Availability"), (Tab::Notes, "Notes")] {
+                        ui.selectable_value(&mut self.tab, t, l);
+                    }
+                });
+                ui.separator();
+                let r = &mut self.draft;
+                match self.tab {
+                    Tab::General => {
+                        egui::Grid::new("ri_gen").num_columns(4).spacing([12.0, 8.0]).show(ui, |ui| {
+                            ui.label("Resource name:");
+                            ui.add(crate::widgets::craft::text_edit(&mut r.name));
+                            ui.label("Initials:");
+                            ui.add(crate::widgets::craft::text_edit(&mut r.initials).desired_width(60.0));
+                            ui.end_row();
+                            ui.label("Email:");
+                            ui.add(crate::widgets::craft::text_edit(&mut r.email));
+                            ui.label("Group:");
+                            ui.add(crate::widgets::craft::text_edit(&mut r.group).desired_width(120.0));
+                            ui.end_row();
+                            ui.label("Type:");
+                            egui::ComboBox::from_id_salt("ri_type")
+                                .selected_text(match r.kind {
+                                    ResourceType::Work => "Work",
+                                    ResourceType::Material => "Material",
+                                    ResourceType::Cost => "Cost",
+                                })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut r.kind, ResourceType::Work, "Work");
+                                    ui.selectable_value(&mut r.kind, ResourceType::Material, "Material");
+                                    ui.selectable_value(&mut r.kind, ResourceType::Cost, "Cost");
+                                });
+                            ui.label("Category:");
+                            egui::ComboBox::from_id_salt("ri_cat").selected_text(r.category.label()).show_ui(ui, |ui| {
+                                for c in ResourceCategory::ALL {
+                                    ui.selectable_value(&mut r.category, c, c.label());
+                                }
+                            });
+                            ui.end_row();
+                            if r.kind == ResourceType::Material {
+                                ui.label("Material label:");
+                                ui.add(crate::widgets::craft::text_edit(&mut r.material_label).desired_width(80.0).hint_text("e.g. tons"));
+                                ui.end_row();
+                            }
+                            ui.label("Max. units:");
+                            ui.add_enabled(r.kind == ResourceType::Work, crate::widgets::craft::text_edit(&mut self.max_units).desired_width(70.0));
+                            ui.label("Base calendar:");
+                            let cal_name = r.calendar.and_then(|c| doc.project.calendar(c)).map(|c| c.name.clone()).unwrap_or_else(|| "(Project calendar)".into());
+                            egui::ComboBox::from_id_salt("ri_cal").selected_text(cal_name).show_ui(ui, |ui| {
+                                ui.selectable_value(&mut r.calendar, None, "(Project calendar)");
+                                for c in &doc.project.calendars {
+                                    ui.selectable_value(&mut r.calendar, Some(c.id), &c.name);
+                                }
+                            });
+                            ui.end_row();
+                            ui.label("Standard rate:");
+                            ui.add(crate::widgets::craft::text_edit(&mut self.rate).desired_width(80.0));
+                            ui.label("Overtime rate:");
+                            ui.add(crate::widgets::craft::text_edit(&mut self.ovt).desired_width(80.0));
+                            ui.end_row();
+                            ui.label("Cost/use:");
+                            ui.add(crate::widgets::craft::text_edit(&mut self.per_use).desired_width(80.0));
+                            ui.end_row();
+                        });
+                        ui.label(RichText::new("Max. units: 100% is one full-time person; a team of three is 300%. Rates are per hour for work resources and per unit for materials.").small().color(theme::pal().TEXT_WEAK));
+                    }
+                    Tab::TimeOff => {
+                        ui.label("Personal exceptions to the base calendar: vacations, leave, part-time days or extra hours.");
+                        let mut remove = None;
+                        egui::Grid::new("ri_off").striped(true).num_columns(5).spacing([10.0, 4.0]).show(ui, |ui| {
+                            for h in ["Name", "Start", "Finish", "Working times", ""] {
+                                ui.label(RichText::new(h).strong());
+                            }
+                            ui.end_row();
+                            for (i, e) in r.exceptions.iter().enumerate() {
+                                ui.label(&e.name);
+                                ui.label(format::day(e.start));
+                                ui.label(format::day(e.end));
+                                ui.label(if e.working.is_empty() { "Nonworking".into() } else { e.working.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(", ") });
+                                if crate::icons::button(ui, "x", 18.0, "Remove").clicked() {
+                                    remove = Some(i);
+                                }
+                                ui.end_row();
+                            }
+                        });
+                        if let Some(i) = remove {
+                            r.exceptions.remove(i);
+                        }
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.add(crate::widgets::craft::text_edit(&mut self.new_off_name).desired_width(100.0).hint_text("Name"));
+                            ui.add(crate::widgets::craft::text_edit(&mut self.new_off_start).desired_width(90.0).hint_text("YYYY-MM-DD"));
+                            ui.label("to");
+                            ui.add(crate::widgets::craft::text_edit(&mut self.new_off_end).desired_width(90.0).hint_text("YYYY-MM-DD"));
+                            ui.add(crate::widgets::craft::text_edit(&mut self.new_off_hours).desired_width(130.0).hint_text("hours (empty = off)"));
+                            if crate::widgets::craft::primary_button(ui, "Add").clicked() {
+                                let parse = |s: &str| Date::parse_from_str(s.trim(), "%Y-%m-%d").ok();
+                                match (parse(&self.new_off_start), parse(&self.new_off_end).or(parse(&self.new_off_start))) {
+                                    (Some(s), Some(e)) if e >= s => {
+                                        let working: Option<Vec<TimeRange>> =
+                                            if self.new_off_hours.trim().is_empty() { Some(vec![]) } else { self.new_off_hours.split(',').map(TimeRange::parse).collect() };
+                                        match working {
+                                            Some(w) => {
+                                                r.exceptions.push(CalendarException { name: self.new_off_name.clone(), start: s, end: e, working: w, yearly: false });
+                                                self.error = None;
+                                            }
+                                            None => self.error = Some("Working times look like 08:00-12:00, 13:00-17:00".into()),
+                                        }
+                                    }
+                                    _ => self.error = Some("Enter a start and end date as YYYY-MM-DD".into()),
+                                }
+                            }
+                        });
+                    }
+                    Tab::Availability => {
+                        ui.label("Override the maximum units for date ranges (e.g. 50% while on another project).");
+                        let mut remove = None;
+                        egui::Grid::new("ri_av").striped(true).num_columns(4).spacing([10.0, 4.0]).show(ui, |ui| {
+                            for h in ["Available From", "Available To", "Units", ""] {
+                                ui.label(RichText::new(h).strong());
+                            }
+                            ui.end_row();
+                            for (i, a) in r.availability.iter().enumerate() {
+                                ui.label(a.from.map(format::day).unwrap_or_else(|| "NA".into()));
+                                ui.label(a.to.map(format::day).unwrap_or_else(|| "NA".into()));
+                                ui.label(format::units(a.units));
+                                if crate::icons::button(ui, "x", 18.0, "Remove").clicked() {
+                                    remove = Some(i);
+                                }
+                                ui.end_row();
+                            }
+                        });
+                        if let Some(i) = remove {
+                            r.availability.remove(i);
+                        }
+                        ui.horizontal(|ui| {
+                            ui.add(crate::widgets::craft::text_edit(&mut self.new_avail_from).desired_width(90.0).hint_text("from (opt.)"));
+                            ui.add(crate::widgets::craft::text_edit(&mut self.new_avail_to).desired_width(90.0).hint_text("to (opt.)"));
+                            ui.add(crate::widgets::craft::text_edit(&mut self.new_avail_units).desired_width(60.0));
+                            if crate::widgets::craft::primary_button(ui, "Add").clicked() {
+                                let parse = |s: &str| if s.trim().is_empty() { Ok(None) } else { Date::parse_from_str(s.trim(), "%Y-%m-%d").map(Some) };
+                                match (parse(&self.new_avail_from), parse(&self.new_avail_to), format::parse_units(&self.new_avail_units)) {
+                                    (Ok(f), Ok(t), Some(u)) => r.availability.push(AvailabilityPeriod { from: f, to: t, units: u }),
+                                    _ => self.error = Some("Dates are YYYY-MM-DD, units like 50%".into()),
+                                }
+                            }
+                        });
+                    }
+                    Tab::Notes => {
+                        ui.add(crate::widgets::craft::text_edit_multiline(&mut r.notes).desired_rows(12).desired_width(f32::INFINITY));
+                    }
+                }
+                if let Some(e) = &self.error {
+                    ui.colored_label(theme::pal().ERROR, e);
+                }
+                ui.add_space(6.0);
+                let y = ui.cursor().top();
+                ui.painter().hline(ui.max_rect().x_range(), y, theme::hairline());
+                ui.add_space(10.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = crate::widgets::craft::ITEM_GAP + 2.0;
+                    if crate::widgets::craft::secondary_button(ui, "Cancel").clicked() {
+                        close = true;
+                    }
+                    if crate::widgets::craft::primary_button(ui, "OK").clicked() {
+                        let mut draft = self.draft.clone();
+                        let parsed = (|| -> Result<(), String> {
+                            // Only numbers typed here: re-reading the shown text would round them.
+                            let [units0, rate0, ovt0, per_use0] = &self.orig_numbers;
+                            if self.max_units.trim() != units0.trim() {
+                                draft.max_units = format::parse_units(&self.max_units).ok_or("Max. units must look like 100%")?;
+                            }
+                            if self.rate.trim() != rate0.trim() {
+                                draft.standard_rate = format::parse_money(&self.rate).ok_or("Invalid standard rate")?;
+                            }
+                            if self.ovt.trim() != ovt0.trim() {
+                                draft.overtime_rate = format::parse_money(&self.ovt).ok_or("Invalid overtime rate")?;
+                            }
+                            if self.per_use.trim() != per_use0.trim() {
+                                draft.cost_per_use = format::parse_money(&self.per_use).ok_or("Invalid cost/use")?;
+                            }
+                            if draft.name.trim().is_empty() {
+                                return Err("The resource name cannot be empty".into());
+                            }
+                            Ok(())
+                        })();
+                        match parsed {
+                            Err(e) => self.error = Some(e),
+                            Ok(()) => {
+                                let id = self.id;
+                                let orig = &self.orig;
+                                let r = doc.edit_msg(&format!("Resource Information: {}", draft.name), |p| {
+                                    let slot = p.resource_mut(id).ok_or("resource was deleted")?;
+                                    *slot = merge_changes(orig, &draft, slot)?;
+                                    Ok::<(), String>(())
+                                });
+                                match r {
+                                    Ok(()) => close = true,
+                                    Err(e) => self.error = Some(e),
+                                }
+                            }
+                        }
+                    }
+                });
+            });
+        open && !close
+    }
+}
+
+/// `current` with the fields that differ between `orig` and `draft` taken from `draft`: the
+/// dialog's changes on top of whatever else changed meanwhile. Fields are compared whole (a
+/// changed time-off list replaces the list).
+fn merge_changes(orig: &Resource, draft: &Resource, current: &Resource) -> Result<Resource, String> {
+    let fail = |e: serde_json::Error| format!("could not apply the changes: {e}");
+    let (serde_json::Value::Object(before), serde_json::Value::Object(after), serde_json::Value::Object(mut now)) = (
+        serde_json::to_value(orig).map_err(fail)?,
+        serde_json::to_value(draft).map_err(fail)?,
+        serde_json::to_value(current).map_err(fail)?,
+    ) else {
+        return Err("could not apply the changes".into());
+    };
+    let keys: std::collections::BTreeSet<&String> = before.keys().chain(after.keys()).collect();
+    for k in keys {
+        if before.get(k) != after.get(k) {
+            match after.get(k) {
+                Some(v) => now.insert(k.clone(), v.clone()),
+                // Skipped when serialized: back to its default.
+                None => now.remove(k),
+            };
+        }
+    }
+    serde_json::from_value(serde_json::Value::Object(now)).map_err(fail)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: OK replaced the whole resource with the copy made when the dialog opened,
+    /// undoing an agent's changes.
+    #[test]
+    fn ok_keeps_what_an_agent_changed_while_the_dialog_was_open() {
+        let mut p = Project::new("Plan", plancraft_core::dates::ymd(2026, 10, 19).unwrap());
+        let id = p.add_resource("Ana");
+        p.resource_mut(id).unwrap().standard_rate = 12.345;
+        let info = ResourceInfo::new(&p, id).unwrap();
+        p.resource_mut(id).unwrap().email = "agent@example.com".into();
+        let mut draft = info.draft.clone();
+        draft.group = "Design".into();
+        let current = p.resource(id).unwrap().clone();
+        let merged = merge_changes(&info.orig, &draft, &current).unwrap();
+        assert_eq!(merged.group, "Design");
+        assert_eq!(merged.email, "agent@example.com");
+        assert_eq!(merged.standard_rate, 12.345);
+    }
+}

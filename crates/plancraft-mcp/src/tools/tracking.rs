@@ -123,20 +123,41 @@ fn reschedule_uncompleted_work(ctx: &Ctx, a: &Args) -> ToolResult {
 }
 
 fn mark_on_track(ctx: &Ctx, a: &Args) -> ToolResult {
-    ctx.edit(
-        a,
-        "Mark on Track",
-        |p, _| {
-            let ids = task_list_arg(p, a, "tasks")?;
-            if ids.is_empty() {
-                return err("'tasks' must name at least one task");
-            }
-            Ok(p.mark_on_track(&ids)?)
-        },
-        |doc, r| {
-            let mut v = report_json(&doc.project, &r);
-            set(&mut v, "status_date", json!(fmt_dt(Some(plancraft_core::report::status_moment(&doc.project)))));
-            Ok(v)
-        },
-    )
+    let ids = ctx.read(a, |doc| {
+        let ids = task_list_arg(&doc.project, a, "tasks")?;
+        if ids.is_empty() {
+            return err("'tasks' must name at least one task");
+        }
+        Ok(ids)
+    })?;
+    let eng = ctx.run_engine(a, "task.markOnTrack", json!({ "tasks": ids.iter().map(|id| id.0).collect::<Vec<_>>() }))?;
+    fn ids_of(v: &Value, key: &str) -> Vec<TaskId> {
+        v.get(key)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|x| x.as_u64().and_then(|n| u32::try_from(n).ok()).map(TaskId))
+            .collect()
+    }
+    let report = TrackingReport {
+        updated: ids_of(&eng, "updated"),
+        split: ids_of(&eng, "split"),
+        constrained: ids_of(&eng, "constrained"),
+        skipped: eng
+            .get("skipped")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|x| {
+                let id = x.get("id").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).map(TaskId)?;
+                let why = x.get("reason").and_then(Value::as_str)?.to_string();
+                Some((id, why))
+            })
+            .collect(),
+    };
+    ctx.read(a, |doc| {
+        let mut v = report_json(&doc.project, &report);
+        set(&mut v, "status_date", json!(fmt_dt(Some(plancraft_core::report::status_moment(&doc.project)))));
+        Ok(v)
+    })
 }

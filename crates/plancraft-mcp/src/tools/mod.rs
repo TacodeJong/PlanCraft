@@ -15,6 +15,7 @@ pub mod calendars;
 pub mod custom_fields;
 pub mod dependencies;
 pub mod documents;
+pub mod engine_cmds;
 pub mod history;
 pub mod milestones;
 pub mod print;
@@ -127,6 +128,7 @@ pub fn all_tools() -> Vec<Tool> {
     v.extend(tracking::tools());
     v.extend(recurring::tools());
     v.extend(board::tools());
+    v.extend(engine_cmds::tools());
     v
 }
 

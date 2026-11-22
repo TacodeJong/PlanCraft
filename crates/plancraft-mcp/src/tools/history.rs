@@ -29,29 +29,33 @@ pub fn tools() -> Vec<Tool> {
 
 fn step(ctx: &Ctx, a: &Args, redo: bool) -> ToolResult {
     let steps = a.u64("steps")?.unwrap_or(1).clamp(1, 200);
-    let out = ctx.with_doc(a, |doc| {
-        let mut done = Vec::new();
-        let mut refused = None;
-        for _ in 0..steps {
-            let label = if redo { doc.redo_label() } else { doc.undo_label() }.map(str::to_string);
-            let Some(label) = label else { break };
-            let source = plancraft_core::workspace::ChangeSource::Agent;
-            // In a plan opened from a server, a step someone else changed since is refused.
-            match if redo { doc.try_redo_as(source) } else { doc.try_undo_as(source) } {
-                Ok(true) => done.push(label),
-                Ok(false) => break,
-                Err(why) => {
-                    refused = Some(why);
+    let id = if redo { "edit.redo" } else { "edit.undo" };
+    let mut done = Vec::new();
+    let mut refused = None;
+    for _ in 0..steps {
+        let label = ctx.read(a, |doc| {
+            Ok(if redo { doc.redo_label() } else { doc.undo_label() }.map(str::to_string))
+        })?;
+        let Some(label) = label else { break };
+        match ctx.run_engine(a, id, json!({})) {
+            Ok(_) => done.push(label),
+            Err(e) => {
+                let why = e.0;
+                if why == "nothing to undo" || why == "nothing to redo" {
                     break;
                 }
+                refused = Some(why);
+                break;
             }
         }
-        if done.is_empty() {
-            return match refused {
-                Some(why) => err(why),
-                None => err(if redo { "nothing to redo" } else { "nothing to undo" }),
-            };
-        }
+    }
+    if done.is_empty() {
+        return match refused {
+            Some(why) => err(why),
+            None => err(if redo { "nothing to redo" } else { "nothing to undo" }),
+        };
+    }
+    ctx.read(a, |doc| {
         let mut v = json!({
             "can_undo": doc.can_undo(),
             "can_redo": doc.can_redo(),
@@ -65,10 +69,7 @@ fn step(ctx: &Ctx, a: &Args, redo: bool) -> ToolResult {
             set(&mut v, "stopped", json!(why));
         }
         Ok(v)
-    });
-    // A refused step leaves the list even when nothing else was done.
-    ctx.mark_changed();
-    out
+    })
 }
 
 fn undo(ctx: &Ctx, a: &Args) -> ToolResult {

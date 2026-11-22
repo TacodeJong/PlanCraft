@@ -595,17 +595,49 @@ pub fn insert_new_task(p: &mut Project, name: &str, index: usize, level: Option<
     id
 }
 
+/// Keys that only choose insert position / document (not task field updates).
+fn create_position_only(a: &Args) -> bool {
+    const OK: &[&str] = &["name", "document", "parent", "after", "before", "index", "is_milestone"];
+    a.map().keys().all(|k| OK.contains(&k.as_str()))
+}
+
 fn create_task(ctx: &Ctx, a: &Args) -> ToolResult {
     let name = a.req_str("name")?.trim().to_string();
     if name.is_empty() {
         return err("'name' must not be empty");
+    }
+    let ms = a.bool("is_milestone")?.unwrap_or(false);
+    // Name (+ optional index / milestone) with no after/before/parent: engine `add_task` inherits
+    // outline level the same way. after/before need an explicit level (children of the anchor).
+    if create_position_only(a) && a.get("parent").is_none() && a.get("after").is_none() && a.get("before").is_none() {
+        let at = ctx.read(a, |doc| {
+            if let Some(i) = a.u64("index")? {
+                Ok(Some((i.max(1) as usize - 1).min(doc.project.tasks.len())))
+            } else {
+                Ok(None)
+            }
+        })?;
+        let id = if ms { "task.insertMilestone" } else { "task.insert" };
+        let mut params = json!({ "name": name });
+        if let Some(at) = at
+            && let Some(map) = params.as_object_mut()
+        {
+            map.insert("at".into(), json!(at));
+        }
+        let eng = ctx.run_engine(a, id, params)?;
+        let tid = eng
+            .get("task")
+            .and_then(Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+            .map(TaskId)
+            .ok_or_else(|| ToolError("engine did not return a task id".into()))?;
+        return ctx.read(a, |doc| Ok(views::task_detail(&doc.project, tid)));
     }
     ctx.edit(
         a,
         &format!("Add task '{name}'"),
         |p, _| {
             let (index, level) = insert_position(p, a)?;
-            let ms = a.bool("is_milestone")?.unwrap_or(false);
             let id = insert_new_task(p, &name, index, level, ms);
             apply_all(p, id, a)?;
             Ok(id)
@@ -803,24 +835,28 @@ fn update_tasks(ctx: &Ctx, a: &Args) -> ToolResult {
 }
 
 fn delete_tasks(ctx: &Ctx, a: &Args) -> ToolResult {
-    ctx.edit(
-        a,
-        "Delete tasks",
-        |p, _| {
-            let ids = task_list_arg(p, a, "tasks")?;
-            if ids.is_empty() {
-                return err("'tasks' must not be empty");
-            }
-            let names: Vec<(TaskId, String)> = p.tasks.iter().map(|t| (t.id, t.name.clone())).collect();
-            let mut deleted = p.delete_tasks(&ids)?;
-            deleted.sort();
-            Ok(deleted
-                .into_iter()
-                .map(|d| json!({ "id": d.0, "name": names.iter().find(|(i, _)| *i == d).map(|(_, n)| n.clone()) }))
-                .collect::<Vec<_>>())
-        },
-        |doc, deleted| Ok(json!({ "deleted": deleted, "remaining_tasks": doc.project.tasks.len() })),
-    )
+    let (ids, names) = ctx.read(a, |doc| {
+        let p = &doc.project;
+        let ids = task_list_arg(p, a, "tasks")?;
+        if ids.is_empty() {
+            return err("'tasks' must not be empty");
+        }
+        let names: Vec<(TaskId, String)> = p.tasks.iter().map(|t| (t.id, t.name.clone())).collect();
+        Ok((ids, names))
+    })?;
+    let result = ctx.run_engine(a, "task.delete", json!({ "tasks": ids.iter().map(|id| id.0).collect::<Vec<_>>() }))?;
+    let deleted: Vec<Value> = result
+        .get("deleted")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|d| {
+            let id = d.as_u64().and_then(|n| u32::try_from(n).ok())?;
+            Some(json!({ "id": id, "name": names.iter().find(|(i, _)| i.0 == id).map(|(_, n)| n.clone()) }))
+        })
+        .collect();
+    ctx.read(a, |doc| Ok(json!({ "deleted": deleted, "remaining_tasks": doc.project.tasks.len() })))
 }
 
 fn move_task(ctx: &Ctx, a: &Args) -> ToolResult {
@@ -881,60 +917,34 @@ fn move_task(ctx: &Ctx, a: &Args) -> ToolResult {
     )
 }
 
-/// Drops tasks whose ancestor is also selected (they move with it), sorted by row.
-fn top_level_selection(p: &Project, ids: &[TaskId]) -> Vec<TaskId> {
-    let set: HashSet<TaskId> = ids.iter().copied().collect();
-    let mut out: Vec<TaskId> = ids
-        .iter()
-        .copied()
-        .filter(|&id| {
-            let mut cur = p.task_index(id).and_then(|i| p.parent_index(i));
-            while let Some(c) = cur {
-                if p.tasks.get(c).is_some_and(|t| set.contains(&t.id)) {
-                    return false;
-                }
-                cur = p.parent_index(c);
-            }
-            true
-        })
-        .collect();
-    out.sort_by_key(|id| p.task_index(*id));
-    out
-}
-
 fn indent_tasks(ctx: &Ctx, a: &Args) -> ToolResult {
-    ctx.edit(
-        a,
-        "Indent tasks",
-        |p, _| {
-            let ids = task_list_arg(p, a, "tasks")?;
-            let ids = top_level_selection(p, &ids);
-            for id in &ids {
-                p.indent(*id).map_err(|e| ToolError(format!("task {}: {e}", id.0)))?;
-            }
-            Ok(ids)
-        },
-        |doc, ids| Ok(json!({ "tasks": ids.iter().filter_map(|id| doc.project.task_index(*id)).map(|i| views::task_row(&doc.project, i)).collect::<Vec<_>>() })),
-    )
+    let ids = ctx.read(a, |doc| task_list_arg(&doc.project, a, "tasks"))?;
+    let result = ctx.run_engine(a, "task.indent", json!({ "tasks": ids.iter().map(|id| id.0).collect::<Vec<_>>() }))?;
+    let tops: Vec<TaskId> = result
+        .get("tasks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_u64().and_then(|n| u32::try_from(n).ok()).map(TaskId))
+        .collect();
+    ctx.read(a, |doc| {
+        Ok(json!({ "tasks": tops.iter().filter_map(|id| doc.project.task_index(*id)).map(|i| views::task_row(&doc.project, i)).collect::<Vec<_>>() }))
+    })
 }
 
 fn outdent_tasks(ctx: &Ctx, a: &Args) -> ToolResult {
-    ctx.edit(
-        a,
-        "Outdent tasks",
-        |p, _| {
-            let ids = task_list_arg(p, a, "tasks")?;
-            let mut ids = top_level_selection(p, &ids);
-            // Outdent bottom-up so earlier promotions do not capture later siblings.
-            ids.reverse();
-            for id in &ids {
-                p.outdent(*id).map_err(|e| ToolError(format!("task {}: {e}", id.0)))?;
-            }
-            ids.reverse();
-            Ok(ids)
-        },
-        |doc, ids| Ok(json!({ "tasks": ids.iter().filter_map(|id| doc.project.task_index(*id)).map(|i| views::task_row(&doc.project, i)).collect::<Vec<_>>() })),
-    )
+    let ids = ctx.read(a, |doc| task_list_arg(&doc.project, a, "tasks"))?;
+    let result = ctx.run_engine(a, "task.outdent", json!({ "tasks": ids.iter().map(|id| id.0).collect::<Vec<_>>() }))?;
+    let tops: Vec<TaskId> = result
+        .get("tasks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_u64().and_then(|n| u32::try_from(n).ok()).map(TaskId))
+        .collect();
+    ctx.read(a, |doc| {
+        Ok(json!({ "tasks": tops.iter().filter_map(|id| doc.project.task_index(*id)).map(|i| views::task_row(&doc.project, i)).collect::<Vec<_>>() }))
+    })
 }
 
 /// Accepts resources as text (`"Ana[50%], Bob"`) or as an array of names, ids or

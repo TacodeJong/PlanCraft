@@ -1,14 +1,14 @@
 # PlanCraft — notes for AI assistants (AGENTS.md and CLAUDE.md are identical; keep them in sync)
 
 - **This repo is a new app line** based on [rallegretti/PlanCraft](https://github.com/rallegretti/PlanCraft) v0.7.0, published as [TacodeJong/PlanCraft](https://github.com/TacodeJong/PlanCraft) **v0.8.0**. See [docs/FORK.md](docs/FORK.md). Prefer this line’s behaviour (Merlin rules, ArtCraft UI, EN/NL, extra import/export) over stock upstream unless the task says otherwise.
-- Rust workspace: `plancraft-core` (logic), `plancraft-mcp` (MCP server), `plancraft-server` (PlanCraft Server for shared editing, also `plancraft serve`), `plancraft-app` (egui desktop app, binary `plancraft`).
-- Hard rule from the owner: everything in Rust; no calling into C/Python/other languages for features (scripts/adapters are fine when unavoidable). `cargo deny check` bans crates that compile C (`deny.toml`); `cargo tree -p plancraft-app -i cc -e build` should print nothing.
+- Rust workspace (Craft layers): `plancraft-core`, `plancraft-engine`, `plancraft-mcp`, `plancraft-server`, `plancraft-ui-egui`, `apps/plancraft`, `apps/plancraft-cli`, `xtask`.
+- Hard rule from the owner: everything in Rust; no calling into C/Python/other languages for features (scripts/adapters are fine when unavoidable). `cargo deny check` bans crates that compile C (`deny.toml`); `cargo tree -p plancraft -i cc -e build` should print nothing.
 - Brand: ArtCraft family (brutalist dark default); do not revert to upstream’s Office-like chrome. Logo must never resemble a "P" letter.
 - All project mutations go through `ops.rs` methods on `Project`, wrapped in `Document::edit`/`try_edit` (undo + recalculation). MCP edits use `ChangeSource::Agent`.
 - Times are working minutes; finishes land on the end of the working day (17:00).
 - Dates use `jiff` (not `chrono`, which is unmaintained) through `plancraft_core::dates`: civil `Date`/`DateTime`/`Time` (no time zone), panic-free constructors and arithmetic, `strftime` formatting/parsing, and `use plancraft_core::dates::prelude::*;` for the types and extension traits.
 - egui 0.36: `App::ui(&mut self, ui, frame)`, `egui::Panel::top/bottom`, `Popup::menu`, `zoom_delta()` for Ctrl+wheel. Many emoji glyphs are missing from the default fonts; check new icon glyphs visually.
-- Before every commit: `cargo xtask ci` (fmt, clippy -D warnings, tests, release speed gate, cargo deny), run locally. Test only: `cargo test --workspace`. Visual check: `PLANCRAFT_VIEW="Gantt Chart" PLANCRAFT_CMD=TaskInfo PLANCRAFT_SCREENSHOT=out.png cargo run -p plancraft-app -- --demo` writes a PNG and exits.
+- Before every commit: `cargo xtask ci` (fmt, layers, clippy -D warnings, tests, release speed gate, cargo deny), run locally. Test only: `cargo test --workspace`. Visual check: `PLANCRAFT_VIEW="Gantt Chart" PLANCRAFT_CMD=TaskInfo PLANCRAFT_SCREENSHOT=out.png cargo run -p plancraft -- --demo` writes a PNG and exits.
 - Formatting: `cargo fmt --all` (rustfmt.toml: max_width 140).
 - UI chrome: a two-row command bar (`menubar.rs`): plain tabs plus one compact toolbar row, with the view selector spanning both rows. Do NOT reintroduce a Microsoft-Ribbon-style UI (large icon buttons, stacked small buttons, group captions under button groups); the owner explicitly wants to avoid resembling the Ribbon.
 - The Start Page (`start_page.rs`) is a centered card layout under the title band. Avoid Office-backstage patterns (full-height colored left nav, Back arrow, Info/Account/Options nav list).

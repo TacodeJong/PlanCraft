@@ -19,6 +19,7 @@ pub fn ci() -> Result<()> {
     };
     step("format (cargo fmt --check)");
     run(cargo().args(["fmt", "--all", "--", "--check"]))?;
+    crate::layers::run()?;
     step("clippy, warnings denied");
     run(cargo().args(["clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"]))?;
     step("tests");

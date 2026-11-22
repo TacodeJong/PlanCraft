@@ -127,77 +127,101 @@ pub fn tools() -> Vec<Tool> {
 }
 
 fn link_tasks(ctx: &Ctx, a: &Args) -> ToolResult {
-    ctx.edit(
-        a,
-        "Link tasks",
-        |p, _| {
-            let pred = task_arg(p, a, "predecessor")?;
-            let succ = task_arg(p, a, "successor")?;
-            let kind = parse_link_type(a.get("type"))?;
-            let lag = parse_lag_value(p, a.get("lag"), "lag")?;
-            p.link(TaskRef::Local(pred), succ, kind, lag)?;
-            Ok((pred, succ))
-        },
-        |doc, (pred, succ)| {
-            let p = &doc.project;
-            Ok(json!({
-                "linked": true,
-                "predecessor": views::task_row(p, p.task_index(pred).ok_or_else(|| missing("exists"))?),
-                "successor": views::task_row(p, p.task_index(succ).ok_or_else(|| missing("exists"))?),
-            }))
-        },
-    )
+    let (pred, succ, kind) = ctx.read(a, |doc| {
+        let p = &doc.project;
+        let pred = task_arg(p, a, "predecessor")?;
+        let succ = task_arg(p, a, "successor")?;
+        let kind = parse_link_type(a.get("type"))?;
+        // Validate lag against project settings before mutating.
+        let _lag = parse_lag_value(p, a.get("lag"), "lag")?;
+        Ok((pred, succ, kind))
+    })?;
+    let mut params = json!({ "predecessor": pred.0, "successor": succ.0, "type": kind.code() });
+    if let Some(v) = a.get("lag")
+        && let Some(map) = params.as_object_mut()
+    {
+        map.insert("lag".into(), v.clone());
+    }
+    ctx.run_engine(a, "task.linkPair", params)?;
+    ctx.read(a, |doc| {
+        let p = &doc.project;
+        Ok(json!({
+            "linked": true,
+            "predecessor": views::task_row(p, p.task_index(pred).ok_or_else(|| missing("exists"))?),
+            "successor": views::task_row(p, p.task_index(succ).ok_or_else(|| missing("exists"))?),
+        }))
+    })
 }
 
 fn unlink_tasks(ctx: &Ctx, a: &Args) -> ToolResult {
-    ctx.edit(
-        a,
-        "Unlink tasks",
-        |p, _| {
-            if a.get("tasks").is_some() {
-                let ids = task_list_arg(p, a, "tasks")?;
-                let before: usize = p.tasks.iter().map(|t| t.predecessors.len()).sum();
-                p.unlink_tasks(&ids);
-                let after: usize = p.tasks.iter().map(|t| t.predecessors.len()).sum();
-                return Ok(before - after);
-            }
-            if a.get("predecessor").is_none() || a.get("successor").is_none() {
-                return err("give 'predecessor' and 'successor', or 'tasks'");
-            }
-            let succ = task_arg(p, a, "successor")?;
-            let pred = resolve_task_ref(p, a.get("predecessor").ok_or_else(|| missing("checked"))?, None)?;
-            if !p.unlink(pred, succ)? {
-                return err("these tasks are not linked");
-            }
-            Ok(1)
-        },
-        |_, removed| Ok(json!({ "removed_links": removed })),
-    )
+    if a.get("tasks").is_some() {
+        let (ids, before) = ctx.read(a, |doc| {
+            let p = &doc.project;
+            let ids = task_list_arg(p, a, "tasks")?;
+            let before: usize = p.tasks.iter().map(|t| t.predecessors.len()).sum();
+            Ok((ids, before))
+        })?;
+        ctx.run_engine(a, "task.unlink", json!({ "tasks": ids.iter().map(|id| id.0).collect::<Vec<_>>() }))?;
+        return ctx.read(a, |doc| {
+            let after: usize = doc.project.tasks.iter().map(|t| t.predecessors.len()).sum();
+            Ok(json!({ "removed_links": before.saturating_sub(after) }))
+        });
+    }
+    if a.get("predecessor").is_none() || a.get("successor").is_none() {
+        return err("give 'predecessor' and 'successor', or 'tasks'");
+    }
+    let (pred, succ) = ctx.read(a, |doc| {
+        let p = &doc.project;
+        let succ = task_arg(p, a, "successor")?;
+        let pred = resolve_task_ref(p, a.get("predecessor").ok_or_else(|| missing("checked"))?, None)?;
+        Ok((pred, succ))
+    })?;
+    match pred {
+        TaskRef::Local(id) => {
+            ctx.run_engine(a, "task.unlinkPair", json!({ "predecessor": id.0, "successor": succ.0 }))?;
+            Ok(json!({ "removed_links": 1 }))
+        }
+        TaskRef::External { .. } => ctx.edit(
+            a,
+            "Unlink tasks",
+            |p, _| {
+                if !p.unlink(pred, succ)? {
+                    return err("these tasks are not linked");
+                }
+                Ok(1)
+            },
+            |_, removed| Ok(json!({ "removed_links": removed })),
+        ),
+    }
 }
 
 fn link_chain(ctx: &Ctx, a: &Args) -> ToolResult {
-    ctx.edit(
-        a,
-        "Link tasks",
-        |p, _| {
-            let ids = task_list_arg(p, a, "tasks")?;
-            if ids.len() < 2 {
-                return err("'tasks' needs at least two tasks");
-            }
-            let kind = parse_link_type(a.get("type"))?;
-            let lag = parse_lag_value(p, a.get("lag"), "lag")?;
-            for pair in ids.windows(2) {
-                if let [pred, succ] = pair {
-                    p.link(TaskRef::Local(*pred), *succ, kind, lag).map_err(|e| ToolError(format!("linking {} → {}: {e}", pred.0, succ.0)))?;
-                }
-            }
-            Ok(ids)
-        },
-        |doc, ids| {
-            let p = &doc.project;
-            Ok(json!({ "links": ids.len() - 1, "tasks": ids.iter().filter_map(|id| p.task_index(*id)).map(|i| views::task_row(p, i)).collect::<Vec<_>>() }))
-        },
-    )
+    let (ids, kind) = ctx.read(a, |doc| {
+        let ids = task_list_arg(&doc.project, a, "tasks")?;
+        if ids.len() < 2 {
+            return err("'tasks' needs at least two tasks");
+        }
+        let kind = parse_link_type(a.get("type"))?;
+        let _lag = parse_lag_value(&doc.project, a.get("lag"), "lag")?;
+        Ok((ids, kind))
+    })?;
+    let mut params = json!({
+        "tasks": ids.iter().map(|id| id.0).collect::<Vec<_>>(),
+        "type": kind.code(),
+    });
+    if let Some(v) = a.get("lag")
+        && let Some(map) = params.as_object_mut()
+    {
+        map.insert("lag".into(), v.clone());
+    }
+    ctx.run_engine(a, "task.link", params)?;
+    ctx.read(a, |doc| {
+        let p = &doc.project;
+        Ok(json!({
+            "links": ids.len() - 1,
+            "tasks": ids.iter().filter_map(|id| p.task_index(*id)).map(|i| views::task_row(p, i)).collect::<Vec<_>>(),
+        }))
+    })
 }
 
 fn link_json(p: &Project, succ: &Task, d: &Dependency) -> Value {

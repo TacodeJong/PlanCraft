@@ -106,27 +106,62 @@ fn apply_assignment_extras(p: &mut Project, id: AssignmentId, a: &Args) -> ToolR
 }
 
 fn assign_resource(ctx: &Ctx, a: &Args) -> ToolResult {
-    ctx.edit(
-        a,
-        "Assign resource",
-        |p, _| {
-            let t = task_arg(p, a, "task")?;
-            let r = resource_arg(p, a, "resource")?;
-            let units = a.get("units").map(|v| parse_units_value(v, "units")).transpose()?;
-            let work = a.get("work").map(|v| parse_work_value(p, v, "work")).transpose()?;
-            let id = p.assign(t, r, units, work)?;
-            apply_assignment_extras(p, id, a)?;
-            Ok(id)
-        },
-        |doc, id| {
-            let p = &doc.project;
-            let asg = p.assignment(id).ok_or_else(|| missing("exists"))?;
-            Ok(json!({
-                "assignment": views::assignment_json(p, asg),
-                "task": views::task_row(p, p.task_index(asg.task).ok_or_else(|| missing("exists"))?),
-            }))
-        },
-    )
+    let has_extras = a.get("actual_work").is_some() || a.get("contour").is_some() || a.get("cost").is_some();
+    if has_extras {
+        return ctx.edit(
+            a,
+            "Assign resource",
+            |p, _| {
+                let t = task_arg(p, a, "task")?;
+                let r = resource_arg(p, a, "resource")?;
+                let units = a.get("units").map(|v| parse_units_value(v, "units")).transpose()?;
+                let work = a.get("work").map(|v| parse_work_value(p, v, "work")).transpose()?;
+                let id = p.assign(t, r, units, work)?;
+                apply_assignment_extras(p, id, a)?;
+                Ok(id)
+            },
+            |doc, id| {
+                let p = &doc.project;
+                let asg = p.assignment(id).ok_or_else(|| missing("exists"))?;
+                Ok(json!({
+                    "assignment": views::assignment_json(p, asg),
+                    "task": views::task_row(p, p.task_index(asg.task).ok_or_else(|| missing("exists"))?),
+                }))
+            },
+        );
+    }
+    let (task, resource, units, work_minutes) = ctx.read(a, |doc| {
+        let p = &doc.project;
+        let task = task_arg(p, a, "task")?;
+        let resource = resource_arg(p, a, "resource")?;
+        let units = a.get("units").map(|v| parse_units_value(v, "units")).transpose()?;
+        let work = a.get("work").map(|v| parse_work_value(p, v, "work")).transpose()?;
+        Ok((task, resource, units, work))
+    })?;
+    let mut params = json!({ "task": task.0, "resource": resource.0 });
+    if let Some(map) = params.as_object_mut() {
+        if let Some(u) = units {
+            map.insert("units".into(), json!(u));
+        }
+        if let Some(w) = work_minutes {
+            map.insert("work_minutes".into(), json!(w));
+        }
+    }
+    let eng = ctx.run_engine(a, "resource.assign", params)?;
+    let id = eng
+        .get("assignment")
+        .and_then(Value::as_u64)
+        .and_then(|n| u32::try_from(n).ok())
+        .map(AssignmentId)
+        .ok_or_else(|| ToolError("engine did not return an assignment id".into()))?;
+    ctx.read(a, |doc| {
+        let p = &doc.project;
+        let asg = p.assignment(id).ok_or_else(|| missing("exists"))?;
+        Ok(json!({
+            "assignment": views::assignment_json(p, asg),
+            "task": views::task_row(p, p.task_index(asg.task).ok_or_else(|| missing("exists"))?),
+        }))
+    })
 }
 
 fn update_assignment(ctx: &Ctx, a: &Args) -> ToolResult {
@@ -158,20 +193,22 @@ fn update_assignment(ctx: &Ctx, a: &Args) -> ToolResult {
 }
 
 fn unassign_resource(ctx: &Ctx, a: &Args) -> ToolResult {
-    ctx.edit(
-        a,
-        "Remove assignment",
-        |p, _| {
-            let id = find_assignment(p, a)?;
-            let task = p.assignment(id).ok_or_else(|| missing("exists"))?.task;
-            p.unassign(id)?;
-            Ok(task)
-        },
-        |doc, task| {
-            let p = &doc.project;
-            Ok(json!({ "removed": true, "task": p.task_index(task).map(|i| views::task_row(p, i)) }))
-        },
-    )
+    let params = ctx.read(a, |doc| {
+        let p = &doc.project;
+        let id = find_assignment(p, a)?;
+        Ok(json!({ "assignment": id.0 }))
+    })?;
+    let eng = ctx.run_engine(a, "resource.unassign", params)?;
+    let task = eng
+        .get("task")
+        .and_then(Value::as_u64)
+        .and_then(|n| u32::try_from(n).ok())
+        .map(plancraft_core::ids::TaskId)
+        .ok_or_else(|| ToolError("engine did not return a task id".into()))?;
+    ctx.read(a, |doc| {
+        let p = &doc.project;
+        Ok(json!({ "removed": true, "task": p.task_index(task).map(|i| views::task_row(p, i)) }))
+    })
 }
 
 fn list_assignments(ctx: &Ctx, a: &Args) -> ToolResult {

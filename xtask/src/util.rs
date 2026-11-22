@@ -75,7 +75,7 @@ pub fn cargo() -> Command {
 /// Builds the release binaries of the app and the standalone MCP server.
 pub fn build_release(target: Option<&str>, envs: &[(&str, &str)]) -> Result<()> {
     let mut c = cargo();
-    c.args(["build", "--release", "--locked", "-p", "plancraft-app", "-p", "plancraft-mcp"]);
+    c.args(["build", "--release", "--locked", "-p", "plancraft", "-p", "plancraft-mcp"]);
     if let Some(t) = target {
         c.args(["--target", t]);
     }
@@ -162,7 +162,7 @@ pub fn write_app_ico() -> Result<PathBuf> {
     let root = root();
     step("building the app to render icons");
     let mut c = cargo();
-    c.args(["build", "-p", "plancraft-app"]);
+    c.args(["build", "-p", "plancraft"]);
     run(&mut c)?;
     let exe = root.join(if cfg!(windows) { "target/debug/plancraft.exe" } else { "target/debug/plancraft" });
     let tmp = root.join("target/icons");

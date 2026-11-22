@@ -1,0 +1,386 @@
+//! Resource Sheet: an editable table of all resources.
+
+use std::collections::{HashMap, HashSet};
+
+use egui::{Rect, Ui};
+use plancraft_core::prelude::*;
+use plancraft_core::workspace::Document;
+
+use crate::commands::Command;
+use crate::edit::EditExt;
+use crate::format;
+use crate::state::{ToastKind, UiState};
+use crate::theme;
+use crate::widgets::grid::{self, Cell, ColumnDef, GridConfig, GridEvent};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Col {
+    Indicators,
+    Name,
+    Type,
+    Category,
+    Initials,
+    Group,
+    MaxUnits,
+    StdRate,
+    OvtRate,
+    CostPerUse,
+    Calendar,
+    Email,
+    Work,
+    Cost,
+}
+
+const COLS: [Col; 14] = [
+    Col::Indicators,
+    Col::Name,
+    Col::Type,
+    Col::Category,
+    Col::Initials,
+    Col::Group,
+    Col::MaxUnits,
+    Col::StdRate,
+    Col::OvtRate,
+    Col::CostPerUse,
+    Col::Calendar,
+    Col::Email,
+    Col::Work,
+    Col::Cost,
+];
+
+fn type_label(t: ResourceType) -> &'static str {
+    match t {
+        ResourceType::Work => "Work",
+        ResourceType::Material => "Material",
+        ResourceType::Cost => "Cost",
+    }
+}
+
+fn defs(p: &Project) -> Vec<ColumnDef> {
+    let cal_names: Vec<String> = p.calendars.iter().map(|c| c.name.clone()).collect();
+    let cats: Vec<&str> = ResourceCategory::ALL.iter().map(|c| c.label()).collect();
+    COLS.iter()
+        .map(|c| match c {
+            Col::Indicators => ColumnDef::new("ℹ", 30.0).read_only().center(),
+            Col::Name => ColumnDef::new("Resource Name", 200.0),
+            Col::Type => ColumnDef::new("Type", 74.0).choice(&["Work", "Material", "Cost"]),
+            Col::Category => ColumnDef::new("Category", 120.0).choice(&cats),
+            Col::Initials => ColumnDef::new("Initials", 60.0),
+            Col::Group => ColumnDef::new("Group", 110.0),
+            Col::MaxUnits => ColumnDef::new("Max.", 62.0).right(),
+            Col::StdRate => ColumnDef::new("Std. Rate", 86.0).right(),
+            Col::OvtRate => ColumnDef::new("Ovt. Rate", 86.0).right(),
+            Col::CostPerUse => ColumnDef::new("Cost/Use", 84.0).right(),
+            Col::Calendar => {
+                let mut d = ColumnDef::new("Base Calendar", 110.0);
+                d.editor = grid::Editor::Choice(std::iter::once("(Project)".to_string()).chain(cal_names.iter().cloned()).collect());
+                d
+            }
+            Col::Email => ColumnDef::new("Email", 170.0),
+            Col::Work => ColumnDef::new("Work", 76.0).right().read_only(),
+            Col::Cost => ColumnDef::new("Cost", 96.0).right().read_only(),
+        })
+        .collect()
+}
+
+fn cell(p: &Project, r: &Resource, col: Col, over: &HashSet<ResourceId>, work: &HashMap<ResourceId, (Minutes, f64)>) -> Cell {
+    let red = |mut c: Cell| {
+        if over.contains(&r.id) {
+            c.color = Some(theme::pal().ERROR);
+        }
+        c
+    };
+    match col {
+        Col::Indicators => {
+            let mut icons = Vec::new();
+            if over.contains(&r.id) {
+                icons.push((
+                    grid::Glyph::Icon("triangle-alert"),
+                    theme::pal().ERROR,
+                    "This resource is overallocated and should be leveled.".to_string(),
+                ));
+            }
+            if !r.exceptions.is_empty() {
+                icons.push((
+                    grid::Glyph::Icon("calendar"),
+                    theme::pal().ACCENT_MID,
+                    format!("{} calendar exception(s): time off or altered hours", r.exceptions.len()),
+                ));
+            }
+            if !r.notes.is_empty() {
+                icons.push((grid::Glyph::Note, theme::pal().TEXT_WEAK, r.notes.clone()));
+            }
+            icons.truncate(2);
+            Cell { icons, ..Default::default() }
+        }
+        Col::Name => red(Cell::text(r.name.clone())),
+        Col::Type => Cell::text(type_label(r.kind)),
+        Col::Category => Cell::text(r.category.label()),
+        Col::Initials => Cell::text(r.initials.clone()),
+        Col::Group => Cell::text(r.group.clone()),
+        Col::MaxUnits => {
+            if r.kind == ResourceType::Work {
+                Cell::text(format::units(r.max_units))
+            } else {
+                Cell::default()
+            }
+        }
+        Col::StdRate => {
+            let unit = match r.kind {
+                ResourceType::Work => "/hr".to_string(),
+                ResourceType::Material => {
+                    if r.material_label.is_empty() {
+                        String::new()
+                    } else {
+                        format!("/{}", r.material_label)
+                    }
+                }
+                ResourceType::Cost => return Cell::default(),
+            };
+            Cell {
+                text: format!("{}{unit}", format::money(p, r.standard_rate)),
+                edit_text: Some(r.standard_rate.to_string()),
+                ..Default::default()
+            }
+        }
+        Col::OvtRate => {
+            if r.kind == ResourceType::Work {
+                Cell {
+                    text: format!("{}/hr", format::money(p, r.overtime_rate)),
+                    edit_text: Some(r.overtime_rate.to_string()),
+                    ..Default::default()
+                }
+            } else {
+                Cell::default()
+            }
+        }
+        Col::CostPerUse => {
+            Cell { text: format::money(p, r.cost_per_use), edit_text: Some(r.cost_per_use.to_string()), ..Default::default() }
+        }
+        Col::Calendar => Cell::text(r.calendar.and_then(|c| p.calendar(c)).map(|c| c.name.clone()).unwrap_or_else(|| "(Project)".into())),
+        Col::Email => Cell::text(r.email.clone()),
+        Col::Work => Cell::text(work.get(&r.id).map(|w| format_work(w.0)).unwrap_or_else(|| format_work(0))),
+        Col::Cost => Cell::text(format::money(p, work.get(&r.id).map(|w| w.1).unwrap_or(0.0))),
+    }
+}
+
+fn commit(p: &mut Project, id: ResourceId, col: Col, text: &str) -> Result<(), String> {
+    let cal_id = p.calendars.iter().find(|c| c.name == text).map(|c| c.id);
+    let r = p.resource_mut(id).ok_or("resource not found")?;
+    match col {
+        Col::Name => {
+            if text.is_empty() {
+                return Err("resource name cannot be empty".into());
+            }
+            r.name = text.into();
+        }
+        Col::Type => {
+            r.kind = match text {
+                "Material" => ResourceType::Material,
+                "Cost" => ResourceType::Cost,
+                _ => ResourceType::Work,
+            }
+        }
+        Col::Category => r.category = ResourceCategory::ALL.into_iter().find(|c| c.label() == text).unwrap_or_default(),
+        Col::Initials => r.initials = text.into(),
+        Col::Group => r.group = text.into(),
+        Col::MaxUnits => r.max_units = format::parse_units(text).ok_or("enter units like 100% or 50%")?.max(0.0),
+        Col::StdRate => r.standard_rate = format::parse_money(text).ok_or("invalid rate")?,
+        Col::OvtRate => r.overtime_rate = format::parse_money(text).ok_or("invalid rate")?,
+        Col::CostPerUse => r.cost_per_use = format::parse_money(text).ok_or("invalid amount")?,
+        Col::Calendar => r.calendar = cal_id,
+        Col::Email => r.email = text.into(),
+        _ => return Err("this field is calculated".into()),
+    }
+    Ok(())
+}
+
+/// The Delete key on a cell other than the name: clears that field of the selected resources
+/// (the one under the cursor when it isn't selected), in one undo step.
+fn clear_field(doc: &mut Document, st: &mut UiState, row: usize, column: Col, def: &ColumnDef) {
+    let Some(at) = doc.project.resources.get(row).map(|r| r.id) else { return };
+    let hint = "To delete a resource, press Delete on its row number or in the Resource Name column.";
+    if def.editor != grid::Editor::Text {
+        st.toast(ToastKind::Info, format!("{} can't be cleared. {hint}", def.title));
+        return;
+    }
+    let ids: Vec<ResourceId> = if st.sel.resources.contains(&at) {
+        doc.project.resources.iter().map(|r| r.id).filter(|id| st.sel.resources.contains(id)).collect()
+    } else {
+        vec![at]
+    };
+    let r = doc.edit_msg(&format!("Clear {}", def.title), |p| ids.iter().try_for_each(|id| commit(p, *id, column, "")));
+    if let Err(e) = r {
+        st.toast(ToastKind::Info, format!("{} can't be cleared: {e}. {hint}", def.title));
+    }
+}
+
+/// Work and cost per resource over all its assignments.
+fn totals(p: &Project) -> HashMap<ResourceId, (Minutes, f64)> {
+    let mut work: HashMap<ResourceId, (Minutes, f64)> = HashMap::new();
+    for a in &p.assignments {
+        let Some(r) = p.resource(a.resource) else {
+            continue;
+        };
+        let e = work.entry(a.resource).or_default();
+        e.0 = e.0.saturating_add(a.work);
+        e.1 += a.cost_with(r);
+    }
+    work
+}
+
+/// The Resource Sheet for printing (without the indicator column; overallocated resources in red).
+pub fn print_sheet(p: &Project, pal: &plancraft_core::print::layout::Palette) -> plancraft_core::print::Sheet {
+    use plancraft_core::print::{Align, PrintCell, PrintColumn, PrintRow, RowKind, Sheet};
+    let defs = defs(p);
+    let over: HashSet<ResourceId> = plancraft_core::workload::overallocations(p).into_iter().map(|(r, _)| r).collect();
+    let work = totals(p);
+    let cols: Vec<(Col, &ColumnDef)> = COLS.iter().copied().zip(&defs).filter(|(c, _)| *c != Col::Indicators).collect();
+    let mut columns = vec![PrintColumn { title: "ID".into(), width: 26.0, align: Align::Right }];
+    columns.extend(cols.iter().map(|(_, d)| PrintColumn {
+        title: d.title.clone(),
+        width: d.width * 0.75,
+        align: if d.align == egui::Align::Max { Align::Right } else { Align::Left },
+    }));
+    let rows = p
+        .resources
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let mut cells = vec![PrintCell::text((i + 1).to_string())];
+            cells.extend(cols.iter().map(|(c, _)| {
+                let cell = cell(p, r, *c, &over, &work);
+                PrintCell { text: cell.text, color: cell.color.map(|_| pal.error), ..Default::default() }
+            }));
+            PrintRow { kind: RowKind::Other, cells }
+        })
+        .collect();
+    Sheet { title: "Resource Sheet".into(), columns, rows }
+}
+
+pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: &mut Vec<Command>) {
+    let shown: Vec<usize> =
+        doc.project.resources.iter().enumerate().filter(|(_, r)| super::filter_bar::resource_matches(st, r)).map(|(i, _)| i).collect();
+    let total = doc.project.resources.len();
+    let rect = super::filter_bar::resources(ui, rect, st, shown.len(), total);
+    let defs = defs(&doc.project);
+    let over: HashSet<ResourceId> = plancraft_core::workload::overallocations(&doc.project).into_iter().map(|(r, _)| r).collect();
+    let work = totals(&doc.project);
+    let n = shown.len();
+    // The cursor and an open editor follow their resource when an agent adds or deletes one.
+    let row_key = |r: usize| shown.get(r).and_then(|i| doc.project.resources.get(*i)).map(|res| u64::from(res.id.0));
+    let cfg = GridConfig {
+        id: egui::Id::unique("resource_sheet"),
+        columns: &defs,
+        row_count: n,
+        blank_rows: 20,
+        row_numbers: true,
+        row_label: None,
+        show_vscroll: true,
+        header_height: 30.0,
+        row_height: theme::ROW_HEIGHT,
+        row_key: Some(&row_key),
+        row_drag: false,
+        column_drag: false,
+        outline_arrows: false,
+        quick_name: None,
+    };
+    let output = {
+        let p = &doc.project;
+        let sel = &st.sel;
+        let is_sel = |r: usize| shown.get(r).and_then(|i| p.resources.get(*i)).is_some_and(|res| sel.resources.contains(&res.id));
+        let mut cellf = |r: usize, c: usize| match (shown.get(r).and_then(|i| p.resources.get(*i)), COLS.get(c)) {
+            (Some(res), Some(&col)) => cell(p, res, col, &over, &work),
+            _ => Cell::default(),
+        };
+        grid::show(ui, rect, &mut st.resource_grid, &cfg, &is_sel, &mut cellf)
+    };
+    let resource_at = |doc: &Document, row: usize| shown.get(row).and_then(|i| doc.project.resources.get(*i)).map(|r| r.id);
+    for ev in output.events {
+        match ev {
+            GridEvent::Select { row, ctrl, .. } => {
+                let Some(id) = resource_at(doc, row) else { continue };
+                if ctrl {
+                    if !st.sel.resources.remove(&id) {
+                        st.sel.resources.insert(id);
+                    }
+                } else {
+                    st.sel.select_resource(id);
+                }
+            }
+            GridEvent::CursorRow { row, .. } => {
+                if let Some(id) = resource_at(doc, row) {
+                    st.sel.select_resource(id);
+                }
+            }
+            GridEvent::Activate { row, .. } => {
+                if let Some(id) = resource_at(doc, row) {
+                    st.sel.select_resource(id);
+                    out.push(Command::ResourceInfo);
+                }
+            }
+            GridEvent::Commit { row, col, text, .. } => {
+                let (Some(&column), Some(def)) = (COLS.get(col), defs.get(col)) else { continue };
+                if row < n {
+                    let Some(id) = resource_at(doc, row) else { continue };
+                    if let Err(e) = doc.edit_msg(&format!("Edit {}", def.title), |p| commit(p, id, column, &text)) {
+                        st.toast(ToastKind::Error, e);
+                    }
+                } else if !text.is_empty() {
+                    let r = doc.edit_msg("New Resource", |p| {
+                        let name = if column == Col::Name { text.clone() } else { format!("Resource {}", p.resources.len() + 1) };
+                        let id = p.add_resource(name);
+                        if column != Col::Name {
+                            commit(p, id, column, &text)?;
+                        }
+                        Ok::<_, String>(id)
+                    });
+                    match r {
+                        Ok(id) => {
+                            st.sel.select_resource(id);
+                            st.resource_grid.typed_row_added(row, u64::from(id.0), n);
+                        }
+                        Err(e) => st.toast(ToastKind::Error, e),
+                    }
+                }
+            }
+            GridEvent::DeleteKey { row, col } => match col.and_then(|c| COLS.get(c).copied().zip(defs.get(c))) {
+                _ if row >= n => {}
+                // The row number or the name: delete the selected resources.
+                None | Some((Col::Name, _)) => out.push(Command::DeleteResources),
+                // Any other cell: clear that field.
+                Some((column, def)) => clear_field(doc, st, row, column, def),
+            },
+            GridEvent::EditLost => st.toast(ToastKind::Warning, "The resource you were editing was deleted, so your typing was not saved."),
+            GridEvent::InsertKey => out.push(Command::InsertResource),
+            GridEvent::MoveRows { .. } => {}
+            GridEvent::ContextMenu { row, pos } => {
+                if let Some(id) = resource_at(doc, row) {
+                    st.sel.select_resource(id);
+                }
+                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("resource_ctx_menu"), pos));
+            }
+            GridEvent::ClickEmpty { .. } => st.sel.resources.clear(),
+            GridEvent::ToggleExpand(_) | GridEvent::HeaderClick { .. } | GridEvent::HeaderMenu { .. } | GridEvent::MoveColumn { .. } => {}
+        }
+    }
+}
+
+/// Shows the floating context menu requested by the resource sheet, if any.
+pub fn context_menu_popup(ctx: &egui::Context, out: &mut Vec<Command>) {
+    let id = egui::Id::unique("resource_ctx_menu");
+    let Some(pos) = ctx.data(|d| d.get_temp::<egui::Pos2>(id)) else {
+        return;
+    };
+    let close = crate::views::gantt::popup_area(ctx, id, pos, |ui| {
+        let mut picked = false;
+        crate::commands::resource_context_menu(ui, &mut |c| {
+            out.push(c);
+            picked = true;
+        });
+        picked
+    });
+    if close {
+        ctx.data_mut(|d| d.remove::<egui::Pos2>(id));
+    }
+}

@@ -8,6 +8,7 @@ use std::sync::{Arc, MutexGuard};
 
 use plancraft_core::model::Project;
 use plancraft_core::workspace::{ChangeSource, DiskStatus, Document, SharedWorkspace, Workspace};
+use plancraft_engine::Session;
 use serde_json::{Map, Value, json};
 
 use crate::args::{Args, ToolError, ToolResult, err};
@@ -470,6 +471,35 @@ impl Ctx<'_> {
         let mut ws = self.server.lock();
         let i = Self::doc_index(&ws, a)?;
         f(doc_at_mut(&mut ws, i)?)
+    }
+
+    /// Run a registered engine command on the document selected by `a` (Agent attribution).
+    /// Prefer this when an equivalent `CommandSpec` exists so MCP, CLI and UI share one path.
+    pub fn run_engine(&self, a: &Args, id: &str, params: Value) -> ToolResult {
+        let mut ws = self.server.lock();
+        let i = Self::doc_index(&ws, a)?;
+        ws.active = Some(i);
+        self.execute_engine(&mut ws, id, params)
+    }
+
+    /// Like [`Self::run_engine`], but commands that do not need a document (`file.new`,
+    /// `commands.list`, …) may run when none is open; when one is selectable it is activated.
+    pub fn run_engine_any(&self, a: &Args, id: &str, params: Value) -> ToolResult {
+        let mut ws = self.server.lock();
+        if let Ok(i) = Self::doc_index(&ws, a) {
+            ws.active = Some(i);
+        }
+        self.execute_engine(&mut ws, id, params)
+    }
+
+    fn execute_engine(&self, ws: &mut Workspace, id: &str, params: Value) -> ToolResult {
+        match Session::execute_mut(ws, ChangeSource::Agent, id, &params) {
+            Ok(v) => {
+                self.mark_changed();
+                Ok(v)
+            }
+            Err(e) => Err(ToolError(e.to_string())),
+        }
     }
 
     /// Applies an undoable edit through [`Document::try_edit`] and renders the result.

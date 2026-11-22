@@ -1,12 +1,33 @@
 # PlanCraft architecture
 
-PlanCraft is a Cargo workspace with four crates:
+PlanCraft follows Craft-suite layering (see `xtask/src/layers.rs`, `cargo xtask layers`).
 
 ```
-plancraft-app  ──►  plancraft-mcp     ──►  plancraft-core
-     │         ──►  plancraft-server  ──►       ▲
-     └──────────────────────────────────────────┘
+apps/plancraft · apps/plancraft-cli          (L7 exempt)
+        │                │
+        ▼                ▼
+plancraft-ui-egui ──► plancraft-mcp ──► plancraft-engine ──► plancraft-core
+        │                                      ▲                    ▲
+        └──────────► plancraft-server ─────────┴────────────────────┘
 ```
+
+| Layer | Crates |
+|---|---|
+| L7 exempt | `plancraft`, `plancraft-cli`, `xtask` |
+| L6 | `plancraft-ui-egui`, `plancraft-mcp` |
+| L5 | `plancraft-engine` (`Session::execute`, command registry) |
+| L4 | `plancraft-server` |
+| L1 | `plancraft-core` (domain monolith for now) |
+
+**Commands.** Document-mutating work goes through `plancraft_engine::Session::execute` (registry: `file.*`, `edit.*`, `task.*`, `resource.*`, `project.*`, plus queries). Desktop maps UI `Command` values via `plancraft_ui_egui::engine_bridge` onto those ids; MCP domain tools thin-wrap the same Session when an equivalent engine command exists (`list_commands` / `run_command` expose the full registry, matching `plancraft-cli`).
+
+**UI-only** (stay local — no engine id): dialog *open/close* and chrome (find/goto, print/export surfaces, import, AI/server panels), cut/copy staging, view/zoom/filter/table/column layout, theme/lang/settings, pane toggles, Gantt/network display flags, window chrome, file pickers / save dialogs (path choice only), recovery, and split-task click mode. Clipboard paste and several dialog *applies* (project info, assign, resource delete, quick entry, distill) go through `engine_bridge::edit_doc` / Session; remaining multi-field dialog drafts (task/resource info, baselines, working time, find/replace, …) still use `Document::try_edit` via `EditExt` (same undo stack) because they do not map cleanly onto discrete CommandSpec ids.
+
+**Craft-libs pin (partial).** Window chrome uses live `craft-window` + `craft-ui-shell` at rev `77c7c623…`. Still deferred: full `craft-ui` / docking `TabStrip`, `craft-theme` / `craft-settings` / `craft-fonts`, `apps/plancraft-web`, a control-channel beyond MCP, and splitting `plancraft-core` into L0–L4. Panel inspectors use a local `widgets::panel_tabs` mirror of `TabKind::Panel` until dock hosts land (see `designspecs/ui-placement/panel-tabs-notes.md`).
+
+## plancraft-engine
+
+Headless façade shared by UI, CLI and MCP: `CommandSpec` registry, `Session` (workspace + journal + events), panic-guarded `execute` / `execute_mut` for shared workspaces.
 
 ## plancraft-core
 
@@ -149,14 +170,18 @@ PlanCraft Server shares a folder of plans for several people to edit at once (op
 - **`link`:** a plan opened from a server, kept in step on two background threads (a reader, and a session that owns the `Replica`): edits in (the plan before and after, numbered), merging off the app's thread, pings, reconnecting with backoff and catching up, topping up id leases, and stopping when the server will not have this person back (`State::SignedOut`). Events out: the plan to show (with the number of the last edit it includes), status, people, dropped work, notices.
 - **`cli`:** shared by the `plancraft-server` binary and `plancraft serve`.
 
-## plancraft-app
+## plancraft-ui-egui / apps/plancraft
 
-The desktop app uses egui and eframe 0.36 with the wgpu renderer.
+The desktop UI library (`plancraft-ui-egui`) and thin binary (`apps/plancraft`) use egui/eframe **0.37** (storytold forks) with the wgpu renderer. Side inspectors use `panes::PaneHost` plus PhotoCraft-style panel tab chrome (`widgets::panel_tabs`).
+
+**Craft suite pin:** [storytold/craft-libs](https://github.com/storytold/craft-libs) rev `77c7c62345c1f4213f59a07d9fdc156ecde0b540` (PhotoCraft’s pin). Live deps: `craft-window` (`ui`, macOS `appkit`) and `craft-ui-shell`. Workspace `[patch.crates-io]` matches PhotoCraft / `craft::egui_fork::REV` (egui @ `8a3c5ecb…`, winit @ `a517b384…`). See `designspecs/ui-placement/title-bar-notes.md`.
 
 **Design reference:** the approved chrome is ArtCraft brutalist-dark (and its derived light). `docs/images/` documents the current app with generated demo-data captures; it is not an independent design target. Use the approved ArtCraft reference when restyling, not screenshots of an earlier build.
 
-- **`app`:** layout (title band, command bar, document tabs, status bar, vertical view label), keyboard shortcuts, command execution, dialogs, the unsaved-changes prompt, and agent-change detection.
-- **`menubar`:** the title band and the two-row command bar (a view selector spanning both rows, plain tabs, and a single ArtCraft toolbar row). Controls are 34 px high with wash hover/press; when the row cannot fit, overflow moves into a discoverable More menu (never a hidden scrollbar). Link enablement requires two selected tasks (shared with the native menu via `selected_task_count`). The Change-view picker and View ▸ Views share `state::VIEW_MENU_GROUPS` (Planning / Analysis & tracking / Reporting / Resources & work) with Overview first in Planning; `ViewKind::ALL` stays the enum scan order.
+- **`craft_shell`:** live `craft_window::policy` + `craft_ui_shell` `TitleBar` / `InstallSpec` (PhotoCraft title slot).
+- **`app`:** layout (unified title bar, command bar, document tabs, status bar, vertical view label), keyboard shortcuts, command execution, dialogs, the unsaved-changes prompt, and agent-change detection.
+- **`menubar`:** title bar (brand, centred document title, Save/Undo/Redo, MCP) and the two-row command bar. Controls are 34 px high with wash hover/press; when the row cannot fit, overflow moves into a discoverable More menu (never a hidden scrollbar). Link enablement requires two selected tasks (shared with the native menu via `selected_task_count`). The Change-view picker and View ▸ Views share `state::VIEW_MENU_GROUPS` (Planning / Analysis & tracking / Reporting / Resources & work) with Overview first in Planning; `ViewKind::ALL` stays the enum scan order.
+- **`widgets::panel_tabs`:** PhotoCraft panel tab strip (active lighter fill, `…` overflow of hidden tabs) for the properties inspector, mirroring craft-ui `TabKind::Panel`.
 - **`views/overview`:** ArtCraft agenda dashboard (Archivo heading, mono HUD section labels, square hairline panels, responsive KPI grid, day strip, overdue/today/week/upcoming lists). Counts and buckets come from `plancraft_core::agenda` / `report::status_moment`; the header labels status moment versus calendar today. Optional Open Gantt emits `Command::SetView` only.
 - **`start_page`:** the Start Page, a centered launcher with start actions, recent projects (with file dates) and a summary of the open project.
 - **`commands`:** the `Command` enum shared by the menu bar, toolbar, context menus and shortcuts.

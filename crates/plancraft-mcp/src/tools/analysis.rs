@@ -7,7 +7,6 @@ use plancraft_core::baseline::{MAX_BASELINE, MAX_INTERIM, PlanSlot, Scope};
 use plancraft_core::dates::prelude::*;
 use plancraft_core::duration::format_work;
 use plancraft_core::ids::{ResourceId, TaskId};
-use plancraft_core::leveling::{LevelingOptions, clear_leveling, level_resources};
 use plancraft_core::model::*;
 use plancraft_core::report;
 use plancraft_core::schedule::project_calendar;
@@ -378,53 +377,58 @@ fn get_overallocations(ctx: &Ctx, a: &Args) -> ToolResult {
 }
 
 fn level_resources_tool(ctx: &Ctx, a: &Args) -> ToolResult {
-    ctx.edit(
-        a,
-        "Level resources",
-        |p, _| {
-            let mut opts = LevelingOptions::default();
-            if let Some(b) = a.bool("clear_existing")? {
-                opts.clear_existing = b;
-            }
-            if let Some(d) = a.u64("max_delay_days")? {
-                opts.max_delay_days = d.min(5000) as u32;
-            }
-            opts.resources = resource_filter(p, a)?.into_iter().collect();
-            Ok(level_resources(p, &opts))
-        },
-        |doc, rep| {
-            let p = &doc.project;
-            let delayed: Vec<Value> = rep
-                .delayed
-                .iter()
-                .filter_map(|(id, m)| {
-                    let t = p.task(*id)?;
-                    Some(json!({ "id": id.0, "name": t.name, "delay": views::dur(p, *m), "delay_minutes": m, "start": fmt_dt(t.sched.start), "finish": fmt_dt(t.sched.finish) }))
-                })
-                .collect();
-            let remaining = workload::overallocations(p);
-            Ok(json!({
-                "delayed_tasks": delayed,
-                "unresolved": rep.unresolved,
-                "finish_before": fmt_dt(rep.finish_before),
-                "finish_after": fmt_dt(rep.finish_after),
-                "remaining_overallocated_resources": remaining.iter().map(|(r, d)| json!({ "id": r.0, "name": p.resource(*r).map(|x| x.name.clone()), "days": d.len() })).collect::<Vec<_>>(),
-            }))
-        },
-    )
+    let params = ctx.read(a, |doc| {
+        let p = &doc.project;
+        let mut params = serde_json::Map::new();
+        if let Some(b) = a.bool("clear_existing")? {
+            params.insert("clear_existing".into(), json!(b));
+        }
+        if let Some(d) = a.u64("max_delay_days")? {
+            params.insert("max_delay_days".into(), json!(d.min(5000)));
+        }
+        let resources = resource_filter(p, a)?;
+        if !resources.is_empty() {
+            params.insert("resources".into(), json!(resources.iter().map(|id| id.0).collect::<Vec<_>>()));
+        }
+        Ok(Value::Object(params))
+    })?;
+    let eng = ctx.run_engine(a, "resource.levelAll", params)?;
+    ctx.read(a, |doc| {
+        let p = &doc.project;
+        let delayed: Vec<Value> = eng
+            .get("delayed")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|row| {
+                let id = row.get("task").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).map(TaskId)?;
+                let mins = row.get("delay_minutes").and_then(Value::as_i64)?;
+                let t = p.task(id)?;
+                Some(json!({
+                    "id": id.0,
+                    "name": t.name,
+                    "delay": views::dur(p, mins),
+                    "delay_minutes": mins,
+                    "start": fmt_dt(t.sched.start),
+                    "finish": fmt_dt(t.sched.finish),
+                }))
+            })
+            .collect();
+        let remaining = workload::overallocations(p);
+        Ok(json!({
+            "delayed_tasks": delayed,
+            "unresolved": eng.get("unresolved").cloned().unwrap_or_else(|| json!([])),
+            "finish_before": eng.get("finish_before").cloned().unwrap_or(Value::Null),
+            "finish_after": eng.get("finish_after").cloned().unwrap_or(Value::Null),
+            "remaining_overallocated_resources": remaining.iter().map(|(r, d)| json!({ "id": r.0, "name": p.resource(*r).map(|x| x.name.clone()), "days": d.len() })).collect::<Vec<_>>(),
+        }))
+    })
 }
 
 fn clear_leveling_tool(ctx: &Ctx, a: &Args) -> ToolResult {
-    ctx.edit(
-        a,
-        "Clear leveling",
-        |p, _| {
-            let n = p.tasks.iter().filter(|t| t.leveling_delay != 0).count();
-            clear_leveling(p);
-            Ok(n)
-        },
-        |doc, n| Ok(json!({ "cleared_tasks": n, "project_finish": fmt_dt(doc.project.sched.finish) })),
-    )
+    let n = ctx.read(a, |doc| Ok(doc.project.tasks.iter().filter(|t| t.leveling_delay != 0).count()))?;
+    ctx.run_engine(a, "resource.clearLeveling", json!({}))?;
+    ctx.read(a, |doc| Ok(json!({ "cleared_tasks": n, "project_finish": fmt_dt(doc.project.sched.finish) })))
 }
 
 fn project_statistics(ctx: &Ctx, a: &Args) -> ToolResult {

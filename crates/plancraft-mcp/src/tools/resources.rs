@@ -252,6 +252,24 @@ fn create_resource(ctx: &Ctx, a: &Args) -> ToolResult {
     if name.is_empty() {
         return err("'name' must not be empty");
     }
+    // Extra fields beyond name still need the rich edit path (one undo step).
+    let only_name = a.map().keys().all(|k| matches!(k.as_str(), "name" | "document"));
+    if only_name {
+        ctx.read(a, |doc| {
+            if doc.project.resources.iter().any(|r| r.name.eq_ignore_ascii_case(&name)) {
+                return err(format!("a resource named '{name}' already exists"));
+            }
+            Ok(())
+        })?;
+        let eng = ctx.run_engine(a, "resource.insert", json!({ "name": name }))?;
+        let id = eng
+            .get("resource")
+            .and_then(Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+            .map(plancraft_core::ids::ResourceId)
+            .ok_or_else(|| ToolError("engine did not return a resource id".into()))?;
+        return ctx.read(a, |doc| Ok(resource_view(&doc.project, id)));
+    }
     ctx.edit(
         a,
         &format!("Add resource '{name}'"),
@@ -281,23 +299,21 @@ fn update_resource(ctx: &Ctx, a: &Args) -> ToolResult {
 }
 
 fn delete_resources(ctx: &Ctx, a: &Args) -> ToolResult {
-    ctx.edit(
-        a,
-        "Delete resources",
-        |p, _| {
-            let mut ids = Vec::new();
-            for v in a.list("resources") {
-                ids.push(resolve_resource(p, v)?);
-            }
-            if ids.is_empty() {
-                return err("'resources' must not be empty");
-            }
-            let names: Vec<String> = ids.iter().filter_map(|id| p.resource(*id).map(|r| r.name.clone())).collect();
-            p.delete_resources(&ids)?;
-            Ok(names)
-        },
-        |doc, names| Ok(json!({ "deleted": names, "remaining_resources": doc.project.resources.len() })),
-    )
+    let (ids, names) = ctx.read(a, |doc| {
+        let p = &doc.project;
+        let mut ids = Vec::new();
+        for v in a.list("resources") {
+            ids.push(resolve_resource(p, v)?);
+        }
+        if ids.is_empty() {
+            return err("'resources' must not be empty");
+        }
+        let names: Vec<String> = ids.iter().filter_map(|id| p.resource(*id).map(|r| r.name.clone())).collect();
+        Ok((ids, names))
+    })?;
+    // Core `delete_resources` also drops assignments and time entries.
+    ctx.run_engine(a, "resource.delete", json!({ "resources": ids.iter().map(|id| id.0).collect::<Vec<_>>() }))?;
+    ctx.read(a, |doc| Ok(json!({ "deleted": names, "remaining_resources": doc.project.resources.len() })))
 }
 
 /// Builds a calendar exception from `name/start/end/working_times/yearly` arguments.
