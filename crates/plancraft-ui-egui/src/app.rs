@@ -7142,6 +7142,7 @@ mod ui_tests {
                             delta,
                             modifiers,
                             phase: egui::TouchPhase::Move,
+                            source: egui::MouseWheelSource::Unknown,
                         });
                         h.run_steps(1);
                     }

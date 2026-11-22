@@ -65,6 +65,7 @@ pub fn package() -> Result<Vec<PathBuf>> {
         util::build_release(Some(t), &[("MACOSX_DEPLOYMENT_TARGET", MIN_MACOS)])?;
     }
 
+    let cargo_target = util::target_dir()?;
     let stage = root.join("dist/mac");
     fresh_dir(&stage)?;
     let bins = stage.join("bin");
@@ -74,14 +75,14 @@ pub fn package() -> Result<Vec<PathBuf>> {
         let mut lipo = Command::new("lipo");
         lipo.arg("-create").arg("-output").arg(bins.join(name));
         for t in TARGETS {
-            lipo.arg(root.join(format!("target/{t}/release/{name}")));
+            lipo.arg(cargo_target.join(format!("{t}/release/{name}")));
         }
         run(&mut lipo)?;
     }
 
     step("rendering the app icon");
     let host_target = if cfg!(target_arch = "aarch64") { TARGETS[0] } else { TARGETS[1] };
-    let host_app = root.join(format!("target/{host_target}/release/plancraft"));
+    let host_app = cargo_target.join(format!("{host_target}/release/plancraft"));
     let icns = build_icns(&host_app, &stage.join("icon"))?;
 
     step("assembling PlanCraft.app");

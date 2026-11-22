@@ -72,6 +72,37 @@ pub fn cargo() -> Command {
     c
 }
 
+/// Cargo's configured target directory (honours `.cargo/config.toml` `build.target-dir`
+/// and `CARGO_TARGET_DIR`). Packaging must lipo/copy from here — not a hard-coded `target/`.
+pub fn target_dir() -> Result<PathBuf> {
+    let text = output(cargo().args(["metadata", "--format-version=1", "--no-deps"]))?;
+    // Tiny parse: `"target_directory":"..."` (path may contain escaped backslashes on Windows).
+    let key = "\"target_directory\":";
+    let Some(rest) = text.split(key).nth(1) else {
+        bail!("cargo metadata missing target_directory");
+    };
+    let rest = rest.trim_start();
+    let Some(rest) = rest.strip_prefix('"') else {
+        bail!("cargo metadata target_directory is not a string");
+    };
+    let mut dir = String::new();
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => match chars.next() {
+                Some(n) => dir.push(n),
+                None => break,
+            },
+            '"' => break,
+            other => dir.push(other),
+        }
+    }
+    if dir.is_empty() {
+        bail!("cargo metadata target_directory is empty");
+    }
+    Ok(PathBuf::from(dir))
+}
+
 /// Builds the release binaries of the app and the standalone MCP server.
 pub fn build_release(target: Option<&str>, envs: &[(&str, &str)]) -> Result<()> {
     let mut c = cargo();

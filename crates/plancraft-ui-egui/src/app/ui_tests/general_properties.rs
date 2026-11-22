@@ -576,6 +576,7 @@ fn general_properties_preview_images() {
             delta: vec2(0.0, delta_y),
             modifiers: egui::Modifiers::NONE,
             phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
         });
     }
 
