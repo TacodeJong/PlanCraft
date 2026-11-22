@@ -150,6 +150,13 @@ impl MacMenu {
                 out.push(NativeEvent::Click(Command::MinimizeWindow));
                 continue;
             }
+            // Quit / Settings live only in the App menu: AppKit flashes their key equivalents
+            // and muda delivers a MenuEvent with `key=true`. Those must stay as clicks — injecting
+            // an egui Key does nothing (shortcuts() never owned Cmd+Q / Cmd+,).
+            if matches!(e.command, Command::Quit | Command::Settings) {
+                out.push(NativeEvent::Click(e.command.clone()));
+                continue;
+            }
             let [cmd, ctrl, alt, shift] = chosen.mods;
             let key = e.chord.as_ref().filter(|c| chosen.key && (cmd || ctrl || !(c.cmd || c.ctrl))).map(|c| Chord {
                 cmd,

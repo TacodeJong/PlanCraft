@@ -581,6 +581,10 @@ impl PlanCraftApp {
             (KeyboardShortcut::new(cmd, Key::D), Command::FillDown, false),
             (KeyboardShortcut::new(cmd | Modifiers::SHIFT, Key::D), Command::Distill, false),
             (KeyboardShortcut::new(cmd | Modifiers::ALT, Key::N), Command::QuickEntry, false),
+            // App-menu layout shortcuts: also owned here so an injected egui Key still quits /
+            // opens Settings if muda ever falls through to the Key path.
+            (KeyboardShortcut::new(cmd, Key::Q), Command::Quit, true),
+            (KeyboardShortcut::new(cmd, Key::Comma), Command::Settings, true),
             // Replace: Cmd+H hides the app on a Mac, so Cmd+Option+F there (and everywhere).
             (KeyboardShortcut::new(cmd | Modifiers::ALT, Key::F), Command::Find(true), false),
             (KeyboardShortcut::new(cmd, Key::F), Command::Find(false), false),
@@ -589,9 +593,11 @@ impl PlanCraftApp {
             (KeyboardShortcut::new(cmd | Modifiers::ALT, Key::L), Command::ToggleHighlightPaths, false),
         ];
         for (sc, c, global) in map {
-            // New and Open belong on the Start Page; behind a save prompt nothing may act.
+            // New/Open belong on the Start Page; Quit/Settings stay available. Behind a save
+            // prompt other plan-acting shortcuts must not fire.
             let prompt_open = self.confirm_close.is_some() || self.confirm_overwrite.is_some();
-            if covered && (prompt_open || !matches!(c, Command::NewProject | Command::Open)) {
+            let covered_ok = matches!(c, Command::NewProject | Command::Open | Command::Quit | Command::Settings);
+            if covered && (prompt_open || !covered_ok) {
                 continue;
             }
             if (global || !typing) && ctx.input_mut(|i| i.consume_shortcut(&sc)) {

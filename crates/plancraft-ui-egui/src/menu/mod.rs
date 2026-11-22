@@ -76,11 +76,13 @@ impl NativeMenu {
                                 "V" => self.pending_paste = true,
                                 _ => {}
                             }
+                        } else if let Some(cmd) = chord_command_fallback(&chord) {
+                            // Layout-only accelerators (⌘,, ⌘Q) have no egui shortcut owner.
+                            // Prefer a menu click: injecting Key::Q would flash the AppKit item
+                            // and then do nothing (shortcuts() never maps Cmd+Q → Quit).
+                            self.pending_clicks.push(cmd);
                         } else if let Some(ev) = chord.key_event(true) {
                             raw.events.push(ev);
-                        } else if let Some(cmd) = chord_command_fallback(&chord) {
-                            // Layout-only accelerators (⌘,, ⌘Q) with no egui shortcut: treat as click.
-                            self.pending_clicks.push(cmd);
                         }
                     }
                 }
@@ -384,6 +386,22 @@ mod tests {
         assert!(c.cmd && c.shift && c.key == "Z");
         assert!(c.key_event(true).is_some());
         assert_eq!(Chord::parse("Cmd+,").unwrap().portable(), "Cmd+,");
+    }
+
+    #[test]
+    fn layout_only_chords_map_to_commands_even_when_key_event_exists() {
+        // Regression: Cmd+Q / Cmd+, produce egui Key events, but must still resolve to
+        // Quit / Settings so the native-menu Key path can enqueue a click (not a no-op key).
+        let quit = Chord::parse("Cmd+Q").unwrap();
+        assert!(quit.key_event(true).is_some(), "Q is a normal egui key");
+        assert!(matches!(chord_command_fallback(&quit), Some(Command::Quit)));
+
+        let settings = Chord::parse("Cmd+,").unwrap();
+        assert!(settings.key_event(true).is_some(), "comma is a normal egui key");
+        assert!(matches!(chord_command_fallback(&settings), Some(Command::Settings)));
+
+        let save = Chord::parse("Cmd+S").unwrap();
+        assert!(chord_command_fallback(&save).is_none(), "ordinary shortcuts stay on the egui path");
     }
 
     #[test]
