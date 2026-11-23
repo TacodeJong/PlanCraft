@@ -196,6 +196,7 @@ mod tests {
             view: ViewKind::Gantt,
             timeline_visible: true,
             properties_visible: false,
+            word_wrap: true,
             history_open: false,
             theme: ThemeChoice::Dark,
             lang: crate::lang::Lang::En,

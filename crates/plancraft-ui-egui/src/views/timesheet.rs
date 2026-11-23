@@ -138,6 +138,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState) {
         column_drag: false,
         outline_arrows: false,
         quick_name: None,
+        word_wrap: st.word_wrap,
     };
     let output = {
         let lines = &lines;

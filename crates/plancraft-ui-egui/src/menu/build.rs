@@ -212,6 +212,7 @@ fn view_menu(s: &MenuSnapshot) -> Vec<Node> {
         Node::Separator,
         item(s, "view.timeline", Command::ToggleTimelinePane, lang::text("tb.timeline")),
         item(s, "view.properties", Command::TogglePropertiesPane, lang::text("tb.properties")),
+        item(s, "view.wrap", Command::ToggleWordWrap, lang::text("tb.wrap")),
         item(s, "view.history", Command::History, lang::text("tb.history")),
         Node::Separator,
         appearance,

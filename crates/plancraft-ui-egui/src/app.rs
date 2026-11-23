@@ -442,6 +442,7 @@ impl PlanCraftApp {
         let st = UiState {
             table_width: settings.table_width,
             properties_visible: settings.properties_open,
+            word_wrap: settings.word_wrap,
             start_page: !has_doc,
             lang: settings.lang,
             columns: settings.columns.clone(),
@@ -1299,6 +1300,11 @@ impl PlanCraftApp {
                 self.settings.open_to_overview = on;
                 self.settings.save();
             }
+            Command::ToggleWordWrap => {
+                self.st.word_wrap = !self.st.word_wrap;
+                self.settings.word_wrap = self.st.word_wrap;
+                self.settings.save();
+            }
             other => {
                 let ws = self.ws.clone();
                 let mut ws = lock(&ws);
@@ -1896,6 +1902,7 @@ impl PlanCraftApp {
             view: self.st.view,
             timeline_visible: self.st.timeline_visible,
             properties_visible: self.st.properties_visible,
+            word_wrap: self.st.word_wrap,
             history_open: self.dialogs.history,
             theme: self.settings.theme,
             lang: self.st.lang,
@@ -2589,6 +2596,7 @@ impl PlanCraftApp {
         if self.shot.is_none() {
             self.settings.table_width = self.st.table_width;
             self.settings.properties_open = self.st.properties_visible;
+            self.settings.word_wrap = self.st.word_wrap;
             self.panes.sync_from(self.st.properties_visible, self.st.timeline_visible, self.dialogs.history);
             let _ = (
                 self.panes.visible(crate::panes::PaneId::Properties),

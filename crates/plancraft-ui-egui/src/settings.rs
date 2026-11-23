@@ -68,6 +68,10 @@ fn overview_on_launch() -> bool {
     true
 }
 
+fn word_wrap_on() -> bool {
+    true
+}
+
 fn pane_open() -> bool {
     true
 }
@@ -193,6 +197,9 @@ pub struct AppSettings {
     /// The Q/M/W/D timescale preset last chosen in the View toolbar.
     #[serde(default)]
     pub timescale: crate::state::Timescale,
+    /// Word-wrap long table cells (name, notes, …) on screen and print.
+    #[serde(default = "word_wrap_on")]
+    pub word_wrap: bool,
 }
 
 /// A PlanCraft Server this person opened plans from.
@@ -238,6 +245,7 @@ impl Default for AppSettings {
             servers: Vec::new(),
             columns: std::collections::HashMap::new(),
             timescale: crate::state::Timescale::default(),
+            word_wrap: true,
         }
     }
 }
@@ -434,6 +442,9 @@ mod tests {
         assert!(old.properties_open, "open by default");
         let closed: AppSettings = serde_json::from_str(r#"{"properties_open":false}"#).unwrap();
         assert!(!closed.properties_open);
+        assert!(old.word_wrap, "word wrap on for settings files from before the option");
+        let no_wrap: AppSettings = serde_json::from_str(r#"{"word_wrap":false}"#).unwrap();
+        assert!(!no_wrap.word_wrap);
     }
 
     #[test]

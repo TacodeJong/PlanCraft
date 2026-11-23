@@ -106,7 +106,7 @@ fn rgb_of(c: egui::Color32) -> plancraft_core::print::Rgb {
     plancraft_core::print::Rgb(c.r(), c.g(), c.b())
 }
 
-fn print_cell(cell: &crate::widgets::grid::Cell, pal: &Palette) -> PrintCell {
+fn print_cell(cell: &crate::widgets::grid::Cell, pal: &Palette, word_wrap: bool) -> PrintCell {
     PrintCell {
         text: printable(cell),
         bold: cell.bold,
@@ -115,7 +115,7 @@ fn print_cell(cell: &crate::widgets::grid::Cell, pal: &Palette) -> PrintCell {
         // Soft mark wash (and similar row tints) so markings survive print without icons.
         bg: cell.bg.map(rgb_of),
         indent: cell.indent * PT_PER_PX,
-        wrap: cell.wrap,
+        wrap: cell.wrap && word_wrap,
     }
 }
 
@@ -149,6 +149,7 @@ fn task_sheet(p: &Project, st: &UiState, title: &str, pal: &Palette, all_columns
     let no_overallocation = |_: TaskId| false;
     let ctx = CellCtx { overallocated: &no_overallocation, others_on: None };
     let grouped = st.group.is_some();
+    let wrap = st.word_wrap;
     let rows = views::visible_rows(p, st)
         .iter()
         .filter_map(|row| match row {
@@ -163,7 +164,7 @@ fn task_sheet(p: &Project, st: &UiState, title: &str, pal: &Palette, all_columns
                     if screen.bg.is_none() {
                         screen.bg = t.row_mark.map(theme::row_mark_wash);
                     }
-                    let mut c = print_cell(&screen, pal);
+                    let mut c = print_cell(&screen, pal, wrap);
                     if grouped {
                         c.indent = 0.0;
                     }
@@ -177,7 +178,7 @@ fn task_sheet(p: &Project, st: &UiState, title: &str, pal: &Palette, all_columns
                 let start = tasks.clone().filter_map(|t| t.sched.start).min();
                 let finish = tasks.filter_map(|t| t.sched.finish).max();
                 let mut cells = vec![PrintCell::default()];
-                cells.extend(fields.iter().map(|f| print_cell(&views::gantt::group_cell(*f, p, g), pal)));
+                cells.extend(fields.iter().map(|f| print_cell(&views::gantt::group_cell(*f, p, g), pal, wrap)));
                 Some(PrintRow { kind: RowKind::Group { start, finish }, cells })
             }
         })
@@ -214,7 +215,7 @@ pub fn sheet(p: &Project, st: &UiState, view: PrintView, all_columns: bool) -> (
         // Without a chart there is no divider: the whole table prints.
         PrintView::TaskTable => (task_sheet(p, st, view.label(), &pal, true), None),
         PrintView::TaskUsage => (views::task_usage::print_sheet(p, st), None),
-        PrintView::Resources => (views::resource_sheet::print_sheet(p, &pal), None),
+        PrintView::Resources => (views::resource_sheet::print_sheet(p, &pal, st.word_wrap), None),
         PrintView::Report => (views::report::sheet(p, st), None),
         // Drawings are not sheets (see `drawing`); an empty sheet if asked anyway.
         PrintView::Network | PrintView::Board => (Sheet { title: view.label().into(), columns: Vec::new(), rows: Vec::new() }, None),

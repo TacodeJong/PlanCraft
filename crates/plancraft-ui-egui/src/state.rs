@@ -627,6 +627,8 @@ pub struct UiState {
     pub timeline_visible: bool,
     /// The properties pane on the right of the active view.
     pub properties_visible: bool,
+    /// Word-wrap long table cells (mirrors app settings).
+    pub word_wrap: bool,
     /// Width of the properties pane, in points.
     pub properties_width: f32,
     /// The pane's open tab (General, Planning, Resources, Progress, Notes).
@@ -695,6 +697,7 @@ impl Default for UiState {
             table_width: 720.0,
             timeline_visible: true,
             properties_visible: true,
+            word_wrap: true,
             properties_width: 340.0,
             properties_tab: PropTab::default(),
             chart_style: plancraft_core::model::ChartStyle::Blue,

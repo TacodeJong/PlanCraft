@@ -301,6 +301,7 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         "tb.selected" => ("Selected", "Selectie"),
         "tb.timeline" => ("Timeline", "Tijdlijn"),
         "tb.properties" => ("Properties", "Eigenschappen"),
+        "tb.wrap" => ("Word Wrap", "Tekstomloop"),
         "tb.history" => ("History", "Geschiedenis"),
         "tb.theme" => ("Theme", "Thema"),
         "tb.style" => ("Style", "Stijl"),

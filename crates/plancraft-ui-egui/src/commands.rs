@@ -168,6 +168,8 @@ pub enum Command {
     ToggleTimelinePane,
     /// Show or hide the properties pane.
     TogglePropertiesPane,
+    /// Word-wrap long table cells on screen and print.
+    ToggleWordWrap,
     ToggleShowCritical,
     ToggleShowSlack,
     ToggleShowBaseline,

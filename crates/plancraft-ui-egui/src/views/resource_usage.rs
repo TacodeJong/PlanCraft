@@ -128,6 +128,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
         column_drag: false,
         outline_arrows: false,
         quick_name: None,
+        word_wrap: st.word_wrap,
     };
     let left = Rect::from_min_size(rect.min, vec2(left_w, rect.height()));
     let output = {

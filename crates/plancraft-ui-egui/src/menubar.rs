@@ -784,6 +784,10 @@ fn view_settings_more(ui: &mut Ui, st: &UiState, settings: &AppSettings, push: &
     if ui.checkbox(&mut open_overview, crate::lang::text("startup.overview")).changed() {
         push(Command::SetOpenOverview(open_overview));
     }
+    let mut wrap = st.word_wrap;
+    if ui.checkbox(&mut wrap, crate::lang::text("tb.wrap")).changed() {
+        push(Command::ToggleWordWrap);
+    }
     ui.separator();
     ui.label(egui::RichText::new(crate::lang::text("tb.language")).small().color(theme::pal().TEXT_WEAK));
     for lang in crate::lang::Lang::ALL {
@@ -1178,6 +1182,15 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
                     st.properties_visible,
                     false,
                     Command::TogglePropertiesPane,
+                ),
+                toggle_cmd(
+                    "file-text",
+                    Some(crate::lang::text("tb.wrap")),
+                    "Wrap long text in table cells".into(),
+                    true,
+                    st.word_wrap,
+                    false,
+                    Command::ToggleWordWrap,
                 ),
                 toggle_cmd(
                     "history",

@@ -100,6 +100,7 @@ pub fn task_table(
             column_drag: true,
             outline_arrows: st.group.is_none(),
             quick_name,
+            word_wrap: st.word_wrap,
         };
         let sel = &st.sel;
         let collapsed = &st.collapsed;

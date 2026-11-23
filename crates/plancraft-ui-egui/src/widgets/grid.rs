@@ -350,6 +350,8 @@ pub struct GridConfig<'a> {
     pub outline_arrows: bool,
     /// The name column, when Enter should open the next name and Tab should indent.
     pub quick_name: Option<usize>,
+    /// Honour [`Cell::wrap`] (off = single-line ellipsis, fixed row height).
+    pub word_wrap: bool,
 }
 
 pub struct GridOutput {
@@ -384,7 +386,7 @@ fn measure_heights(cfg: &GridConfig, widths: &[f32], cell: &mut dyn FnMut(usize,
     for r in 0..cfg.row_count {
         for c in 0..cfg.columns.len() {
             let content = cell(r, c);
-            if !content.wrap || content.text.is_empty() {
+            if !cfg.word_wrap || !content.wrap || content.text.is_empty() {
                 continue;
             }
             let avail = (widths.get(c).copied().unwrap_or(60.0) - content.indent - 10.0).max(1.0);
@@ -723,7 +725,7 @@ pub fn show(
                 let color = content.color.unwrap_or(theme::pal().TEXT);
                 // Right-to-left text (Hebrew, Arabic) shows in display order.
                 let display = plancraft_core::bidi::display(&content.text).into_owned();
-                let (galley, gpos, gx) = if content.wrap {
+                let (galley, gpos, gx) = if cfg.word_wrap && content.wrap {
                     let avail = (r.right() - 5.0 - tx).max(1.0);
                     let galley = cp.layout(display, cell_font.clone(), color, avail);
                     (galley, pos2(tx, r.top() + 2.0), tx)
@@ -1287,6 +1289,7 @@ mod tests {
                     column_drag: *column_drag,
                     outline_arrows: false,
                     quick_name: None,
+                    word_wrap: true,
                 };
                 let ro = *read_only_row;
                 let mut cell = |r: usize, c: usize| Cell { text: format!("{r}:{c}"), read_only: Some(r) == ro, ..Default::default() };

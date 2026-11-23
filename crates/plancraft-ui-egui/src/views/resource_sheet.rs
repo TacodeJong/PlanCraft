@@ -231,7 +231,7 @@ fn totals(p: &Project) -> HashMap<ResourceId, (Minutes, f64)> {
 }
 
 /// The Resource Sheet for printing (without the indicator column; overallocated resources in red).
-pub fn print_sheet(p: &Project, pal: &plancraft_core::print::layout::Palette) -> plancraft_core::print::Sheet {
+pub fn print_sheet(p: &Project, pal: &plancraft_core::print::layout::Palette, word_wrap: bool) -> plancraft_core::print::Sheet {
     use plancraft_core::print::{Align, PrintCell, PrintColumn, PrintRow, RowKind, Sheet};
     let defs = defs(p);
     let over: HashSet<ResourceId> = plancraft_core::workload::overallocations(p).into_iter().map(|(r, _)| r).collect();
@@ -254,7 +254,7 @@ pub fn print_sheet(p: &Project, pal: &plancraft_core::print::layout::Palette) ->
                 PrintCell {
                     text: cell.text,
                     color: cell.color.map(|_| pal.error),
-                    wrap: cell.wrap,
+                    wrap: cell.wrap && word_wrap,
                     ..Default::default()
                 }
             }));
@@ -290,6 +290,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
         column_drag: false,
         outline_arrows: false,
         quick_name: None,
+        word_wrap: st.word_wrap,
     };
     let output = {
         let p = &doc.project;

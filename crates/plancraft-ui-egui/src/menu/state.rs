@@ -27,6 +27,7 @@ pub struct MenuSnapshot {
     pub view: ViewKind,
     pub timeline_visible: bool,
     pub properties_visible: bool,
+    pub word_wrap: bool,
     pub history_open: bool,
     pub theme: ThemeChoice,
     pub lang: Lang,
@@ -152,7 +153,7 @@ pub fn command_enabled(cmd: &Command, s: &MenuSnapshot) -> bool {
         | Command::ToggleNetworkLinkLabels
         | Command::ToggleNetworkProgressMarks
         | Command::ToggleNetworkIdsOnly => doc && s.view == ViewKind::NetworkDiagram,
-        Command::SetTheme(_) | Command::SetLang(_) | Command::SetStartup(_) | Command::SetOpenOverview(_) => true,
+        Command::SetTheme(_) | Command::SetLang(_) | Command::SetStartup(_) | Command::SetOpenOverview(_) | Command::ToggleWordWrap => true,
         Command::SetChartStyle(_) => doc,
         Command::About | Command::Settings | Command::AiSettings | Command::McpPanel | Command::Quit | Command::StartPage => true,
         Command::ActivateDocument(_) => true,
@@ -177,6 +178,7 @@ pub fn command_checked(cmd: &Command, s: &MenuSnapshot) -> Option<bool> {
         Command::SetLang(l) => Some(s.lang == *l),
         Command::ToggleTimelinePane => Some(s.timeline_visible),
         Command::TogglePropertiesPane => Some(s.properties_visible),
+        Command::ToggleWordWrap => Some(s.word_wrap),
         Command::History => Some(s.history_open),
         Command::ToggleHighlightPaths => Some(s.show_paths),
         Command::ToggleShowCritical => Some(s.show_critical),
