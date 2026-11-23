@@ -21,6 +21,9 @@ pub struct MenuSnapshot {
     pub selected_task_count: usize,
     pub resource_selected: bool,
     pub has_clipboard: bool,
+    /// A TextEdit (notes, name, …) owns keyboard focus — not the task grid.
+    /// Keeps Edit ▸ Paste enabled so macOS does not swallow ⌘V when the task clipboard is empty.
+    pub text_edit_focused: bool,
     pub view: ViewKind,
     pub timeline_visible: bool,
     pub properties_visible: bool,
@@ -84,8 +87,9 @@ pub fn command_enabled(cmd: &Command, s: &MenuSnapshot) -> bool {
         Command::SetTimescale(_) => doc,
         Command::Undo => doc && s.can_undo,
         Command::Redo => doc && s.can_redo,
-        Command::Cut | Command::Copy => sel,
-        Command::Paste => doc && s.has_clipboard,
+        // Text fields need Cut/Copy/Paste even with no task clipboard (macOS eats disabled accelerators).
+        Command::Cut | Command::Copy => sel || s.text_edit_focused,
+        Command::Paste => doc && (s.has_clipboard || s.text_edit_focused),
         Command::FillDown | Command::Indent | Command::Outdent | Command::MoveUp | Command::MoveDown => sel,
         // Delete works on tasks, or on resources while a resource view is active (Mac Delete key /
         // Edit ▸ Delete). Resource Sheet redirects to DeleteResources.

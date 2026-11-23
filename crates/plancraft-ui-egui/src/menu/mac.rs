@@ -45,6 +45,16 @@ pub struct MacMenu {
     window: Option<(Submenu, Vec<String>, u64)>,
 }
 
+/// Read plain text from the general pasteboard (main thread).
+pub fn clipboard_text() -> Option<String> {
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
+    let pb = NSPasteboard::generalPasteboard();
+    // SAFETY: `NSPasteboardTypeString` is a process-lifetime AppKit constant.
+    let text = unsafe { pb.stringForType(NSPasteboardTypeString) }?;
+    let s = text.to_string().replace("\r\n", "\n");
+    (!s.is_empty()).then_some(s)
+}
+
 impl MacMenu {
     pub fn try_install(ctx: &egui::Context) -> Option<Self> {
         // AppKit/muda require the process main thread. Refuse before any muda call.

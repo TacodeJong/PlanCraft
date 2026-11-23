@@ -41,7 +41,7 @@ resvg = { version = "0.45", default-features = false }
 muda = { version = "0.21.2", default-features = false }
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "objc2-core-services", "NSAppleEventDescriptor", "NSAppleEventManager", "NSNotification", "NSString", "NSURL"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem", "NSPasteboard"] }
 craft-window = { workspace = true, features = ["ui", "appkit"] }
 
 [target.'cfg(windows)'.dependencies]

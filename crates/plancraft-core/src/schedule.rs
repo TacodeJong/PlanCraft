@@ -1159,6 +1159,17 @@ impl<'a> Engine<'a> {
                 es = es.max(snet);
             }
 
+            // Nested share placement floors the start like a driven edge (parent window Ws / ALAP
+            // We−L). Apply *before* hard date pullback so own/ancestor fixed finishes still win
+            // (Merlin: fixed deadline overrides driven start). Applying this after
+            // `apply_date_bounds` let a share floor undo Finish NLT / On and slide the bar.
+            if let Some(&pin) = alap_pins.get(&i)
+                && pin > es
+            {
+                es = pin;
+                driven_by_link = true;
+            }
+
             let mut warnings = Vec::new();
             if let Some(date) = t.constraint.date.filter(|_| t.constraint.kind.needs_date()) {
                 let finish_of = |s: DateTime| place(s).1;
@@ -1213,10 +1224,6 @@ impl<'a> Engine<'a> {
                     Some(floor) => cap.max(floor),
                     None => cap,
                 };
-            }
-
-            if let Some(pin) = alap_pins.get(&i) {
-                es = es.max(*pin);
             }
 
             let mut ancestor_cap_warned = false;

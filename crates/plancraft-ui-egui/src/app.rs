@@ -83,6 +83,11 @@ pub struct PlanCraftApp {
     kept_dropped: Vec<String>,
     /// Native macOS application menu (inactive stub on other platforms / if install fails).
     native_menu: crate::menu::NativeMenu,
+    /// TextEdit focus from the previous frame. AppKit may clear focus the instant ⌘V hits the
+    /// menu accelerator; sticky focus still routes that key to text paste instead of tasks.
+    text_edit_sticky: bool,
+    /// Widget id of that sticky TextEdit (for `request_focus` when AppKit cleared it).
+    text_edit_focus_id: Option<egui::Id>,
     /// Office-style side pane host (Craft panes pattern).
     panes: crate::panes::PaneHost,
 }
@@ -484,6 +489,8 @@ impl PlanCraftApp {
             egui_ctx: cc.egui_ctx.clone(),
             // Install after egui's context exists (eframe creator), replacing winit's default menu.
             native_menu: crate::menu::NativeMenu::install(&cc.egui_ctx),
+            text_edit_sticky: false,
+            text_edit_focus_id: None,
             panes,
         };
         for path in &app.settings.recent {
@@ -551,7 +558,8 @@ impl PlanCraftApp {
 
     fn shortcuts(&mut self, ctx: &egui::Context, out: &mut Vec<Command>) {
         // Only a focused text field should swallow shortcuts (the task grid holds focus too).
-        let typing = ctx.text_edit_focused();
+        // Include sticky focus: AppKit may clear TextEdit focus the moment ⌘V hits the menu.
+        let typing = ctx.text_edit_focused() || self.text_edit_sticky;
         // The Start Page or a save prompt covers the plan: shortcuts that act on it would change
         // (or save, or print) a document the user cannot see. New and Open still work.
         let covered = self.document_covered();
@@ -1881,6 +1889,7 @@ impl PlanCraftApp {
             selected_task_count: self.st.sel.tasks.len(),
             resource_selected: !self.st.sel.resources.is_empty(),
             has_clipboard: !self.st.clipboard.is_empty(),
+            text_edit_focused: self.egui_ctx.text_edit_focused() || self.text_edit_sticky,
             view: self.st.view,
             timeline_visible: self.st.timeline_visible,
             properties_visible: self.st.properties_visible,
@@ -3518,6 +3527,12 @@ fn injected_panic() {
     panic!("test panic requested with PLANCRAFT_CMD=Panic");
 }
 
+/// Plain text from the system clipboard, if any. Used so native-menu ⌘V can paste into a
+/// focused TextEdit in the same frame (AppKit consumes the key equivalent).
+fn system_clipboard_text() -> Option<String> {
+    crate::menu::clipboard_text()
+}
+
 impl eframe::App for PlanCraftApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         theme::pal().BG.to_normalized_gamma_f32()
@@ -3526,10 +3541,24 @@ impl eframe::App for PlanCraftApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         // PhotoCraft: craft-ui RootEnv mode must land before the pass so TitleBar chrome is dark/light.
         crate::craft_shell::before_input(ctx, self.settings.theme);
-        let text_editing = ctx.egui_wants_keyboard_input();
-        self.native_menu.poll_into_raw_input(raw_input, text_editing);
+        // Only a TextEdit (notes, name, …) — not the task grid's focus — owns system paste.
+        // Prefer sticky focus: AppKit often clears TextEdit focus when matching ⌘V on the menu.
+        let text_edit = ctx.text_edit_focused() || self.text_edit_sticky;
+        self.native_menu.poll_into_raw_input(raw_input, text_edit);
         if self.native_menu.take_paste_request() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            // Restore focus so TextEdit still consumes Paste this pass.
+            if !ctx.text_edit_focused()
+                && let Some(id) = self.text_edit_focus_id
+            {
+                ctx.memory_mut(|m| m.request_focus(id));
+            }
+            // Push Paste into this frame's input. RequestPaste alone is processed after the
+            // pass and can miss the focused field after AppKit ate ⌘V as a menu key-equivalent.
+            if let Some(text) = system_clipboard_text() {
+                raw_input.events.push(egui::Event::Paste(text));
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            }
         }
     }
 
@@ -3542,6 +3571,8 @@ impl eframe::App for PlanCraftApp {
         if let Err(p) = plancraft_core::guard::catch("showing an error", || self.crash_notice(&ctx)) {
             eprintln!("plancraft: {p}");
         }
+        self.text_edit_sticky = ctx.text_edit_focused();
+        self.text_edit_focus_id = if self.text_edit_sticky { ctx.memory(|m| m.focused()) } else { None };
     }
 }
 

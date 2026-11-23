@@ -51,6 +51,22 @@ fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: &mut
         if let Some(picked) = crate::widgets::panel_tabs::show(&mut child, &tabs, st.properties_tab.id()).picked
             && let Some(tab) = PropTab::ALL.iter().find(|t| t.id() == picked)
         {
+            // Notes commits on blur; leaving the tab does not paint the field, so flush the draft.
+            if st.properties_tab == PropTab::Notes && *tab != PropTab::Notes {
+                let ids: Vec<TaskId> = doc.project.tasks.iter().filter(|t| st.sel.tasks.contains(&t.id)).map(|t| t.id).collect();
+                if let Some(&first) = ids.first()
+                    && let Some(text) = take_notes_draft(ui.ctx(), first, ids.len() > 1)
+                {
+                    edit(doc, st, "Notes", move |p| {
+                        for id in &ids {
+                            if let Some(t) = p.task_mut(*id) {
+                                t.notes = text.clone();
+                            }
+                        }
+                        Ok(())
+                    });
+                }
+            }
             st.properties_tab = *tab;
         }
     } else {
@@ -351,7 +367,7 @@ fn general_tab(
 
 fn notes_block(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], snap: &Snap, first: TaskId, multi: bool) {
     label(ui, st.t("prop.notes"));
-    if let Some(text) = notes(ui, ("task_notes", first, multi), snap.notes.as_deref().unwrap_or("")) {
+    if let Some(text) = notes(ui, first, multi, snap.notes.as_deref().unwrap_or("")) {
         let ids = ids.to_vec();
         edit(doc, st, "Notes", move |p| {
             for id in &ids {
@@ -1777,12 +1793,21 @@ fn line_bounded(ui: &mut Ui, salt: impl std::hash::Hash + std::fmt::Debug, curre
     None
 }
 
-fn notes(ui: &mut Ui, salt: impl std::hash::Hash + std::fmt::Debug, current: &str) -> Option<String> {
-    let id = ui.scope_id().with(salt);
+fn notes_draft_id(first: TaskId, multi: bool) -> egui::Id {
+    // Stable across panes/tabs so a draft can be flushed when the Notes tab is left.
+    egui::Id::unique(egui::IdSalt::new(("task_notes_field", first, multi)))
+}
+
+fn take_notes_draft(ctx: &egui::Context, first: TaskId, multi: bool) -> Option<String> {
+    ctx.data_mut(|d| d.remove_temp::<String>(notes_draft_id(first, multi)))
+}
+
+fn notes(ui: &mut Ui, first: TaskId, multi: bool, current: &str) -> Option<String> {
+    let id = notes_draft_id(first, multi);
     let mut text = ui.ctx().data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| current.to_string());
     let resp = ui.add(crate::widgets::craft::text_edit_multiline(&mut text).id(id).desired_width(ui.available_width()).desired_rows(4));
     if resp.lost_focus() {
-        ui.ctx().data_mut(|d| d.remove::<String>(id));
+        ui.ctx().data_mut(|d| d.remove_temp::<String>(id));
         if text != current {
             return Some(text);
         }

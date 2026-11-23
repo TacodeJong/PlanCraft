@@ -62,14 +62,25 @@ impl NativeMenu {
     }
 
     /// Before the egui pass: pull native events into pending queues / key injection.
-    pub fn poll_into_raw_input(&mut self, raw: &mut egui::RawInput, text_editing: bool) {
+    ///
+    /// `text_edit_focused` must be a focused [`egui::TextEdit`] (not merely any focused
+    /// widget — the task grid also holds focus). Clipboard chords then become text
+    /// Copy/Cut/Paste instead of task clipboard commands.
+    pub fn poll_into_raw_input(&mut self, raw: &mut egui::RawInput, text_edit_focused: bool) {
         #[cfg(target_os = "macos")]
         if let Some(inner) = self.inner.as_mut() {
             for ev in inner.drain() {
                 match ev {
-                    NativeEvent::Click(cmd) => self.pending_clicks.push(cmd),
+                    NativeEvent::Click(cmd) => {
+                        // Edit ▸ Paste/Copy/Cut while a text field is focused must not run the
+                        // task clipboard commands (and ⌘V often arrives as a menu click).
+                        if text_edit_focused && route_text_clipboard(&cmd, raw, &mut self.pending_paste) {
+                            continue;
+                        }
+                        self.pending_clicks.push(cmd);
+                    }
                     NativeEvent::Key(chord) => {
-                        if text_editing && is_edit_clipboard(&chord) {
+                        if text_edit_focused && is_edit_clipboard(&chord) {
                             match chord.key.as_str() {
                                 "C" => raw.events.push(egui::Event::Copy),
                                 "X" => raw.events.push(egui::Event::Cut),
@@ -90,7 +101,7 @@ impl NativeMenu {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = (raw, text_editing);
+            let _ = (raw, text_edit_focused);
         }
     }
 
@@ -118,6 +129,38 @@ impl NativeMenu {
 
 fn is_edit_clipboard(c: &Chord) -> bool {
     c.cmd && !c.ctrl && !c.alt && !c.shift && matches!(c.key.as_str(), "C" | "X" | "V")
+}
+
+/// Plain text on the system clipboard (macOS via NSPasteboard; other platforms `None` here —
+/// callers fall back to `ViewportCommand::RequestPaste`).
+pub fn clipboard_text() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        mac::clipboard_text()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
+/// Routes Edit clipboard commands into egui text events. Returns true when handled.
+fn route_text_clipboard(cmd: &Command, raw: &mut egui::RawInput, pending_paste: &mut bool) -> bool {
+    match cmd {
+        Command::Copy => {
+            raw.events.push(egui::Event::Copy);
+            true
+        }
+        Command::Cut => {
+            raw.events.push(egui::Event::Cut);
+            true
+        }
+        Command::Paste => {
+            *pending_paste = true;
+            true
+        }
+        _ => false,
+    }
 }
 
 fn chord_command_fallback(c: &Chord) -> Option<Command> {
@@ -149,6 +192,7 @@ mod tests {
             selected_task_count: 1,
             resource_selected: false,
             has_clipboard: false,
+            text_edit_focused: false,
             view: ViewKind::Gantt,
             timeline_visible: true,
             properties_visible: false,
@@ -275,6 +319,23 @@ mod tests {
         s.modal = true;
         assert!(!command_enabled(&Command::Save, &s));
         assert!(command_enabled(&Command::Quit, &s));
+    }
+
+    /// macOS swallows ⌘V when Edit ▸ Paste is disabled. Notes paste needs Paste enabled while a
+    /// TextEdit is focused even if no tasks were copied.
+    #[test]
+    fn paste_enabled_while_text_editing_without_task_clipboard() {
+        use crate::menu::state::command_enabled;
+        let mut s = snap();
+        s.has_clipboard = false;
+        s.text_edit_focused = false;
+        assert!(!command_enabled(&Command::Paste, &s));
+        s.text_edit_focused = true;
+        assert!(command_enabled(&Command::Paste, &s));
+        s.task_selected = false;
+        s.selected_task_count = 0;
+        assert!(command_enabled(&Command::Copy, &s), "Copy must stay available in a text field");
+        assert!(command_enabled(&Command::Cut, &s), "Cut must stay available in a text field");
     }
 
     #[test]

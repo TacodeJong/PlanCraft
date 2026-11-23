@@ -7,6 +7,78 @@ use egui_kittest::kittest::{NodeT, Queryable};
 
 use super::*;
 
+/// Regression: ⌘V / Event::Paste into the Notes field must insert text, not be eaten as
+/// task-clipboard Paste (which no-ops when the task clipboard is empty).
+#[test]
+fn paste_into_notes_field_inserts_text() {
+    crate::lang::set_current(crate::lang::Lang::En);
+    let mut p = Project::new("Notes paste", plancraft_core::dates::ymd(2026, 10, 19).unwrap());
+    let id = p.add_task("Task", None);
+    plancraft_core::schedule::recalculate(&mut p);
+    let mut ws = Workspace::default();
+    ws.add(p, None);
+    let shared = ws.shared();
+    // egui ID-clash warnings use "🔥"; kittest panics on missing glyphs by default.
+    let mut h = Harness::builder()
+        .with_size(vec2(1440.0, 900.0))
+        .allow_missing_glyphs()
+        .with_accessibility_check(false)
+        .build_eframe(move |cc| PlanCraftApp::new(cc, shared));
+    h.run_steps(3);
+    super::assert_harness_ready(&h);
+    h.state_mut().st.lang = crate::lang::Lang::En;
+    h.state_mut().st.sel.select_task(id);
+    h.state_mut().st.properties_visible = true;
+    h.state_mut().st.properties_tab = crate::state::PropTab::Notes;
+    h.run_steps(3);
+
+    // Focus the notes multiline by clicking just below the field label.
+    let label = h
+        .query_all_by_label(crate::lang::text("prop.notes"))
+        .max_by(|a, b| a.rect().top().partial_cmp(&b.rect().top()).unwrap())
+        .expect("prop.notes label");
+    let click = egui::pos2(label.rect().left() + 40.0, label.rect().bottom() + 24.0);
+    h.event(egui::Event::PointerButton {
+        pos: click,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.event(egui::Event::PointerButton {
+        pos: click,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(2);
+    assert!(h.ctx.text_edit_focused(), "notes field must register as a focused TextEdit after click");
+    h.event(egui::Event::Paste("hello from clipboard".into()));
+    h.run_steps(2);
+    assert!(h.ctx.text_edit_focused(), "notes field must keep focus through paste");
+    // Still focused: AccessKit exposes the live buffer (commit-on-blur happens separately).
+    let values: Vec<String> = h
+        .query_all_by_role(egui::accesskit::Role::TextInput)
+        .chain(h.query_all_by_role(egui::accesskit::Role::MultilineTextInput))
+        .filter_map(|n| n.accesskit_node().value())
+        .collect();
+    assert!(
+        values.iter().any(|v| v.contains("hello from clipboard")),
+        "pasted text missing from focused notes field; accesskit values={values:?}"
+    );
+    // Blur so the draft is written to the task.
+    h.query_all_by_label(crate::lang::text("prop.tab.general"))
+        .next()
+        .expect("General tab")
+        .click_accesskit();
+    h.run_steps(2);
+    {
+        let ws = lock(&h.state().ws);
+        let doc = ws.active_doc().unwrap();
+        let notes = &doc.project.task(id).unwrap().notes;
+        assert!(notes.contains("hello from clipboard"), "pasted text missing from notes after blur: {notes:?}");
+    }
+}
+
 fn assert_rect_inside(container: egui::Rect, rect: egui::Rect, what: &str) {
     assert!(
         rect.left() >= container.left() - 0.5
