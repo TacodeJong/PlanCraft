@@ -31,8 +31,45 @@ const BAND_H: f32 = 16.0;
 const LEGEND_H: f32 = 46.0;
 const PAD: f32 = 3.0;
 const BAR_H: f32 = 7.0;
+/// Cap wrapped cells so a huge note cannot blow pagination.
+const MAX_WRAP_LINES: usize = 6;
 /// The chart starts beside the table only if at least this much room is left on the page.
 const MIN_CHART_W: f32 = 120.0;
+
+fn wrap_line_height(size: f32) -> f32 {
+    let m = font::metrics();
+    ((m.ascent - m.descent) * size).max(size)
+}
+
+/// Height of each sheet row given column widths (wrap cells grow up to [`MAX_WRAP_LINES`]).
+fn measure_row_heights(sheet: &Sheet, widths: &[f32]) -> Vec<f32> {
+    sheet
+        .rows
+        .iter()
+        .map(|row| {
+            let mut h = ROW_H;
+            for (c, cell) in row.cells.iter().enumerate() {
+                if !cell.wrap || cell.text.is_empty() {
+                    continue;
+                }
+                let w = widths.get(c).copied().unwrap_or(60.0);
+                let indent = if cell.indent.is_finite() { cell.indent.clamp(0.0, w / 2.0) } else { 0.0 };
+                let avail = (w - indent - 2.0 * PAD).max(1.0);
+                let n = font::wrap(&cell.text, TEXT, cell.bold, avail).len().clamp(1, MAX_WRAP_LINES);
+                h = h.max(wrap_line_height(TEXT) * n as f32 + 2.0);
+            }
+            h
+        })
+        .collect()
+}
+
+fn sum_heights(heights: &[f32], rows: std::ops::Range<usize>) -> f32 {
+    rows.map(|r| heights.get(r).copied().unwrap_or(ROW_H)).sum()
+}
+
+fn y_offset(heights: &[f32], first: usize, row: usize) -> f32 {
+    (first..row).map(|r| heights.get(r).copied().unwrap_or(ROW_H)).sum()
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Align {
@@ -59,6 +96,8 @@ pub struct PrintCell {
     pub bg: Option<Rgb>,
     /// Left indent in points (outline level).
     pub indent: f32,
+    /// Word-wrap inside the column width; the row grows (capped) so print does not ellipsize.
+    pub wrap: bool,
 }
 
 impl PrintCell {
@@ -317,6 +356,29 @@ pub(crate) fn boxed_text(out: &mut Vec<Item>, r: Rect, s: &str, size: f32, color
     out.push(text(pt(x, baseline), size, color, bold, fitted));
 }
 
+/// Word-wrapped text, top-down, left-aligned; capped at [`MAX_WRAP_LINES`] with an ellipsis on overflow.
+fn boxed_text_wrapped(out: &mut Vec<Item>, r: Rect, s: &str, size: f32, color: Rgb, bold: bool) {
+    let avail = (r.w - 2.0 * PAD).max(0.0);
+    let mut lines = font::wrap(s, size, bold, avail);
+    if lines.len() > MAX_WRAP_LINES {
+        lines.truncate(MAX_WRAP_LINES);
+        if let Some(last) = lines.last_mut() {
+            *last = font::fit(&format!("{last}…"), size, bold, avail);
+        }
+    }
+    let m = font::metrics();
+    let line_h = wrap_line_height(size);
+    let mut baseline = r.y + PAD + m.ascent * size;
+    for line in lines {
+        if line.is_empty() {
+            baseline += line_h;
+            continue;
+        }
+        out.push(text(pt(r.x + PAD, baseline), size, color, bold, line));
+        baseline += line_h;
+    }
+}
+
 fn hline(out: &mut Vec<Item>, x0: f32, x1: f32, y: f32, stroke: Stroke) {
     out.push(Item::Line { points: vec![pt(x0, y), pt(x1, y)], stroke });
 }
@@ -537,12 +599,13 @@ impl Chart<'_> {
     }
 
     /// Bars and links for sheet rows `rows`, the first drawn at `body.y`.
-    fn bars(&self, out: &mut Vec<Item>, body: Rect, off: f32, rows: std::ops::Range<usize>) {
+    fn bars(&self, out: &mut Vec<Item>, body: Rect, off: f32, rows: std::ops::Range<usize>, heights: &[f32]) {
         let p = self.job.project;
         let pal = &self.job.palette;
         let o = &self.opts;
         let first = rows.start;
-        let y_of = |r: usize| body.y + (r as f32 - first as f32) * ROW_H + ROW_H / 2.0;
+        let rh = |r: usize| heights.get(r).copied().unwrap_or(ROW_H);
+        let y_of = |r: usize| body.y + y_offset(heights, first, r) + rh(r) / 2.0;
         let xs = |t: DateTime| self.x(body.x, off, t);
         // Slack lines need each task's calendar: one per distinct calendar for the page.
         let mut cals = o.slack.then(|| TaskCalendars::new(p));
@@ -572,7 +635,7 @@ impl Chart<'_> {
                                 pts = vec![pt(px1, py), pt(sx, py), pt(sx, ty)];
                                 arrow(out, pt(sx, ty), 0.0, if down { 1.0 } else { -1.0 }, color);
                             } else {
-                                let mid = if down { py + ROW_H / 2.0 } else { py - ROW_H / 2.0 };
+                                let mid = if down { py + rh(pr) / 2.0 } else { py - rh(pr) / 2.0 };
                                 pts = vec![
                                     pt(px1, py),
                                     pt(px1 + 4.0, py),
@@ -595,7 +658,7 @@ impl Chart<'_> {
                             arrow(out, pt(sx1, sy), -1.0, 0.0, color);
                         }
                         LinkType::SF => {
-                            let mid = if down { py + ROW_H / 2.0 } else { py - ROW_H / 2.0 };
+                            let mid = if down { py + rh(pr) / 2.0 } else { py - rh(pr) / 2.0 };
                             pts = vec![
                                 pt(px0, py),
                                 pt(px0 - 6.0, py),
@@ -615,6 +678,7 @@ impl Chart<'_> {
         for r in rows.clone() {
             let Some(row) = self.job.sheet.rows.get(r) else { continue };
             let yc = y_of(r);
+            let row_band = rh(r);
             let id = match &row.kind {
                 RowKind::Task(id) => *id,
                 RowKind::Group { start: Some(s), finish: Some(f) } => {
@@ -631,7 +695,7 @@ impl Chart<'_> {
                 let slots = o.baseline_slots();
                 // Fit the stack inside the row, gaps shrinking first when many baselines show.
                 let n = slots.len().max(1) as f32;
-                let band = ROW_H - 2.0;
+                let band = row_band - 2.0;
                 let gap = if n > 5.0 { 0.3 } else { 0.6 };
                 let h = ((band - (n - 1.0) * gap) / n).clamp(0.5, 3.0);
                 let top = yc - (h * n + (n - 1.0) * gap) / 2.0;
@@ -793,9 +857,17 @@ impl Chart<'_> {
 }
 
 /// The table columns of `strip` at the page's left edge. Returns the width used.
-fn draw_table(out: &mut Vec<Item>, job: &PrintJob, widths: &[f32], cols: &[usize], top: f32, rows: std::ops::Range<usize>) -> f32 {
+fn draw_table(
+    out: &mut Vec<Item>,
+    job: &PrintJob,
+    widths: &[f32],
+    heights: &[f32],
+    cols: &[usize],
+    top: f32,
+    rows: std::ops::Range<usize>,
+) -> f32 {
     let pal = &job.palette;
-    let n = rows.len() as f32;
+    let body_h = sum_heights(heights, rows.clone());
     let mut x = 0.0;
     let grid = Stroke::new(0.4, pal.grid);
     let first_row = rows.start;
@@ -806,8 +878,9 @@ fn draw_table(out: &mut Vec<Item>, job: &PrintJob, widths: &[f32], cols: &[usize
         boxed_text(out, head, &col.title, SMALL, pal.text, true, Align::Center);
         for r in rows.clone() {
             let Some(row) = job.sheet.rows.get(r) else { continue };
-            let y = top + HEAD_H + (r - first_row) as f32 * ROW_H;
-            let cell_rect = Rect::new(x, y, w, ROW_H);
+            let rh = heights.get(r).copied().unwrap_or(ROW_H);
+            let y = top + HEAD_H + y_offset(heights, first_row, r);
+            let cell_rect = Rect::new(x, y, w, rh);
             if matches!(row.kind, RowKind::Group { .. }) {
                 out.push(Item::Rect { rect: cell_rect, fill: Some(pal.header_bg), stroke: None });
             }
@@ -816,16 +889,20 @@ fn draw_table(out: &mut Vec<Item>, job: &PrintJob, widths: &[f32], cols: &[usize
                     out.push(Item::Rect { rect: cell_rect, fill: Some(bg), stroke: None });
                 }
                 let indent = if cell.indent.is_finite() { cell.indent.clamp(0.0, w / 2.0) } else { 0.0 };
-                let r = Rect::new(x + indent, y, w - indent, ROW_H);
-                boxed_text(out, r, &cell.text, TEXT, cell.color.unwrap_or(pal.text), cell.bold, col.align);
+                let text_rect = Rect::new(x + indent, y, w - indent, rh);
+                if cell.wrap {
+                    boxed_text_wrapped(out, text_rect, &cell.text, TEXT, cell.color.unwrap_or(pal.text), cell.bold);
+                } else {
+                    boxed_text(out, text_rect, &cell.text, TEXT, cell.color.unwrap_or(pal.text), cell.bold, col.align);
+                }
             }
-            hline(out, x, x + w, y + ROW_H, grid);
+            hline(out, x, x + w, y + rh, grid);
         }
-        vline(out, x + w, top, top + HEAD_H + n * ROW_H, grid);
+        vline(out, x + w, top, top + HEAD_H + body_h, grid);
         x += w;
     }
     if x > 0.0 {
-        vline(out, 0.0, top, top + HEAD_H + n * ROW_H, Stroke::new(0.5, pal.grid_strong));
+        vline(out, 0.0, top, top + HEAD_H + body_h, Stroke::new(0.5, pal.grid_strong));
     }
     x
 }
@@ -992,7 +1069,7 @@ pub fn layout(job: &PrintJob) -> Document {
     let legend_every = chart_opts.is_some() && setup.legend == LegendPlacement::EveryPage;
     let top = if has_header { BAND_H } else { 0.0 };
     let bottom_bands = if has_footer { BAND_H } else { 0.0 } + if legend_every { LEGEND_H + 4.0 } else { 0.0 };
-    let rows_per_page = (((h - top - bottom_bands - HEAD_H) / ROW_H).floor().max(1.0)) as usize;
+    let body_avail = (h - top - bottom_bands - HEAD_H).max(ROW_H);
 
     // Column widths fit on a page.
     let widths: Vec<f32> =
@@ -1008,6 +1085,7 @@ pub fn layout(job: &PrintJob) -> Document {
     // Every other column fits beside the repeated ones on a page of its own.
     let widths: Vec<f32> =
         widths.iter().enumerate().map(|(c, &cw)| if repeat.contains(&c) { cw } else { cw.min((w - repeat_w).max(12.0)) }).collect();
+    let heights = measure_row_heights(job.sheet, &widths);
 
     // Strips across: table columns first, then the timescale.
     let mut strips: Vec<Strip> = Vec::new();
@@ -1078,12 +1156,31 @@ pub fn layout(job: &PrintJob) -> Document {
         strips.push(cur);
     }
 
-    // Pages: across, then down.
+    // Pages: across, then down. Pack rows by height so wrapped cells still fit.
     let row_count = job.sheet.rows.len();
     let chunks: Vec<std::ops::Range<usize>> = if row_count == 0 {
         std::iter::once(0..0).collect()
     } else {
-        (0..row_count.div_ceil(rows_per_page)).map(|i| i * rows_per_page..((i + 1) * rows_per_page).min(row_count)).collect()
+        let mut chunks = Vec::new();
+        let mut start = 0usize;
+        while start < row_count {
+            let mut end = start;
+            let mut used = 0.0f32;
+            while end < row_count {
+                let rh = heights.get(end).copied().unwrap_or(ROW_H);
+                if end > start && used + rh > body_avail + 0.01 {
+                    break;
+                }
+                used += rh;
+                end += 1;
+            }
+            if end == start {
+                end = start + 1;
+            }
+            chunks.push(start..end);
+            start = end;
+        }
+        chunks
     };
     let mut pages: Vec<Vec<Item>> = Vec::new();
     let mut truncated = strips_cut;
@@ -1108,9 +1205,9 @@ pub fn layout(job: &PrintJob) -> Document {
                 break 'outer;
             }
             let mut items = Vec::new();
-            let table_w = draw_table(&mut items, job, &widths, &strip.cols, top, rows.clone());
+            let table_w = draw_table(&mut items, job, &widths, &heights, &strip.cols, top, rows.clone());
             if let (Some(c), Some((cx, cw, off))) = (&chart, strip.chart) {
-                let body_h = rows.len() as f32 * ROW_H;
+                let body_h = sum_heights(&heights, rows.clone());
                 let head = Rect::new(cx.max(table_w), top, cw, HEAD_H);
                 let body = Rect::new(head.x, top + HEAD_H, cw, body_h.max(ROW_H));
                 let mut scale = Vec::new();
@@ -1121,10 +1218,10 @@ pub fn layout(job: &PrintJob) -> Document {
                 let mut clipped = Vec::new();
                 c.background(&mut clipped, body, off);
                 for r in rows.clone() {
-                    let y = body.y + (r - rows.start) as f32 * ROW_H + ROW_H;
+                    let y = body.y + y_offset(&heights, rows.start, r) + heights.get(r).copied().unwrap_or(ROW_H);
                     hline(&mut clipped, body.x, body.right(), y, Stroke::new(0.3, job.palette.chart_grid));
                 }
-                c.bars(&mut clipped, body, off, rows.clone());
+                c.bars(&mut clipped, body, off, rows.clone(), &heights);
                 items.push(Item::Clip { rect: body, items: clipped });
                 items.push(Item::Rect {
                     rect: Rect::new(head.x, head.y, cw, HEAD_H + body.h),
@@ -1263,6 +1360,7 @@ pub fn task_sheet(p: &Project, with_chart: bool) -> Sheet {
                     text: t.name.clone(),
                     bold: summary,
                     indent: f32::from(t.outline_level.saturating_sub(1)) * 10.0,
+                    wrap: true,
                     ..Default::default()
                 },
                 PrintCell::text(p.format_task_duration(t)),
@@ -1270,8 +1368,8 @@ pub fn task_sheet(p: &Project, with_chart: bool) -> Sheet {
                 PrintCell::text(day(t.sched.finish)),
             ];
             if !with_chart {
-                cells.push(PrintCell::text(p.format_predecessors(t.id)));
-                cells.push(PrintCell::text(p.format_resource_names_only(t.id)));
+                cells.push(PrintCell { text: p.format_predecessors(t.id), wrap: true, ..Default::default() });
+                cells.push(PrintCell { text: p.format_resource_names_only(t.id), wrap: true, ..Default::default() });
             }
             for c in cells.iter_mut().skip(2) {
                 c.bold = summary;
@@ -1538,6 +1636,54 @@ mod tests {
         // Pages with only scheduled bars are blank in this view: nothing is drawn on them.
         let a_bar = out.pages.iter().all(|pg| fills(&pg.items, colour) > 0 || texts(pg).iter().any(|t| t.contains("Baseline1")));
         assert!(a_bar, "every page kept shows Baseline1 bars (or the legend naming them)");
+    }
+
+    /// A long Notes cell wraps to several lines and grows its row; pagination still finishes.
+    #[test]
+    fn wrapped_notes_grow_the_row_and_still_paginate() {
+        let mut p = Project::new("Wrap", crate::dates::ymd(2026, 10, 19).unwrap());
+        p.add_task("Short", None);
+        let long = "word ".repeat(40);
+        p.add_task("Long notes", None);
+        crate::schedule::recalculate(&mut p);
+        let mut sheet = Sheet {
+            title: "Task Sheet".into(),
+            columns: vec![
+                PrintColumn { title: "Name".into(), width: 100.0, align: Align::Left },
+                PrintColumn { title: "Notes".into(), width: 80.0, align: Align::Left },
+            ],
+            rows: vec![
+                PrintRow {
+                    kind: RowKind::Task(p.tasks[0].id),
+                    cells: vec![
+                        PrintCell { text: "Short".into(), wrap: true, ..Default::default() },
+                        PrintCell { text: "ok".into(), wrap: true, ..Default::default() },
+                    ],
+                },
+                PrintRow {
+                    kind: RowKind::Task(p.tasks[1].id),
+                    cells: vec![
+                        PrintCell { text: "Long notes".into(), wrap: true, ..Default::default() },
+                        PrintCell { text: long.clone(), wrap: true, ..Default::default() },
+                    ],
+                },
+            ],
+        };
+        let widths = [100.0f32, 80.0];
+        let heights = measure_row_heights(&sheet, &widths);
+        assert!(heights[1] > ROW_H, "wrapped notes taller than a single line: {}", heights[1]);
+        assert!(heights[1] <= wrap_line_height(TEXT) * MAX_WRAP_LINES as f32 + 2.0 + 0.1);
+        let setup = PageSetup::default();
+        let doc = layout(&job(&p, &setup, &sheet, false));
+        assert!(!doc.pages.is_empty());
+        let page_texts = texts(&doc.pages[0]);
+        let note_bits: Vec<_> = page_texts.iter().filter(|t| long.contains(t.as_str()) || t.ends_with('…')).collect();
+        assert!(note_bits.len() >= 2, "notes drawn as multiple lines: {page_texts:?}");
+        // Cap: a note that would wrap past MAX_WRAP_LINES still paginates.
+        sheet.rows[1].cells[1].text = "word ".repeat(400);
+        let doc2 = layout(&job(&p, &setup, &sheet, false));
+        assert!(!doc2.pages.is_empty() && !doc2.truncated);
+        let _ = sheet;
     }
 
     #[test]

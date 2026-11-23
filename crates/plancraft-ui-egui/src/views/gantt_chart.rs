@@ -75,10 +75,55 @@ pub struct ChartInput<'a> {
     pub selected: &'a dyn Fn(TaskId) -> bool,
     pub kind: ChartKind,
     pub row_height: f32,
+    /// Per-row heights matching the task sheet (wrap cells); falls back to `row_height`.
+    pub row_heights: Option<&'a [f32]>,
     pub header_height: f32,
     pub blank_rows: usize,
     /// Selected task's dependency chain, when path highlighting is on.
     pub path: Option<&'a HashMap<TaskId, PathRole>>,
+}
+
+impl ChartInput<'_> {
+    fn rh(&self, r: usize) -> f32 {
+        self.row_heights.and_then(|h| h.get(r).copied()).unwrap_or(self.row_height)
+    }
+
+    fn y_off(&self, r: usize) -> f32 {
+        match self.row_heights {
+            Some(h) => h[..r.min(h.len())].iter().sum(),
+            None => r as f32 * self.row_height,
+        }
+    }
+
+    fn content_h(&self) -> f32 {
+        let n = self.rows.len() + self.blank_rows;
+        match self.row_heights {
+            Some(h) if !h.is_empty() => {
+                if h.len() >= n {
+                    h[..n].iter().sum()
+                } else {
+                    h.iter().sum::<f32>() + (n - h.len()) as f32 * self.row_height
+                }
+            }
+            _ => n as f32 * self.row_height,
+        }
+    }
+
+    fn row_at(&self, y: f32) -> usize {
+        match self.row_heights {
+            Some(h) if !h.is_empty() => {
+                let mut acc = 0.0;
+                for (i, &hh) in h.iter().enumerate() {
+                    if y < acc + hh {
+                        return i;
+                    }
+                    acc += hh;
+                }
+                h.len().saturating_sub(1)
+            }
+            _ => (y / self.row_height).floor().max(0.0) as usize,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -220,7 +265,7 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
             }
         }
     }
-    let content_h = (input.rows.len() + input.blank_rows) as f32 * rh;
+    let content_h = input.content_h();
     *scroll_y = scroll_y.clamp(0.0, (content_h - body.height() + rh).max(0.0));
 
     let painter = ui.painter_at(rect);
@@ -246,16 +291,23 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
         }
     }
     // Row separators (light) for readability.
-    let first = (*scroll_y / rh).floor().max(0.0) as usize;
-    let last = ((*scroll_y + body.height()) / rh).ceil() as usize + 1;
+    let first = input.row_at(*scroll_y);
+    let mut last = first;
+    let mut acc = input.y_off(first);
+    let n_rows = input.rows.len() + input.blank_rows;
+    while last < n_rows && acc < *scroll_y + body.height() {
+        acc += input.rh(last);
+        last += 1;
+    }
     for r in first..last.min(input.rows.len()) {
-        let y = body.top() + r as f32 * rh - *scroll_y;
+        let y = body.top() + input.y_off(r) - *scroll_y;
+        let row_h = input.rh(r);
         if super::task_at(p, input.rows, r).is_some_and(|t| (input.selected)(t.id)) {
             // Neutral wash (suite WASH_SELECTED), not a blue SELECTION_TINT: blue timeline
             // guides / bars stay readable. Ink rail matches ArtCraft nav-row selection chrome.
-            let row = Rect::from_min_size(pos2(body.left(), y), vec2(body.width(), rh));
+            let row = Rect::from_min_size(pos2(body.left(), y), vec2(body.width(), row_h));
             bp.rect_filled(row, 0.0, theme::pal().WASH_SELECTED);
-            bp.rect_filled(Rect::from_min_size(pos2(body.left(), y), vec2(2.0, rh)), 0.0, theme::pal().TEXT);
+            bp.rect_filled(Rect::from_min_size(pos2(body.left(), y), vec2(2.0, row_h)), 0.0, theme::pal().TEXT);
         }
     }
 
@@ -283,7 +335,7 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
         let (Some(s), Some(f)) = (t.sched.start, t.sched.finish) else {
             continue;
         };
-        let y = body.top() + r as f32 * rh - *scroll_y + rh / 2.0;
+        let y = body.top() + input.y_off(r) - *scroll_y + input.rh(r) / 2.0;
         geom.insert(t.id, BarGeom { y, x0: g.x_of(chart_left, s), x1: g.x_of(chart_left, f) });
     }
 
@@ -407,14 +459,15 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
             Some(super::Row::Notes(_)) => continue,
             Some(super::Row::Group(group)) => {
                 // A group header spans its tasks, drawn like a summary bar on a tinted row.
-                let y = body.top() + r as f32 * rh - *scroll_y;
-                bp.rect_filled(Rect::from_min_size(pos2(body.left(), y), vec2(body.width(), rh)), 0.0, theme::pal().HEADER_BG);
+                let y = body.top() + input.y_off(r) - *scroll_y;
+                let row_h = input.rh(r);
+                bp.rect_filled(Rect::from_min_size(pos2(body.left(), y), vec2(body.width(), row_h)), 0.0, theme::pal().HEADER_BG);
                 let tasks = group.tasks.iter().filter_map(|&i| p.tasks.get(i));
                 let start = tasks.clone().filter_map(|t| t.sched.start).min();
                 let finish = tasks.filter_map(|t| t.sched.finish).max();
                 if let (Some(s), Some(f)) = (start, finish) {
                     let (x0, x1) = (g.x_of(chart_left, s), g.x_of(chart_left, f).max(g.x_of(chart_left, s) + 1.0));
-                    summary_bar(&bp, x0, x1, y + rh / 2.0, theme::pal().ACCENT_MID);
+                    summary_bar(&bp, x0, x1, y + row_h / 2.0, theme::pal().ACCENT_MID);
                 }
                 continue;
             }
@@ -427,9 +480,9 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
             && !matches!(role, PathRole::Selected)
             && !(input.selected)(t.id)
         {
-            let row_y = body.top() + r as f32 * rh - *scroll_y;
+            let row_y = body.top() + input.y_off(r) - *scroll_y;
             bp.rect_filled(
-                Rect::from_min_size(pos2(body.left(), row_y), vec2(body.width(), rh)),
+                Rect::from_min_size(pos2(body.left(), row_y), vec2(body.width(), input.rh(r))),
                 0.0,
                 theme::path_row(matches!(role, PathRole::Direct)),
             );
@@ -768,8 +821,8 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
     }
     if let (Some(drag), Some(pp)) = (g.drag.clone(), ui.input(|i| i.pointer.interact_pos())) {
         let row_at = |y: f32| -> Option<usize> {
-            let r = ((y - body.top() + *scroll_y) / rh).floor();
-            (r >= 0.0 && (r as usize) < input.rows.len()).then_some(r as usize)
+            let r = input.row_at(y - body.top() + *scroll_y);
+            (r < input.rows.len()).then_some(r)
         };
         match drag {
             BarDrag::Move { task, grab_dx, origin_start } => {
@@ -950,10 +1003,8 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
             let (shift, ctrl) = ui.input(|i| (i.modifiers.shift, i.modifiers.command));
             actions.push(ChartAction::Select { task: tid, shift, ctrl });
         } else if let Some(pp) = resp.interact_pointer_pos() {
-            let r = ((pp.y - body.top() + *scroll_y) / rh).floor();
-            if r >= 0.0
-                && let Some(t) = super::task_at(p, input.rows, r as usize)
-            {
+            let r = input.row_at(pp.y - body.top() + *scroll_y);
+            if let Some(t) = super::task_at(p, input.rows, r) {
                 actions.push(ChartAction::Select { task: t.id, shift: false, ctrl: false });
             }
         }

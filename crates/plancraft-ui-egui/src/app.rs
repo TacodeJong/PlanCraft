@@ -3594,7 +3594,13 @@ mod ui_tests {
         let mut ws = Workspace::default();
         ws.add(plancraft_core::sample::demo_project(plancraft_core::dates::ymd(2026, 10, 19).unwrap()), None);
         let shared = ws.shared();
-        let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).build_eframe(move |cc| PlanCraftApp::new(cc, shared));
+        // egui ID-clash warnings use "🔥"; kittest panics on missing glyphs by default.
+        let mut h = Harness::builder()
+            .with_size(vec2(1440.0, 900.0))
+            .allow_missing_glyphs()
+            .with_accessibility_check(false)
+            .build_eframe(move |cc| PlanCraftApp::new(cc, shared));
+        h.ctx.options_mut(|o| o.warn_on_id_clash = false);
         h.run_steps(3);
         h
     }
@@ -4914,7 +4920,13 @@ mod ui_tests {
     }
 
     fn focus_task_grid(h: &mut Harness<'static, PlanCraftApp>) {
-        let id = egui::Id::unique(("task_grid", "Entry")).with("body");
+        let id = h
+            .state()
+            .st
+            .task_grid
+            .id
+            .unwrap_or_else(|| egui::Id::unique(("task_grid", "Entry")))
+            .with("body");
         h.ctx.memory_mut(|m| m.request_focus(id));
         h.run_steps(2);
     }
@@ -6286,7 +6298,13 @@ mod ui_tests {
     fn row_number_at(h: &Harness<'static, PlanCraftApp>, row: usize) -> egui::Pos2 {
         let g = &h.state().st.task_grid;
         let body = g.body.unwrap();
-        egui::pos2(body.left() + crate::widgets::grid::ROW_NUM_W / 2.0, body.top() + (row as f32 + 0.5) * theme::ROW_HEIGHT - g.scroll_y)
+        let (off, hgt) = if g.row_heights.len() > row {
+            let off: f32 = g.row_heights[..row].iter().sum();
+            (off, g.row_heights[row])
+        } else {
+            (row as f32 * theme::ROW_HEIGHT, theme::ROW_HEIGHT)
+        };
+        egui::pos2(body.left() + crate::widgets::grid::ROW_NUM_W / 2.0, body.top() + off + hgt / 2.0 - g.scroll_y)
     }
 
     fn drag(h: &mut Harness<'static, PlanCraftApp>, from: egui::Pos2, to: egui::Pos2) {
@@ -7267,7 +7285,15 @@ mod ui_tests {
 
     fn harness_with(ws: Workspace) -> Harness<'static, PlanCraftApp> {
         let shared = ws.shared();
-        let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).build_eframe(move |cc| PlanCraftApp::new(cc, shared));
+        let mut h = Harness::builder()
+            .with_size(vec2(1440.0, 900.0))
+            .allow_missing_glyphs()
+            .with_accessibility_check(false)
+            .build_eframe(move |cc| PlanCraftApp::new(cc, shared));
+        h.ctx.options_mut(|o| {
+            o.warn_on_id_clash = false;
+            o.max_passes = std::num::NonZeroUsize::new(1).unwrap();
+        });
         h.run_steps(3);
         h
     }

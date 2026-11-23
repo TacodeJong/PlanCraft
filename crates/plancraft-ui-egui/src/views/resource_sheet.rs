@@ -114,11 +114,11 @@ fn cell(p: &Project, r: &Resource, col: Col, over: &HashSet<ResourceId>, work: &
             icons.truncate(2);
             Cell { icons, ..Default::default() }
         }
-        Col::Name => red(Cell::text(r.name.clone())),
+        Col::Name => red(Cell::text(r.name.clone()).wrapped()),
         Col::Type => Cell::text(type_label(r.kind)),
         Col::Category => Cell::text(r.category.label()),
         Col::Initials => Cell::text(r.initials.clone()),
-        Col::Group => Cell::text(r.group.clone()),
+        Col::Group => Cell::text(r.group.clone()).wrapped(),
         Col::MaxUnits => {
             if r.kind == ResourceType::Work {
                 Cell::text(format::units(r.max_units))
@@ -159,7 +159,7 @@ fn cell(p: &Project, r: &Resource, col: Col, over: &HashSet<ResourceId>, work: &
             Cell { text: format::money(p, r.cost_per_use), edit_text: Some(r.cost_per_use.to_string()), ..Default::default() }
         }
         Col::Calendar => Cell::text(r.calendar.and_then(|c| p.calendar(c)).map(|c| c.name.clone()).unwrap_or_else(|| "(Project)".into())),
-        Col::Email => Cell::text(r.email.clone()),
+        Col::Email => Cell::text(r.email.clone()).wrapped(),
         Col::Work => Cell::text(work.get(&r.id).map(|w| format_work(w.0)).unwrap_or_else(|| format_work(0))),
         Col::Cost => Cell::text(format::money(p, work.get(&r.id).map(|w| w.1).unwrap_or(0.0))),
     }
@@ -251,7 +251,12 @@ pub fn print_sheet(p: &Project, pal: &plancraft_core::print::layout::Palette) ->
             let mut cells = vec![PrintCell::text((i + 1).to_string())];
             cells.extend(cols.iter().map(|(c, _)| {
                 let cell = cell(p, r, *c, &over, &work);
-                PrintCell { text: cell.text, color: cell.color.map(|_| pal.error), ..Default::default() }
+                PrintCell {
+                    text: cell.text,
+                    color: cell.color.map(|_| pal.error),
+                    wrap: cell.wrap,
+                    ..Default::default()
+                }
             }));
             PrintRow { kind: RowKind::Other, cells }
         })

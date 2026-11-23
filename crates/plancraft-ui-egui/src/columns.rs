@@ -469,6 +469,8 @@ pub fn cell(col: TaskCol, p: &Project, idx: usize, ctx: &CellCtx) -> Cell {
                 indent,
                 expander: if summary { Some(true) } else { None },
                 icons,
+                // Name wraps on print/screen so long titles aren't ellipsized.
+                wrap: true,
                 ..Default::default()
             };
             if summary && let Some(rgb) = t.bar_color {
@@ -480,15 +482,19 @@ pub fn cell(col: TaskCol, p: &Project, idx: usize, ctx: &CellCtx) -> Cell {
         LevelingDelay => Cell::text(p.format_duration(t.leveling_delay.max(0), false)),
         Start => Cell { text: format::date(s.start), edit_text: Some(format::iso_date(s.start)), ..Default::default() },
         Finish => Cell { text: format::date(s.finish), edit_text: Some(format::iso_date(s.finish)), ..Default::default() },
-        Predecessors => Cell::text(p.format_predecessors(t.id)),
+        Predecessors => Cell::text(p.format_predecessors(t.id)).wrapped(),
         Successors => Cell::text(
             p.successors(t.id).iter().filter_map(|(sid, _)| p.row_number(*sid)).map(|r| r.to_string()).collect::<Vec<_>>().join(","),
-        ),
+        )
+        .wrapped(),
         // The table shows the names alone; the units are in their own column. The editor gets
         // the bracket syntax (like dates edit as ISO), so an edit never resets the units.
-        Resources => {
-            Cell { text: p.format_resource_names_only(t.id), edit_text: Some(p.format_resource_names(t.id)), ..Default::default() }
-        }
+        Resources => Cell {
+            text: p.format_resource_names_only(t.id),
+            edit_text: Some(p.format_resource_names(t.id)),
+            wrap: true,
+            ..Default::default()
+        },
         Units => Cell::text(p.format_resource_units(t.id)),
         PercentComplete => Cell::text(format::percent(s.percent_complete)),
         Status => {
@@ -526,6 +532,7 @@ pub fn cell(col: TaskCol, p: &Project, idx: usize, ctx: &CellCtx) -> Cell {
                 Cell {
                     text: t.mark_note.clone(),
                     bg: t.row_mark.map(theme::row_mark_wash),
+                    wrap: true,
                     ..Default::default()
                 }
             }
@@ -616,16 +623,22 @@ pub fn cell(col: TaskCol, p: &Project, idx: usize, ctx: &CellCtx) -> Cell {
             _ => Cell::default(),
         },
         ExpectedWork => t.estimate.map(|e| Cell::text(format_work(e.expected_work(&p.settings)))).unwrap_or_default(),
-        Deliverable => Cell::text(t.deliverable.clone()),
-        Milestones => {
-            Cell::weak(p.milestones_of(t.id).iter().filter_map(|m| p.task(*m)).map(|m| m.name.clone()).collect::<Vec<_>>().join(", "))
+        Deliverable => Cell::text(t.deliverable.clone()).wrapped(),
+        Milestones => Cell::weak(
+            p.milestones_of(t.id).iter().filter_map(|m| p.task(*m)).map(|m| m.name.clone()).collect::<Vec<_>>().join(", "),
+        )
+        .wrapped(),
+        Notes => {
+            let text = t.notes.replace("\r\n", "\n");
+            Cell { text, wrap: true, ..Default::default() }
         }
-        Notes => Cell::text(t.notes.lines().next().unwrap_or_default().to_string()),
         UniqueId => Cell::weak(t.id.0.to_string()),
         Recurring => Cell::text(if p.is_recurring(idx) { "Yes" } else { "No" }),
         // Summary tasks have no card; their subtasks do.
         BoardStatus if summary => Cell::default(),
-        BoardStatus => Cell::text(p.board_column_of(idx).and_then(|c| p.board_column(c)).map(|c| c.name.clone()).unwrap_or_default()),
+        BoardStatus => {
+            Cell::text(p.board_column_of(idx).and_then(|c| p.board_column(c)).map(|c| c.name.clone()).unwrap_or_default()).wrapped()
+        }
         ShowOnBoard => Cell::text(if t.show_on_board { "Yes" } else { "No" }),
     };
     if summary && col != Name && col != Indicators {
@@ -851,13 +864,8 @@ pub fn commit(col: TaskCol, p: &mut Project, id: TaskId, text: &str) -> Result<(
         }
         Deliverable => task_mut(p, id)?.deliverable = text.to_string(),
         Notes => {
-            // The cell shows and edits only the first line; keep the rest of a longer note.
-            let t = task_mut(p, id)?;
-            t.notes = match t.notes.split_once('\n') {
-                Some((_, rest)) if text.is_empty() => rest.to_string(),
-                Some((_, rest)) => format!("{text}\n{rest}"),
-                None => text.to_string(),
-            };
+            // Full note text in the cell (word-wrapped); commit replaces the whole note.
+            task_mut(p, id)?.notes = text.replace("\r\n", "\n");
         }
         _ => return Err("this field is calculated and cannot be edited".into()),
     }
@@ -1012,20 +1020,21 @@ mod tests {
         assert!(commit(TaskCol::Units, &mut p, id, "60%").is_err(), "the Units column is read-only");
     }
 
-    /// Regression: the Notes cell shows only the first line, and committing it used to replace
-    /// the whole note with that line.
+    /// The Notes cell shows and commits the full note (word-wrapped on screen and print).
     #[test]
-    fn editing_the_notes_cell_keeps_the_other_lines() {
+    fn editing_the_notes_cell_replaces_the_whole_note() {
         let mut p = Project::new("Notes", plancraft_core::dates::ymd(2026, 10, 19).unwrap());
         let id = p.add_task("Task", None);
         p.task_mut(id).unwrap().notes = "first\nsecond\nthird".into();
-        commit(TaskCol::Notes, &mut p, id, "changed").unwrap();
-        assert_eq!(p.task(id).unwrap().notes, "changed\nsecond\nthird");
+        let none = |_: TaskId| false;
+        let ctx = CellCtx { overallocated: &none, others_on: None };
+        let idx = p.task_index(id).unwrap();
+        assert_eq!(cell(TaskCol::Notes, &p, idx, &ctx).text, "first\nsecond\nthird");
+        assert!(cell(TaskCol::Notes, &p, idx, &ctx).wrap);
+        commit(TaskCol::Notes, &mut p, id, "changed\nline two").unwrap();
+        assert_eq!(p.task(id).unwrap().notes, "changed\nline two");
         commit(TaskCol::Notes, &mut p, id, "").unwrap();
-        assert_eq!(p.task(id).unwrap().notes, "second\nthird");
-        p.task_mut(id).unwrap().notes = "one line".into();
-        commit(TaskCol::Notes, &mut p, id, "replaced").unwrap();
-        assert_eq!(p.task(id).unwrap().notes, "replaced");
+        assert_eq!(p.task(id).unwrap().notes, "");
     }
 
     #[test]

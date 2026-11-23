@@ -117,7 +117,12 @@ pub struct Cell {
     /// No editor for this cell even in an editable column (a totals row, say): double click
     /// raises [`GridEvent::Activate`] instead.
     pub read_only: bool,
+    /// Word-wrap in the cell; the row grows (capped) on screen and print.
+    pub wrap: bool,
 }
+
+/// Max lines a wrapped cell may grow to (screen and print).
+pub const MAX_WRAP_LINES: usize = 6;
 
 impl Cell {
     pub fn text(t: impl Into<String>) -> Self {
@@ -125,6 +130,11 @@ impl Cell {
     }
     pub fn weak(t: impl Into<String>) -> Self {
         Self { text: t.into(), color: Some(theme::pal().TEXT_WEAK), ..Default::default() }
+    }
+    /// Mark the cell for word-wrap (row height grows up to [`MAX_WRAP_LINES`]).
+    pub fn wrapped(mut self) -> Self {
+        self.wrap = true;
+        self
     }
 }
 
@@ -177,6 +187,10 @@ pub struct GridState {
     col_drag: Option<usize>,
     /// Where the rows were drawn last frame (for tests that point at a row).
     pub body: Option<Rect>,
+    /// Per-row heights from the last paint (wrap cells grow); the Gantt chart mirrors these.
+    pub row_heights: Vec<f32>,
+    /// Grid config id from the last paint (for tests that focus the body).
+    pub id: Option<Id>,
 }
 
 impl GridState {
@@ -344,6 +358,45 @@ pub struct GridOutput {
 
 pub const ROW_NUM_W: f32 = 34.0;
 
+fn y_offset(heights: &[f32], row: usize) -> f32 {
+    heights[..row.min(heights.len())].iter().sum()
+}
+
+fn row_at_y(heights: &[f32], y: f32, fallback_h: f32) -> usize {
+    if heights.is_empty() {
+        return (y / fallback_h).floor().max(0.0) as usize;
+    }
+    let mut acc = 0.0;
+    for (i, &h) in heights.iter().enumerate() {
+        if y < acc + h {
+            return i;
+        }
+        acc += h;
+    }
+    heights.len().saturating_sub(1)
+}
+
+fn measure_heights(cfg: &GridConfig, widths: &[f32], cell: &mut dyn FnMut(usize, usize) -> Cell, line_h: f32) -> Vec<f32> {
+    let total = cfg.row_count + cfg.blank_rows;
+    let mut heights = vec![cfg.row_height; total];
+    let max_h = (line_h * MAX_WRAP_LINES as f32).max(cfg.row_height);
+    // Print font line counts: same wrap rules as print, no egui atlas work during measure.
+    for r in 0..cfg.row_count {
+        for c in 0..cfg.columns.len() {
+            let content = cell(r, c);
+            if !content.wrap || content.text.is_empty() {
+                continue;
+            }
+            let avail = (widths.get(c).copied().unwrap_or(60.0) - content.indent - 10.0).max(1.0);
+            let n = plancraft_core::print::font::wrap(&content.text, 13.0, content.bold, avail)
+                .len()
+                .clamp(1, MAX_WRAP_LINES);
+            heights[r] = heights[r].max((line_h * n as f32).min(max_h).max(cfg.row_height));
+        }
+    }
+    heights
+}
+
 fn paint_glyph(p: &egui::Painter, center: Pos2, glyph: &Glyph, color: Color32) {
     match glyph {
         Glyph::Text(text) => {
@@ -427,8 +480,15 @@ pub fn show(
     let body = Rect::from_min_max(pos2(rect.left(), header.bottom()), pos2(rect.right() - vs_w, rect.bottom() - HSCROLL_H));
     let cols_view_w = (body.width() - rn_w).max(0.0);
     state.body = Some(body);
+    state.id = Some(cfg.id);
     let total_rows = cfg.row_count + cfg.blank_rows;
-    let content_h = total_rows as f32 * cfg.row_height;
+    let cell_font = FontId::proportional(13.0);
+    let line_h = ui.painter().layout_no_wrap("Ag".into(), cell_font.clone(), Color32::WHITE).size().y;
+    let heights = measure_heights(cfg, &state.widths, cell, line_h);
+    state.row_heights = heights.clone();
+    let content_h: f32 = heights.iter().sum();
+    let base_h = cfg.row_height;
+    let rh = |r: usize| heights.get(r).copied().unwrap_or(base_h);
     if state.follow_anchor(cfg) {
         events.push(GridEvent::EditLost);
     }
@@ -445,14 +505,14 @@ pub fn show(
         }
     }
     if let Some(r) = state.scroll_to.take() {
-        let top = r as f32 * cfg.row_height;
+        let top = y_offset(&heights, r);
         if top < state.scroll_y {
             state.scroll_y = top;
-        } else if top + cfg.row_height > state.scroll_y + body.height() {
-            state.scroll_y = top + cfg.row_height - body.height();
+        } else if top + rh(r) > state.scroll_y + body.height() {
+            state.scroll_y = top + rh(r) - body.height();
         }
     }
-    state.scroll_y = state.scroll_y.clamp(0.0, (content_h - body.height() + cfg.row_height).max(0.0));
+    state.scroll_y = state.scroll_y.clamp(0.0, (content_h - body.height() + base_h).max(0.0));
     state.scroll_x = state.scroll_x.clamp(0.0, (total_cols_w - cols_view_w).max(0.0));
 
     let painter = ui.painter_at(rect);
@@ -591,16 +651,21 @@ pub fn show(
 
     // ---- Body ----
     let body_painter = painter.with_clip_rect(body);
-    let first = (state.scroll_y / cfg.row_height).floor().max(0.0) as usize;
-    let visible = (body.height() / cfg.row_height).ceil() as usize + 1;
-    let last = (first + visible).min(total_rows);
+    let first = row_at_y(&heights, state.scroll_y, base_h).min(total_rows);
+    let mut last = first;
+    let mut acc = y_offset(&heights, first);
+    while last < total_rows && acc < state.scroll_y + body.height() {
+        acc += rh(last);
+        last += 1;
+    }
+    last = last.min(total_rows);
     let pointer = ui.input(|i| i.pointer.hover_pos());
-    let cell_font = FontId::proportional(13.0);
     let mut edit_rect: Option<(Rect, usize, usize)> = None;
 
     for row in first..last {
-        let y = body.top() + row as f32 * cfg.row_height - state.scroll_y;
-        let row_rect = Rect::from_min_size(pos2(body.left(), y), vec2(body.width(), cfg.row_height));
+        let y = body.top() + y_offset(&heights, row) - state.scroll_y;
+        let row_h = rh(row);
+        let row_rect = Rect::from_min_size(pos2(body.left(), y), vec2(body.width(), row_h));
         let data_row = row < cfg.row_count;
         let selected = data_row && is_selected(row);
         if selected {
@@ -657,13 +722,21 @@ pub fn show(
             if !content.text.is_empty() {
                 let color = content.color.unwrap_or(theme::pal().TEXT);
                 // Right-to-left text (Hebrew, Arabic) shows in display order.
-                let galley = cp.layout_no_wrap(plancraft_core::bidi::display(&content.text).into_owned(), cell_font.clone(), color);
-                let gx = match def.align {
-                    Align::Max => r.right() - 5.0 - galley.size().x,
-                    Align::Center => r.center().x - galley.size().x / 2.0,
-                    Align::Min => tx,
+                let display = plancraft_core::bidi::display(&content.text).into_owned();
+                let (galley, gpos, gx) = if content.wrap {
+                    let avail = (r.right() - 5.0 - tx).max(1.0);
+                    let galley = cp.layout(display, cell_font.clone(), color, avail);
+                    (galley, pos2(tx, r.top() + 2.0), tx)
+                } else {
+                    let galley = cp.layout_no_wrap(display, cell_font.clone(), color);
+                    let gx = match def.align {
+                        Align::Max => r.right() - 5.0 - galley.size().x,
+                        Align::Center => r.center().x - galley.size().x / 2.0,
+                        Align::Min => tx,
+                    };
+                    let gpos = pos2(gx, r.center().y - galley.size().y / 2.0);
+                    (galley, gpos, gx)
                 };
-                let gpos = pos2(gx, r.center().y - galley.size().y / 2.0);
                 let width = galley.size().x;
                 if content.bold {
                     // Faux bold: the bundled UI font has no bold face.
@@ -689,11 +762,11 @@ pub fn show(
         }
         body_painter.hline(row_rect.x_range(), row_rect.bottom() - 0.5, Stroke::new(1.0, theme::pal().GRID_LINE));
         if cfg.row_numbers {
-            let rr = Rect::from_min_size(row_rect.min, vec2(rn_w, cfg.row_height));
+            let rr = Rect::from_min_size(row_rect.min, vec2(rn_w, row_h));
             body_painter.rect_filled(rr, 0.0, if selected { theme::pal().WASH_SELECTED } else { theme::pal().HEADER_BG });
             if selected {
                 // ArtCraft nav-row cue: 2 px ink rail instead of an ACCENT_LIGHT blue gutter wash.
-                body_painter.rect_filled(Rect::from_min_size(rr.min, vec2(2.0, cfg.row_height)), 0.0, theme::pal().TEXT);
+                body_painter.rect_filled(Rect::from_min_size(rr.min, vec2(2.0, row_h)), 0.0, theme::pal().TEXT);
             }
             body_painter.vline(rr.right() - 0.5, rr.y_range(), Stroke::new(1.0, theme::pal().GRID_LINE_STRONG));
             body_painter.hline(rr.x_range(), rr.bottom() - 0.5, Stroke::new(1.0, theme::pal().GRID_LINE));
@@ -715,7 +788,7 @@ pub fn show(
         if !body.contains(p) {
             return None;
         }
-        let row = ((p.y - body.top() + state.scroll_y) / cfg.row_height).floor() as usize;
+        let row = row_at_y(&heights, p.y - body.top() + state.scroll_y, base_h);
         let col = spans.iter().position(|&(x0, x1)| p.x >= x0 && p.x < x1 && p.x >= body.left() + rn_w);
         Some((row, col))
     };
@@ -788,8 +861,11 @@ pub fn show(
         ui.ctx().set_cursor_icon(CursorIcon::Grab);
     }
     let row_under = |p: Pos2, scroll: f32| {
-        let r = ((p.y - body.top() + scroll) / cfg.row_height).floor();
-        (r.is_finite() && r >= 0.0).then_some(r as usize)
+        let y = p.y - body.top() + scroll;
+        if !y.is_finite() || y < 0.0 {
+            return None;
+        }
+        Some(row_at_y(&heights, y, base_h))
     };
     if body_resp.drag_started()
         && let Some(origin) = ui.input(|i| i.pointer.press_origin())
@@ -816,21 +892,37 @@ pub fn show(
         let latest = ui.input(|i| i.pointer.latest_pos());
         // The boundary between rows nearest the pointer: the dragged rows go above that row.
         let drop_at = |p: Pos2, scroll: f32| {
-            let b = ((p.y - body.top() + scroll) / cfg.row_height).round();
-            if b.is_finite() { (b.max(0.0) as usize).min(cfg.row_count) } else { from }
+            let y = p.y - body.top() + scroll;
+            if !y.is_finite() {
+                return from;
+            }
+            let mut best = 0usize;
+            let mut best_d = f32::MAX;
+            let mut acc = 0.0f32;
+            for i in 0..=cfg.row_count {
+                let d = (y - acc).abs();
+                if d < best_d {
+                    best_d = d;
+                    best = i;
+                }
+                if i < cfg.row_count {
+                    acc += rh(i);
+                }
+            }
+            best
         };
         if body_resp.dragged() {
             ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
             if let Some(p) = latest {
                 // Near the top or bottom edge, scroll to reach rows out of view.
-                if p.y < body.top() + cfg.row_height {
-                    state.scroll_y = (state.scroll_y - cfg.row_height / 2.0).max(0.0);
+                if p.y < body.top() + base_h {
+                    state.scroll_y = (state.scroll_y - base_h / 2.0).max(0.0);
                     ui.ctx().request_repaint();
-                } else if p.y > body.bottom() - cfg.row_height {
-                    state.scroll_y = (state.scroll_y + cfg.row_height / 2.0).min((content_h - body.height() + cfg.row_height).max(0.0));
+                } else if p.y > body.bottom() - base_h {
+                    state.scroll_y = (state.scroll_y + base_h / 2.0).min((content_h - body.height() + base_h).max(0.0));
                     ui.ctx().request_repaint();
                 }
-                let y = body.top() + drop_at(p, state.scroll_y) as f32 * cfg.row_height - state.scroll_y;
+                let y = body.top() + y_offset(&heights, drop_at(p, state.scroll_y)) - state.scroll_y;
                 body_painter.hline(body.x_range(), y, Stroke::new(2.0, theme::pal().ACCENT_MID));
             }
         }
@@ -838,7 +930,7 @@ pub fn show(
             state.row_drag = None;
             // Dropped over the rows only (not over the chart, below the table or outside it).
             if let Some(to) = latest
-                .filter(|p| body.x_range().contains(p.x) && p.y >= body.top() - cfg.row_height && p.y <= body.bottom() + cfg.row_height)
+                .filter(|p| body.x_range().contains(p.x) && p.y >= body.top() - base_h && p.y <= body.bottom() + base_h)
                 .map(|p| drop_at(p, state.scroll_y))
                 // Where the dragged item is now (gone: nothing moves).
                 && let Some(from) = match (key, cfg.row_key) {
@@ -1049,8 +1141,8 @@ pub fn show(
                         // On Apple keyboards the key labeled Delete is Backspace; Fn+Delete is Delete.
                         Key::Delete | Key::Backspace => del = true,
                         Key::Insert => ins = true,
-                        Key::PageDown => dr += (body.height() / cfg.row_height) as isize,
-                        Key::PageUp => dr -= (body.height() / cfg.row_height) as isize,
+                        Key::PageDown => dr += (body.height() / base_h) as isize,
+                        Key::PageUp => dr -= (body.height() / base_h) as isize,
                         _ => {}
                     },
                     egui::Event::Text(t) if !i.modifiers.command && !i.modifiers.alt => typed = Some(typed.take().unwrap_or_default() + t),
@@ -1121,7 +1213,7 @@ pub fn show(
     }
     if cfg.show_vscroll {
         let vs = Rect::from_min_max(pos2(rect.right() - VSCROLL_W, body.top()), pos2(rect.right(), body.bottom()));
-        state.scroll_y = scrollbar(ui, cfg.id.with("vscroll"), vs, true, state.scroll_y, content_h + cfg.row_height, body.height());
+        state.scroll_y = scrollbar(ui, cfg.id.with("vscroll"), vs, true, state.scroll_y, content_h + base_h, body.height());
         painter.rect_filled(
             Rect::from_min_max(pos2(rect.right() - VSCROLL_W, rect.top()), pos2(rect.right(), header.bottom())),
             0.0,

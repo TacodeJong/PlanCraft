@@ -611,10 +611,11 @@ fn notes_cell(field: Field, p: &Project, idx: usize) -> grid::Cell {
     let Some(t) = p.tasks.get(idx) else { return grid::Cell::default() };
     let indent = f32::from(t.outline_level) * 16.0;
     grid::Cell {
-        text: t.notes.split_whitespace().collect::<Vec<_>>().join(" "),
+        text: t.notes.replace("\r\n", "\n"),
         color: Some(theme::pal().TEXT_WEAK),
         indent,
         read_only: true,
+        wrap: true,
         tooltip: Some(t.notes.clone()),
         ..Default::default()
     }
@@ -668,6 +669,7 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, kind:
             selected: &is_sel,
             kind,
             row_height: theme::ROW_HEIGHT,
+            row_heights: (!st.task_grid.row_heights.is_empty()).then_some(st.task_grid.row_heights.as_slice()),
             header_height: theme::HEADER_HEIGHT,
             blank_rows: blank,
             path: path.as_ref(),

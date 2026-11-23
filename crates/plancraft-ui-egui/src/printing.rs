@@ -115,6 +115,7 @@ fn print_cell(cell: &crate::widgets::grid::Cell, pal: &Palette) -> PrintCell {
         // Soft mark wash (and similar row tints) so markings survive print without icons.
         bg: cell.bg.map(rgb_of),
         indent: cell.indent * PT_PER_PX,
+        wrap: cell.wrap,
     }
 }
 

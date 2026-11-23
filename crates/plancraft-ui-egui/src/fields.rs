@@ -185,7 +185,8 @@ impl Field {
                             CustomValue::Number(n) => Some(format!("{n}")),
                             _ => None,
                         };
-                        Cell { text, edit_text, ..Default::default() }
+                        let wrap = matches!(v, CustomValue::Text(_));
+                        Cell { text, edit_text, wrap, ..Default::default() }
                     }
                 };
                 if t.sched.is_summary {

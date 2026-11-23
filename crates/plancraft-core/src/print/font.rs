@@ -199,6 +199,80 @@ pub fn fit(text: &str, size: f32, bold: bool, max: f32) -> String {
     out
 }
 
+/// Break `text` into lines that each fit in `max_width` points. Soft breaks at spaces; hard-splits
+/// tokens that are longer than the width. Existing newlines are kept.
+pub fn wrap(text: &str, size: f32, bold: bool, max_width: f32) -> Vec<String> {
+    let max_width = max_width.max(0.0);
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+    let mut lines = Vec::new();
+    for para in text.replace("\r\n", "\n").split('\n') {
+        if para.is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+        let mut line = String::new();
+        let mut line_w = 0.0;
+        for word in para.split(' ') {
+            let pieces = hard_split(word, size, bold, max_width);
+            for (i, piece) in pieces.into_iter().enumerate() {
+                let pw = width(&piece, size, bold);
+                let gap = if line.is_empty() { 0.0 } else { width(" ", size, bold) };
+                if !line.is_empty() && line_w + gap + pw > max_width && max_width > 0.0 {
+                    lines.push(std::mem::take(&mut line));
+                    line_w = 0.0;
+                }
+                if line.is_empty() {
+                    // A hard-split piece that still exceeds max_width is kept as-is (caller may
+                    // ellipsize the last capped line).
+                    line = piece;
+                    line_w = pw;
+                } else if i == 0 {
+                    line.push(' ');
+                    line.push_str(&piece);
+                    line_w += gap + pw;
+                } else {
+                    lines.push(std::mem::take(&mut line));
+                    line = piece;
+                    line_w = pw;
+                }
+            }
+        }
+        lines.push(line);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+/// Split a single token into pieces that each fit `max_width` (character by character).
+fn hard_split(word: &str, size: f32, bold: bool, max_width: f32) -> Vec<String> {
+    if word.is_empty() {
+        return vec![String::new()];
+    }
+    if max_width <= 0.0 || width(word, size, bold) <= max_width {
+        return vec![word.to_string()];
+    }
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut w = 0.0;
+    for ch in word.chars() {
+        let cw = width(ch.encode_utf8(&mut [0; 4]), size, bold);
+        if !cur.is_empty() && w + cw > max_width {
+            out.push(std::mem::take(&mut cur));
+            w = 0.0;
+        }
+        cur.push(ch);
+        w += cw;
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,6 +310,20 @@ mod tests {
         let m = metrics();
         assert!(m.ascent > 0.5 && m.descent < 0.0);
         assert_eq!(pick('\u{7}'), (0, 0));
+    }
+
+    #[test]
+    fn wrap_breaks_on_spaces_and_newlines() {
+        assert_eq!(wrap("", 10.0, false, 100.0), vec![""]);
+        assert_eq!(wrap("Short", 10.0, false, 100.0), vec!["Short"]);
+        let lines = wrap("one two three four", 10.0, false, width("one two", 10.0, false) + 0.5);
+        assert!(lines.len() >= 2, "{lines:?}");
+        assert!(lines.iter().all(|l| width(l, 10.0, false) <= width("one two", 10.0, false) + 1.0), "{lines:?}");
+        assert_eq!(wrap("a\nb\nc", 10.0, false, 100.0), vec!["a", "b", "c"]);
+        let long = "Supercalifragilisticexpialidocious";
+        let pieces = wrap(long, 10.0, false, 40.0);
+        assert!(pieces.len() > 1, "{pieces:?}");
+        assert!(pieces.iter().all(|p| width(p, 10.0, false) <= 40.0 + 0.01), "{pieces:?}");
     }
 
     /// Where the system has a CJK font, Chinese text measures with it (not as boxes).
