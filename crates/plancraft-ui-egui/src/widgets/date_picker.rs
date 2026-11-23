@@ -21,13 +21,15 @@ pub struct DateField<'a> {
 /// `Some(value)` when the user picks a day or clears the field. `value` is `None` when cleared.
 pub fn button(ui: &mut Ui, field: DateField<'_>) -> Option<Option<DateTime>> {
     let label = field.current.map(format_dutch).unwrap_or_else(|| field.empty.to_string());
-    let resp = ui.add_enabled(field.enabled, egui::Button::new(label).min_size(vec2(148.0, 0.0)));
     let mut change = None;
-    egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        if let Some(next) = calendar(ui, field.salt, field.current, field.clearable, field.minute) {
-            change = Some(next);
-            ui.close();
-        }
+    ui.push_id(field.salt, |ui| {
+        let resp = ui.add_enabled(field.enabled, egui::Button::new(label).min_size(vec2(148.0, 0.0)));
+        egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+            if let Some(next) = calendar(ui, field.salt, field.current, field.clearable, field.minute) {
+                change = Some(next);
+                ui.close();
+            }
+        });
     });
     change
 }

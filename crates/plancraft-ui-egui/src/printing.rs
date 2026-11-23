@@ -102,12 +102,18 @@ fn printable(cell: &crate::widgets::grid::Cell) -> String {
     [&cell.tooltip, &cell.edit_text].into_iter().flatten().find(|s| ok(s)).cloned().unwrap_or_default()
 }
 
+fn rgb_of(c: egui::Color32) -> plancraft_core::print::Rgb {
+    plancraft_core::print::Rgb(c.r(), c.g(), c.b())
+}
+
 fn print_cell(cell: &crate::widgets::grid::Cell, pal: &Palette) -> PrintCell {
     PrintCell {
         text: printable(cell),
         bold: cell.bold,
         // Only meaningful colours print (paper is white whatever the screen theme).
         color: cell.color.filter(|c| *c == theme::pal().ERROR).map(|_| pal.error),
+        // Soft mark wash (and similar row tints) so markings survive print without icons.
+        bg: cell.bg.map(rgb_of),
         indent: cell.indent * PT_PER_PX,
     }
 }
@@ -147,9 +153,16 @@ fn task_sheet(p: &Project, st: &UiState, title: &str, pal: &Palette, all_columns
         .filter_map(|row| match row {
             Row::Task(idx) => {
                 let t = p.tasks.get(*idx)?;
-                let mut cells = vec![PrintCell::text((idx + 1).to_string())];
+                let mark_wash = t.row_mark.map(|m| rgb_of(theme::row_mark_wash(m)));
+                let mut cells = vec![PrintCell { text: (idx + 1).to_string(), bg: mark_wash, ..Default::default() }];
                 for f in &fields {
-                    let mut c = print_cell(&f.cell(p, *idx, &ctx), pal);
+                    let mut screen = f.cell(p, *idx, &ctx);
+                    // Whole-row mark wash (same as the on-screen Gantt), even when the mark
+                    // column itself is hidden — icons do not print, the wash does.
+                    if screen.bg.is_none() {
+                        screen.bg = t.row_mark.map(theme::row_mark_wash);
+                    }
+                    let mut c = print_cell(&screen, pal);
                     if grouped {
                         c.indent = 0.0;
                     }
@@ -474,7 +487,7 @@ mod tests {
         assert!(chart.is_some());
         assert_eq!(sheet.rows.len(), p.tasks.len());
         assert_eq!(sheet.columns.first().map(|c| c.title.as_str()), Some("ID"));
-        assert!(sheet.columns.iter().all(|c| c.title != "ℹ"), "no indicator column");
+        assert!(sheet.columns.iter().all(|c| !c.title.is_empty()), "no indicator column");
         // Filters apply.
         st.filter = crate::state::TaskFilter::Milestones;
         let (milestones, _) = super::sheet(&p, &st, PrintView::TaskTable, true);

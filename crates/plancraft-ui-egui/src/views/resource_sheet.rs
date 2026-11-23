@@ -61,7 +61,8 @@ fn defs(p: &Project) -> Vec<ColumnDef> {
     let cats: Vec<&str> = ResourceCategory::ALL.iter().map(|c| c.label()).collect();
     COLS.iter()
         .map(|c| match c {
-            Col::Indicators => ColumnDef::new("ℹ", 30.0).read_only().center(),
+            // Icon-only: Inter has no info-symbol glyph; cells paint Lucide icons.
+            Col::Indicators => ColumnDef::new("", 30.0).read_only().center(),
             Col::Name => ColumnDef::new("Resource Name", 200.0),
             Col::Type => ColumnDef::new("Type", 74.0).choice(&["Work", "Material", "Cost"]),
             Col::Category => ColumnDef::new("Category", 120.0).choice(&cats),

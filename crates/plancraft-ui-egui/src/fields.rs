@@ -23,7 +23,7 @@ pub enum Field {
 }
 
 /// Built-in columns and their keys (as saved in table layouts). Keys never change.
-const BUILTIN: [(TaskCol, &str); 59] = [
+const BUILTIN: [(TaskCol, &str); 60] = [
     (TaskCol::Indicators, "indicators"),
     (TaskCol::Mode, "mode"),
     (TaskCol::Wbs, "wbs"),
@@ -39,6 +39,7 @@ const BUILTIN: [(TaskCol, &str); 59] = [
     (TaskCol::PercentComplete, "percent_complete"),
     (TaskCol::Status, "status"),
     (TaskCol::RowMark, "row_mark"),
+    (TaskCol::MarkNote, "mark_note"),
     (TaskCol::Work, "work"),
     (TaskCol::ActualWork, "actual_work"),
     (TaskCol::RemainingWork, "remaining_work"),
@@ -336,10 +337,11 @@ fn generated_from_key(key: &str) -> Option<TaskCol> {
 
 /// Columns the chooser offers beyond a table's own layout: cheap, commonly wanted singles
 /// (the Swift app's inspector offers these too).
-const CHOOSER_EXTRAS: [TaskCol; 11] = [
+const CHOOSER_EXTRAS: [TaskCol; 12] = [
     TaskCol::Wbs,
     TaskCol::Status,
     TaskCol::RowMark,
+    TaskCol::MarkNote,
     TaskCol::PercentComplete,
     TaskCol::LevelingDelay,
     TaskCol::Resources,

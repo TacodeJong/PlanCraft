@@ -9,6 +9,7 @@ use zip::write::SimpleFileOptions;
 
 /// One cell. `indent` is the Excel alignment indent (outline depth). `bold` uses the bold font.
 /// `number` writes a numeric cell (`<v>`) so a pivot can sum it; otherwise the text is inline.
+#[derive(Clone)]
 pub struct XlsxCell {
     pub text: String,
     pub bold: bool,

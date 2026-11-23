@@ -55,6 +55,8 @@ pub struct PrintCell {
     pub text: String,
     pub bold: bool,
     pub color: Option<Rgb>,
+    /// Soft row wash (e.g. coloured mark) drawn behind the cell text.
+    pub bg: Option<Rgb>,
     /// Left indent in points (outline level).
     pub indent: f32,
 }
@@ -810,6 +812,9 @@ fn draw_table(out: &mut Vec<Item>, job: &PrintJob, widths: &[f32], cols: &[usize
                 out.push(Item::Rect { rect: cell_rect, fill: Some(pal.header_bg), stroke: None });
             }
             if let Some(cell) = row.cells.get(c) {
+                if let Some(bg) = cell.bg {
+                    out.push(Item::Rect { rect: cell_rect, fill: Some(bg), stroke: None });
+                }
                 let indent = if cell.indent.is_finite() { cell.indent.clamp(0.0, w / 2.0) } else { 0.0 };
                 let r = Rect::new(x + indent, y, w - indent, ROW_H);
                 boxed_text(out, r, &cell.text, TEXT, cell.color.unwrap_or(pal.text), cell.bold, col.align);
@@ -1254,7 +1259,12 @@ pub fn task_sheet(p: &Project, with_chart: bool) -> Sheet {
             let summary = t.sched.is_summary;
             let mut cells = vec![
                 PrintCell::text((i + 1).to_string()),
-                PrintCell { text: t.name.clone(), bold: summary, color: None, indent: f32::from(t.outline_level.saturating_sub(1)) * 10.0 },
+                PrintCell {
+                    text: t.name.clone(),
+                    bold: summary,
+                    indent: f32::from(t.outline_level.saturating_sub(1)) * 10.0,
+                    ..Default::default()
+                },
                 PrintCell::text(p.format_task_duration(t)),
                 PrintCell::text(day(t.sched.start)),
                 PrintCell::text(day(t.sched.finish)),
@@ -1543,7 +1553,7 @@ mod tests {
             rows: (0..50)
                 .map(|i| PrintRow {
                     kind: RowKind::Task(TaskId(i)),
-                    cells: vec![PrintCell { text: "y".repeat(500), bold: true, color: None, indent: f32::INFINITY }],
+                    cells: vec![PrintCell { text: "y".repeat(500), bold: true, indent: f32::INFINITY, ..Default::default() }],
                 })
                 .collect(),
         };

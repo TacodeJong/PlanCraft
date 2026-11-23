@@ -566,6 +566,20 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
                     bp.line_segment([pos2(x, bar_rect.top() - 2.0), pos2(x, bar_rect.bottom() + 2.0)], Stroke::new(2.0, edge));
                     bp.line_segment([pos2(x, bar_rect.top() - 2.0), pos2(x + 3.0 * dir, bar_rect.top() - 2.0)], Stroke::new(2.0, edge));
                 }
+            } else {
+                // Swift-style edge ticks: a pinned start/finish (not Unrestricted) gets a pin mark.
+                let pin = |x: f32| {
+                    bp.line_segment(
+                        [pos2(x, bar_rect.top() - 3.0), pos2(x, bar_rect.bottom() + 3.0)],
+                        Stroke::new(1.5, edge),
+                    );
+                };
+                if t.start_mode() != DateMode::Unrestricted {
+                    pin(bar_rect.left());
+                }
+                if t.finish_mode() != DateMode::Unrestricted {
+                    pin(bar_rect.right());
+                }
             }
             if g.show_progress && t.sched.percent_complete > 0.0 {
                 match (split, t.sched.stop) {

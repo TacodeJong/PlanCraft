@@ -1699,11 +1699,19 @@ impl PlanCraftApp {
             Command::ToggleColumn(key) => {
                 // This user's column choice (the Columns menu): saved with the app settings,
                 // like the theme and language; the plan's shared layout is untouched.
-                let table = self.st.table;
-                let choice = self.st.columns.entry(table.label().to_string()).or_default();
-                crate::fields::toggle_column(&doc.project, table, choice, &key);
-                if choice.is_empty() {
-                    self.st.columns.remove(table.label());
+                if self.st.view == ViewKind::Report {
+                    let choice = self.st.columns.entry(views::report::REPORT_COLUMNS_KEY.into()).or_default();
+                    views::report::toggle_column(choice, &key);
+                    if choice.is_empty() {
+                        self.st.columns.remove(views::report::REPORT_COLUMNS_KEY);
+                    }
+                } else {
+                    let table = self.st.table;
+                    let choice = self.st.columns.entry(table.label().to_string()).or_default();
+                    crate::fields::toggle_column(&doc.project, table, choice, &key);
+                    if choice.is_empty() {
+                        self.st.columns.remove(table.label());
+                    }
                 }
                 self.settings.columns = self.st.columns.clone();
                 self.settings.save();
@@ -1836,9 +1844,12 @@ impl PlanCraftApp {
                     .collect()
             })
             .unwrap_or_default();
-        let columns = doc
-            .map(|d| crate::fields::column_choices(&d.project, self.st.table, self.st.columns.get(self.st.table.label())))
-            .unwrap_or_default();
+        let columns = if self.st.view == ViewKind::Report {
+            views::report::column_choices(&self.st, self.st.columns.get(views::report::REPORT_COLUMNS_KEY))
+        } else {
+            doc.map(|d| crate::fields::column_choices(&d.project, self.st.table, self.st.columns.get(self.st.table.label())))
+                .unwrap_or_default()
+        };
         MenuInfo {
             has_doc: doc.is_some(),
             can_undo: doc.is_some_and(|d| d.can_undo()),
@@ -5273,13 +5284,27 @@ mod ui_tests {
     #[test]
     fn print_window_previews_and_saves_page_setup_with_the_plan() {
         use egui_kittest::kittest::Queryable;
-        let mut h = harness();
+        // egui ID-clash warnings use "🔥"; kittest panics on missing glyphs by default.
+        let mut ws = Workspace::default();
+        ws.add(plancraft_core::sample::demo_project(plancraft_core::dates::ymd(2026, 10, 19).unwrap()), None);
+        let shared = ws.shared();
+        let mut h = Harness::builder()
+            .with_size(vec2(1440.0, 900.0))
+            .allow_missing_glyphs()
+            .with_accessibility_check(false)
+            .build_eframe(move |cc| PlanCraftApp::new(cc, shared));
+        h.run_steps(3);
         h.key_press_modifiers(Modifiers::COMMAND, egui::Key::P);
         h.run_steps(3);
         assert!(h.state().dialogs.print.is_some(), "Ctrl+P opens the Print window");
+        assert!(
+            h.query_all_by_label(crate::lang::text("print.from_empty")).count() > 0,
+            "print dialog From uses a datepicker button"
+        );
         h.get_by_label("Portrait").click();
         h.run_steps(2);
-        h.get_by_label("Close").click();
+        // Document tab chrome and the print dialog both expose dlg.close.
+        h.query_all_by_label(crate::lang::text("dlg.close")).last().expect("print Close").click();
         h.run_steps(3);
         assert!(h.state().dialogs.print.is_none());
         let orientation =

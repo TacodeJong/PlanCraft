@@ -28,6 +28,8 @@ pub enum TaskCol {
     Status,
     /// The row's coloured mark.
     RowMark,
+    /// Free-text note attached to the row mark (open question / reason).
+    MarkNote,
     Work,
     ActualWork,
     RemainingWork,
@@ -243,7 +245,8 @@ impl TaskCol {
         use TaskCol::*;
         let _ = p;
         match self {
-            Indicators => ColumnDef::new("ℹ", 34.0).read_only().center(),
+            // Icon-only: Inter has no info-symbol glyph; cells paint Lucide icons.
+            Indicators => ColumnDef::new("", 34.0).read_only().center(),
             Mode => ColumnDef::new(ct("col.mode"), 46.0).center().choice(&["Auto Scheduled", "Manually Scheduled"]),
             Wbs => ColumnDef::new(ct("col.wbs"), 50.0).read_only(),
             Name => ColumnDef::new(ct("col.name"), 230.0),
@@ -269,6 +272,7 @@ impl TaskCol {
                 names.extend(plancraft_core::model::RowMark::ALL.map(crate::lang::mark_name));
                 ColumnDef::new(ct("col.row_mark"), 86.0).choice(&names)
             }
+            MarkNote => ColumnDef::new(ct("col.mark_note"), 160.0),
             Work => ColumnDef::new(ct("col.work"), 70.0).right(),
             ActualWork => ColumnDef::new(ct("col.actual_work"), 72.0).right().read_only(),
             RemainingWork => ColumnDef::new(ct("col.remaining_work"), 72.0).right().read_only(),
@@ -363,6 +367,14 @@ pub fn indicators(
             theme::pal().ACCENT_MID,
             format!("{} constraint on {}", t.constraint.kind.label(), format::date(t.constraint.date)),
         ));
+    } else if t.start_mode() == DateMode::On || t.finish_mode() == DateMode::On {
+        let tip = match (t.start_mode(), t.finish_mode()) {
+            (DateMode::On, DateMode::On) => format!("Start and finish pinned on {}", format::date(t.sched.start)),
+            (DateMode::On, _) => format!("Start pinned on {}", format::date(t.start_window().0)),
+            (_, DateMode::On) => format!("Finish pinned on {}", format::date(t.finish_window().1)),
+            _ => "Date pinned".into(),
+        };
+        v.push((Glyph::Icon("pin"), theme::pal().ACCENT_MID, tip));
     }
     if overallocated(t.id) {
         v.push((Glyph::Icon("user-round"), theme::pal().ERROR, "A resource assigned to this task is overallocated".into()));
@@ -398,6 +410,17 @@ fn mark_tip(mark: plancraft_core::model::RowMark, note: &str) -> String {
     if note.is_empty() { name.into() } else { format!("{name}\n{note}") }
 }
 
+/// Mode column glyph: pin for Manual or hard date pins, rotate for free Auto.
+fn mode_glyph(t: &Task) -> (&'static str, &'static str) {
+    if t.mode == ScheduleMode::Manual {
+        return ("pin", "Manually Scheduled");
+    }
+    if t.start_mode() == DateMode::On || t.finish_mode() == DateMode::On {
+        return ("pin", "Date pinned");
+    }
+    ("rotate-cw", "Auto Scheduled")
+}
+
 pub struct CellCtx<'a> {
     pub overallocated: &'a dyn Fn(TaskId) -> bool,
     /// In a plan opened from a server: who else is on each task (names, joined).
@@ -416,10 +439,9 @@ pub fn cell(col: TaskCol, p: &Project, idx: usize, ctx: &CellCtx) -> Cell {
             Cell { icons: indicators(p, t, ctx.overallocated, others), ..Default::default() }
         }
         Mode => {
-            let (g, tip) = match t.mode {
-                ScheduleMode::Auto => ("rotate-cw", "Auto Scheduled"),
-                ScheduleMode::Manual => ("pin", "Manually Scheduled"),
-            };
+            // Circle-arrow = free Auto schedule. Pin = Manually Scheduled, or Auto with a hard
+            // date pin (On) — same cue as the Gantt bar edge ticks / Swift pin marks.
+            let (g, tip) = mode_glyph(t);
             Cell {
                 icons: vec![(Glyph::Icon(g), theme::pal().ACCENT_MID, tip.into())],
                 tooltip: Some(tip.into()),
@@ -496,6 +518,17 @@ pub fn cell(col: TaskCol, p: &Project, idx: usize, ctx: &CellCtx) -> Cell {
                 }
             }
         },
+        MarkNote => {
+            if t.row_mark.is_none() && t.mark_note.trim().is_empty() {
+                Cell::default()
+            } else {
+                Cell {
+                    text: t.mark_note.clone(),
+                    bg: t.row_mark.map(theme::row_mark_wash),
+                    ..Default::default()
+                }
+            }
+        }
         Work => Cell::text(format_work(s.work)),
         ActualWork => Cell::text(format_work(s.actual_work)),
         RemainingWork => Cell::text(format_work((s.work - s.actual_work).max(0))),
@@ -705,6 +738,13 @@ pub fn commit(col: TaskCol, p: &mut Project, id: TaskId, text: &str) -> Result<(
                 t.mark_note.clear();
             }
         }
+        MarkNote => {
+            let t = task_mut(p, id)?;
+            if t.row_mark.is_none() && !text.trim().is_empty() {
+                return Err(crate::lang::text("col.mark_note_needs_mark").into());
+            }
+            t.mark_note = if t.row_mark.is_some() { text.to_string() } else { String::new() };
+        }
         PercentComplete => {
             let v: f64 = text.trim().trim_end_matches('%').trim().parse().map_err(|_| format!("'{text}' is not a percentage"))?;
             p.set_percent_complete(id, v.clamp(0.0, 100.0).round() as u8).map_err(err)?;
@@ -888,6 +928,33 @@ mod tests {
         assert_eq!(cell(TaskCol::Start, &p, idx, &ctx).text, plancraft_core::dates::dmy(start.date()));
     }
 
+    #[test]
+    fn mode_column_shows_pin_when_dates_are_pinned() {
+        let mut p = Project::new("S", plancraft_core::dates::ymd(2026, 10, 19).unwrap());
+        let id = p.add_task("Task", None);
+        let idx = p.task_index(id).unwrap();
+        plancraft_core::schedule::recalculate(&mut p);
+        let none = |_: TaskId| false;
+        let ctx = CellCtx { overallocated: &none, others_on: None };
+        assert!(
+            matches!(cell(TaskCol::Mode, &p, idx, &ctx).icons.first(), Some((Glyph::Icon("rotate-cw"), _, _))),
+            "free Auto shows rotate-cw"
+        );
+        let day = p.tasks[idx].sched.start.unwrap();
+        p.tasks[idx].bounds.start_earliest = Some(day);
+        p.tasks[idx].bounds.start_latest = Some(day);
+        assert_eq!(p.tasks[idx].start_mode(), DateMode::On);
+        assert!(
+            matches!(cell(TaskCol::Mode, &p, idx, &ctx).icons.first(), Some((Glyph::Icon("pin"), _, _))),
+            "On pin shows pin, not rotate-cw"
+        );
+        p.set_schedule_mode(&[id], ScheduleMode::Manual).unwrap();
+        assert!(
+            matches!(cell(TaskCol::Mode, &p, idx, &ctx).icons.first(), Some((Glyph::Icon("pin"), _, _))),
+            "Manual mode keeps the pin"
+        );
+    }
+
     /// The Status and Row Mark columns (for the column chooser) show and edit their fields.
     #[test]
     fn status_and_row_mark_columns_show_and_edit() {
@@ -914,8 +981,14 @@ mod tests {
             marked.iter().any(|(g, _, tip)| matches!(g, Glyph::Icon("flag")) && tip == crate::lang::mark_name(Mark::Blue)),
             "{marked:?}"
         );
+        commit(TaskCol::RowMark, &mut p, id, crate::lang::mark_name(Mark::Blue)).unwrap();
+        commit(TaskCol::MarkNote, &mut p, id, "why?").unwrap();
+        assert_eq!(p.task(id).unwrap().mark_note, "why?");
+        assert_eq!(cell(TaskCol::MarkNote, &p, idx, &ctx).text, "why?");
         commit(TaskCol::RowMark, &mut p, id, "").unwrap();
         assert_eq!(p.task(id).unwrap().row_mark, None);
+        assert!(p.task(id).unwrap().mark_note.is_empty());
+        assert!(commit(TaskCol::MarkNote, &mut p, id, "orphan").is_err());
         assert!(commit(TaskCol::Status, &mut p, id, "nonsense").is_err());
     }
 

@@ -26,8 +26,8 @@ pub struct PrintDialog {
     /// changes (Undo, or an agent) the draft follows it rather than overwriting it on close.
     setup: PageSetup,
     base: PageSetup,
-    from: String,
-    to: String,
+    from: Option<Date>,
+    to: Option<Date>,
     page: usize,
     printers: Vec<String>,
     printers_rx: Option<Receiver<Vec<String>>>,
@@ -46,8 +46,8 @@ impl PrintDialog {
             view: PrintView::for_view(st.view),
             setup: doc.project.page_setup.clone(),
             base: doc.project.page_setup.clone(),
-            from: String::new(),
-            to: String::new(),
+            from: None,
+            to: None,
             page: 0,
             printers: Vec::new(),
             printers_rx: printing::HAS_PRINT_SERVICE.then(printing::list_printers),
@@ -62,25 +62,12 @@ impl PrintDialog {
 
     /// The dates to print, or why they are wrong.
     fn range(&self) -> Result<(Option<Date>, Option<Date>), String> {
-        let parse = |s: &str, what: &str| -> Result<Option<Date>, String> {
-            let s = s.trim();
-            if s.is_empty() {
-                return Ok(None);
-            }
-            let d = Date::parse_from_str(s, "%Y-%m-%d").map_err(|_| format!("{what}: enter a date like 2026-11-30"))?;
-            let year = i32::from(d.year());
-            if !(1900..=2300).contains(&year) {
-                return Err(format!("{what}: pick a year between 1900 and 2300"));
-            }
-            Ok(Some(d))
-        };
-        let (a, b) = (parse(&self.from, "From")?, parse(&self.to, "To")?);
-        if let (Some(a), Some(b)) = (a, b)
+        if let (Some(a), Some(b)) = (self.from, self.to)
             && b < a
         {
-            return Err("The To date is before the From date".into());
+            return Err(crate::lang::text("print.range_order").into());
         }
-        Ok((a, b))
+        Ok((self.from, self.to))
     }
 
     /// The printed pages, laid out again only when something they depend on changed (and not
@@ -157,7 +144,7 @@ impl PrintDialog {
             self.setup = doc.project.page_setup.clone();
             self.base = self.setup.clone();
         }
-        let before = (self.view, self.setup.clone(), self.from.clone(), self.to.clone());
+        let before = (self.view, self.setup.clone(), self.from, self.to);
         // Background work: printer list and print jobs.
         if let Some(rx) = &self.printers_rx
             && let Ok(list) = rx.try_recv()
@@ -202,7 +189,8 @@ impl PrintDialog {
                     ui.vertical(|ui| {
                         ui.set_width(290.0);
                         egui::ScrollArea::vertical().max_height(h).show(ui, |ui| {
-                            self.settings(ui, &pages, &mut print_now, &mut save_pdf, &mut close);
+                            let start_minute = doc.project.settings.time.default_start_time;
+                            self.settings(ui, &pages, start_minute, &mut print_now, &mut save_pdf, &mut close);
                         });
                     });
                     ui.separator();
@@ -211,7 +199,7 @@ impl PrintDialog {
             });
 
         // A changed setting shows in the preview at once, not on the next mouse move.
-        if before != (self.view, self.setup.clone(), self.from.clone(), self.to.clone()) {
+        if before != (self.view, self.setup.clone(), self.from, self.to) {
             ctx.request_repaint();
         }
         let range_ok = self.view.is_drawing() || self.range().is_ok();
@@ -233,7 +221,15 @@ impl PrintDialog {
         true
     }
 
-    fn settings(&mut self, ui: &mut Ui, pages: &print::Document, print_now: &mut bool, save_pdf: &mut bool, close: &mut bool) {
+    fn settings(
+        &mut self,
+        ui: &mut Ui,
+        pages: &print::Document,
+        start_minute: u32,
+        print_now: &mut bool,
+        save_pdf: &mut bool,
+        close: &mut bool,
+    ) {
         let weak = theme::pal().TEXT_WEAK;
         let drawing = self.view.is_drawing();
         let heading = |ui: &mut Ui, t: &str| {
@@ -252,11 +248,35 @@ impl PrintDialog {
             ui.end_row();
             // A drawing has no timescale to limit.
             if !drawing {
-                ui.label("From");
-                ui.add(crate::widgets::craft::text_edit(&mut self.from).hint_text("project start").desired_width(170.0));
+                ui.label(crate::lang::text("filter.from"));
+                if let Some(next) = crate::widgets::date_picker::button(
+                    ui,
+                    crate::widgets::date_picker::DateField {
+                        salt: "print_from",
+                        current: self.from.map(plancraft_core::dates::midnight),
+                        clearable: true,
+                        enabled: true,
+                        minute: start_minute,
+                        empty: crate::lang::text("print.from_empty"),
+                    },
+                ) {
+                    self.from = next.map(|dt| dt.date());
+                }
                 ui.end_row();
-                ui.label("To");
-                ui.add(crate::widgets::craft::text_edit(&mut self.to).hint_text("project finish").desired_width(170.0));
+                ui.label(crate::lang::text("filter.to"));
+                if let Some(next) = crate::widgets::date_picker::button(
+                    ui,
+                    crate::widgets::date_picker::DateField {
+                        salt: "print_to",
+                        current: self.to.map(plancraft_core::dates::midnight),
+                        clearable: true,
+                        enabled: true,
+                        minute: start_minute,
+                        empty: crate::lang::text("print.to_empty"),
+                    },
+                ) {
+                    self.to = next.map(|dt| dt.date());
+                }
                 ui.end_row();
             }
             if printing::HAS_PRINT_SERVICE {
