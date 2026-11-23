@@ -119,7 +119,7 @@ impl ResourceDelete {
         // Destructive confirm: block the shell (same family as Save changes?), not a floating Window.
         let modal = crate::widgets::craft::blocking_modal(ctx, egui::Id::unique("resource_delete"), |ui| {
             ui.set_width(420.0);
-            crate::widgets::craft::confirm_title(ui, "Delete Resource");
+            crate::widgets::craft::confirm_title(ui, crate::lang::text("dlg.delete_resource"));
             crate::widgets::craft::confirm_body(ui, body);
             crate::widgets::craft::confirm_note(ui, "Choose a replacement, or remove the assignments.");
             ui.add_space(6.0);
@@ -135,7 +135,7 @@ impl ResourceDelete {
             });
             crate::widgets::craft::confirm_actions_rule(ui);
             ui.horizontal(|ui| {
-                if crate::widgets::craft::secondary_button(ui, "Cancel").clicked() {
+                if crate::widgets::craft::secondary_button(ui, crate::lang::text("common.cancel")).clicked() {
                     open = false;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

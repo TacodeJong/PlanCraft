@@ -63,7 +63,7 @@ proptest! {
     #[test]
     fn durations_parse_in_range(text in cell_text(), unit in units()) {
         let s = TimeSettings::default();
-        if let Some((m, _)) = parse_duration(&text, unit, &s) {
+        if let Some((m, _, _)) = parse_duration(&text, unit, &s) {
             prop_assert!(m.abs() <= MAX_MINUTES, "{text:?} parsed to {m}");
         }
     }
@@ -71,8 +71,9 @@ proptest! {
     #[test]
     fn durations_round_trip(m in 0..=MAX_MINUTES, unit in units(), estimated: bool) {
         let s = TimeSettings::default();
-        let text = format_duration(m, best_unit(m, &s), &s, estimated);
-        prop_assert_eq!(parse_duration(&text, unit, &s), Some((m, estimated)), "{}", text);
+        let shown = best_unit(m, &s);
+        let text = format_duration(m, shown, &s, estimated);
+        prop_assert_eq!(parse_duration(&text, unit, &s), Some((m, estimated, shown)), "{}", text);
     }
 
     #[test]
@@ -123,6 +124,7 @@ proptest! {
                 predecessor: TaskRef::Local(p.tasks[row - 1].id),
                 kind: LinkType::ALL[kind],
                 lag: if lag_days == 0 { Lag::None } else { Lag::Working(lag_days * s.minutes_per_day) },
+                drive: Default::default(),
             })
             .collect();
         // Only links the project accepts (no cycles, no links to summaries containing the task).
@@ -611,7 +613,10 @@ fn apply(p: &mut Project, op: &Op) -> PlanResult<()> {
         Op::Mode(i, manual) => p.set_schedule_mode(&[task_at(p, i)], if manual { ScheduleMode::Manual } else { ScheduleMode::Auto })?,
         Op::ManualDate(i, m, finish) => p.set_manual_date(task_at(p, i), shift(p.start, m), finish)?,
         Op::ElapsedDuration(i, minutes, elapsed) => {
-            p.set_typed_duration(task_at(p, i), TypedDuration { minutes, estimated: false, elapsed })?;
+            p.set_typed_duration(
+                task_at(p, i),
+                TypedDuration { minutes, estimated: false, elapsed, unit: DurationUnit::Days },
+            )?;
         }
     }
     Ok(())

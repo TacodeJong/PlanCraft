@@ -382,14 +382,20 @@ pub fn indicators(
         let n = p.task_index(t.id).map_or(0, |i| p.descendants_range(i).len());
         v.insert(0, (Glyph::Icon("repeat"), theme::pal().ACCENT_MID, format!("Recurring task with {n} occurrences")));
     }
-    // The row mark as a clear flag in the mark's color (the name cell keeps its thin accent,
-    // so a mark stays visible when this column is hidden). Warnings and the like come first.
+    // Row mark first so it survives the two-glyph cap (warnings/notes used to crowd it out).
     if let Some(mark) = t.row_mark {
-        v.push((Glyph::Icon("flag"), theme::row_mark_color(mark), crate::lang::mark_name(mark).into()));
+        let tip = mark_tip(mark, &t.mark_note);
+        v.insert(0, (Glyph::Icon("flag"), theme::row_mark_color(mark), tip));
     }
     let _ = p;
     v.truncate(2);
     v
+}
+
+fn mark_tip(mark: plancraft_core::model::RowMark, note: &str) -> String {
+    let name = crate::lang::mark_name(mark);
+    let note = note.trim();
+    if note.is_empty() { name.into() } else { format!("{name}\n{note}") }
 }
 
 pub struct CellCtx<'a> {
@@ -426,7 +432,7 @@ pub fn cell(col: TaskCol, p: &Project, idx: usize, ctx: &CellCtx) -> Cell {
             let indent = (t.outline_level.saturating_sub(1)) as f32 * 16.0;
             let mut icons = Vec::new();
             if let Some(mark) = t.row_mark {
-                icons.push((Glyph::Dot, theme::row_mark_color(mark), crate::lang::mark_name(mark).into()));
+                icons.push((Glyph::Dot, theme::row_mark_color(mark), mark_tip(mark, &t.mark_note)));
             }
             if t.is_milestone() {
                 icons.push((Glyph::Diamond, theme::pal().MILESTONE, crate::lang::text("rpt.milestone").into()));
@@ -479,11 +485,16 @@ pub fn cell(col: TaskCol, p: &Project, idx: usize, ctx: &CellCtx) -> Cell {
         }
         RowMark => match t.row_mark {
             None => Cell::default(),
-            Some(m) => Cell {
-                text: crate::lang::mark_name(m).into(),
-                icons: vec![(Glyph::Icon("flag"), theme::row_mark_color(m), crate::lang::mark_name(m).into())],
-                ..Default::default()
-            },
+            Some(m) => {
+                let tip = mark_tip(m, &t.mark_note);
+                Cell {
+                    text: crate::lang::mark_name(m).into(),
+                    icons: vec![(Glyph::Icon("flag"), theme::row_mark_color(m), tip.clone())],
+                    tooltip: Some(tip),
+                    bg: Some(theme::row_mark_wash(m)),
+                    ..Default::default()
+                }
+            }
         },
         Work => Cell::text(format_work(s.work)),
         ActualWork => Cell::text(format_work(s.actual_work)),
@@ -688,7 +699,11 @@ pub fn commit(col: TaskCol, p: &mut Project, id: TaskId, text: &str) -> Result<(
                         .ok_or_else(|| format!("'{text}' is not a row mark"))?,
                 )
             };
-            task_mut(p, id)?.row_mark = mark;
+            let t = task_mut(p, id)?;
+            t.row_mark = mark;
+            if mark.is_none() {
+                t.mark_note.clear();
+            }
         }
         PercentComplete => {
             let v: f64 = text.trim().trim_end_matches('%').trim().parse().map_err(|_| format!("'{text}' is not a percentage"))?;

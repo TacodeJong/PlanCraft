@@ -35,6 +35,7 @@ struct PredRow {
     pred: TaskRef,
     kind: LinkType,
     lag: String,
+    drive: LinkDrive,
 }
 
 #[derive(Clone, PartialEq)]
@@ -118,6 +119,7 @@ pub struct TaskInfo {
     notes: String,
     custom: Vec<CustomRow>,
     mark: Option<RowMark>,
+    mark_note: String,
     bar_color: Option<[u8; 3]>,
     error: Option<String>,
     summary: bool,
@@ -174,7 +176,12 @@ impl TaskInfo {
             preds: t
                 .predecessors
                 .iter()
-                .map(|d| PredRow { pred: d.predecessor, kind: d.kind, lag: d.lag.format(&p.settings.time) })
+                .map(|d| PredRow {
+                    pred: d.predecessor,
+                    kind: d.kind,
+                    lag: d.lag.format(&p.settings.time),
+                    drive: d.drive,
+                })
                 .collect(),
             resources: p
                 .assignments_for_task(id)
@@ -219,6 +226,7 @@ impl TaskInfo {
                 })
                 .collect(),
             mark: t.row_mark,
+            mark_note: t.mark_note.clone(),
             bar_color: t.bar_color,
             error: None,
             summary: t.sched.is_summary,
@@ -475,6 +483,12 @@ impl TaskInfo {
             }
             if self.mark != o.mark {
                 t.row_mark = self.mark;
+                if self.mark.is_none() {
+                    t.mark_note.clear();
+                }
+            }
+            if self.mark_note != o.mark_note {
+                t.mark_note = if self.mark.is_some() { self.mark_note.clone() } else { String::new() };
             }
             if self.bar_color != o.bar_color {
                 t.bar_color = self.bar_color;
@@ -600,7 +614,7 @@ impl TaskInfo {
             let mut deps = Vec::new();
             for r in &self.preds {
                 let lag = Lag::parse(&r.lag, &p.settings.time).ok_or_else(|| format!("'{}' is not a valid lag", r.lag))?;
-                deps.push(Dependency { predecessor: r.pred, kind: r.kind, lag });
+                deps.push(Dependency { predecessor: r.pred, kind: r.kind, lag, drive: r.drive });
             }
             p.set_predecessors(id, deps).map_err(err)?;
         }
@@ -711,7 +725,7 @@ impl TaskInfo {
         let next = if dir < 0 { idx.checked_sub(1) } else { idx.checked_add(1) };
         let Some(target) = next.and_then(|i| doc.project.tasks.get(i)).map(|t| t.id) else { return };
         if self.changed() {
-            let label = format!("Task Information: {}", self.name);
+            let label = format!("{}: {}", crate::lang::text("dlg.task_info"), self.name);
             if let Err(e) = doc.edit_msg(&label, |p| self.apply_all(p)) {
                 self.error = Some(e);
                 return;
@@ -727,15 +741,20 @@ impl TaskInfo {
     /// Returns false when the dialog should close.
     pub fn show(&mut self, ctx: &Context, doc: &mut Document) -> bool {
         let mut close = false;
-        let multi = format!("Multiple Task Information ({} tasks)", self.others.len().saturating_add(1));
+        let multi = format!(
+            "{} ({} {})",
+            crate::lang::text("dlg.task_info_multi"),
+            self.others.len().saturating_add(1),
+            crate::lang::text("dlg.tasks")
+        );
         let title = if self.is_multi() {
             multi.as_str()
         } else if self.milestone {
-            "Milestone Information"
+            crate::lang::text("dlg.task_info_milestone")
         } else if self.summary {
-            "Summary Task Information"
+            crate::lang::text("dlg.task_info_summary")
         } else {
-            "Task Information"
+            crate::lang::text("dlg.task_info")
         };
         // Cmd+Up/Down and PageUp/Down walk the outline without closing the dialog.
         let mut nav = 0i64;
@@ -772,7 +791,7 @@ impl TaskInfo {
                     close = true;
                 }
                 ui.horizontal(|ui| {
-                    ui.label("Name:");
+                    ui.label(format!("{}:", crate::lang::text("common.name")));
                     ui.add(crate::widgets::craft::text_edit(&mut self.name).desired_width(320.0));
                     ui.label(crate::lang::text("prop.duration_mode"));
                     let mode_editable = !self.summary && !self.milestone;
@@ -787,11 +806,35 @@ impl TaskInfo {
                                     DurationMode::Fixed => crate::lang::text("prop.duration_fixed"),
                                     DurationMode::Auto => crate::lang::text("prop.duration_auto"),
                                 };
-                                ui.selectable_value(&mut self.duration_mode, mode, text);
+                                if ui.selectable_label(self.duration_mode == mode, text).clicked() && self.duration_mode != mode {
+                                    self.duration_mode = mode;
+                                    if mode == DurationMode::Auto {
+                                        // Match set_duration_mode: Auto fill needs unrestricted sides.
+                                        self.start_earliest = None;
+                                        self.start_latest = None;
+                                        self.start_latest_fixed = false;
+                                        self.finish_earliest = None;
+                                        self.finish_latest = None;
+                                        self.finish_latest_fixed = false;
+                                        if matches!(
+                                            self.constraint,
+                                            ConstraintKind::Snet
+                                                | ConstraintKind::Snlt
+                                                | ConstraintKind::Fnet
+                                                | ConstraintKind::Fnlt
+                                                | ConstraintKind::Mso
+                                                | ConstraintKind::Mfo
+                                        ) {
+                                            self.constraint = ConstraintKind::Asap;
+                                            self.constraint_date.clear();
+                                        }
+                                        self.deadline.clear();
+                                    }
+                                }
                             }
                         });
                     });
-                    ui.label("Duration:");
+                    ui.label(format!("{}:", crate::lang::text("common.duration")));
                     // Several tasks: each milestone or summary among them keeps its own duration.
                     // Auto duration is calculated and read-only until Fixed is selected again.
                     let duration_editable = if self.is_multi() {
@@ -802,29 +845,29 @@ impl TaskInfo {
                     ui.add_enabled(duration_editable, crate::widgets::craft::text_edit(&mut self.duration).desired_width(80.0)).on_hover_text(
                         if self.duration_mode == DurationMode::Auto { crate::lang::text("prop.duration_auto_hint") } else { "" },
                     );
-                    ui.add_enabled(duration_editable, egui::Checkbox::new(&mut self.estimated, "Estimated"));
+                    ui.add_enabled(duration_editable, egui::Checkbox::new(&mut self.estimated, crate::lang::text("prop.estimated")));
                 });
                 ui.add_space(4.0);
                 if self.is_multi() {
-                    ui.label(
-                        RichText::new("Empty fields differ between the tasks. Only the fields you change are applied, to every task.")
-                            .color(theme::pal().TEXT_WEAK),
-                    );
+                    ui.label(RichText::new(crate::lang::text("ti.multi_hint")).color(theme::pal().TEXT_WEAK));
                 }
                 ui.horizontal(|ui| {
-                    let mut tabs = vec![(Tab::General, "General")];
+                    let mut tabs = vec![(Tab::General, crate::lang::text("ti.tab.general"))];
                     // Links, assignments and milestone members belong to one task.
                     if !self.is_multi() {
-                        tabs.extend([(Tab::Predecessors, "Predecessors"), (Tab::Resources, "Resources")]);
+                        tabs.extend([
+                            (Tab::Predecessors, crate::lang::text("ti.tab.predecessors")),
+                            (Tab::Resources, crate::lang::text("ti.tab.resources")),
+                        ]);
                     }
-                    tabs.extend([(Tab::Advanced, "Advanced"), (Tab::Estimate, "Estimate")]);
+                    tabs.extend([(Tab::Advanced, crate::lang::text("ti.tab.advanced")), (Tab::Estimate, crate::lang::text("ti.tab.estimate"))]);
                     if self.milestone && !self.is_multi() {
-                        tabs.push((Tab::Milestone, "Milestone"));
+                        tabs.push((Tab::Milestone, crate::lang::text("ti.tab.milestone")));
                     }
                     if !self.custom.is_empty() {
-                        tabs.push((Tab::Custom, "Custom Fields"));
+                        tabs.push((Tab::Custom, crate::lang::text("ti.tab.custom")));
                     }
-                    tabs.push((Tab::Notes, "Notes"));
+                    tabs.push((Tab::Notes, crate::lang::text("ti.tab.notes")));
                     for (t, l) in tabs {
                         ui.selectable_value(&mut self.tab, t, l);
                     }
@@ -851,14 +894,14 @@ impl TaskInfo {
                 ui.add_space(10.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = crate::widgets::craft::ITEM_GAP + 2.0;
-                    if crate::widgets::craft::secondary_button(ui, "Cancel").clicked() {
+                    if crate::widgets::craft::secondary_button(ui, crate::lang::text("common.cancel")).clicked() {
                         close = true;
                     }
-                    if crate::widgets::craft::primary_button(ui, "OK").clicked() {
+                    if crate::widgets::craft::primary_button(ui, crate::lang::text("common.ok")).clicked() {
                         let label = if self.is_multi() {
-                            "Multiple Task Information".to_string()
+                            crate::lang::text("dlg.task_info_multi").to_string()
                         } else {
-                            format!("Task Information: {}", self.name)
+                            format!("{}: {}", crate::lang::text("dlg.task_info"), self.name)
                         };
                         match doc.edit_msg(&label, |p| self.apply_all(p)) {
                             Ok(()) => close = true,
@@ -1015,7 +1058,11 @@ impl TaskInfo {
     /// A manual task's pinned date is edited by the Start/Finish fields above, so On shows
     /// no duplicate editor then.
     fn date_rule_row(&mut self, ui: &mut Ui, p: &Project, finish: bool, minute: u32) {
-        ui.label(if finish { "Finish:" } else { "Start:" });
+        ui.label(if finish {
+            format!("{}:", crate::lang::text("common.finish"))
+        } else {
+            format!("{}:", crate::lang::text("common.start"))
+        });
         let (min, max) = self.side_window(p, finish);
         let mode = DateMode::of(min, max);
         let mut pick = None;
@@ -1052,7 +1099,7 @@ impl TaskInfo {
                 ui.label(RichText::new(crate::lang::text("dm.calc_deps")).color(theme::pal().TEXT_WEAK));
             }
             DateMode::On if manual => {
-                ui.label(RichText::new("Pinned by the typed dates above").color(theme::pal().TEXT_WEAK));
+                ui.label(RichText::new(crate::lang::text("ti.pinned_dates")).color(theme::pal().TEXT_WEAK));
             }
             DateMode::On => {
                 if let Some(Some(d)) = pick_date(ui, lo_salt, min, false, true, minute, "") {
@@ -1091,7 +1138,7 @@ impl TaskInfo {
         // The "moves the plan" tick belongs to the side's maximum, so it hides with it.
         if matches!(mode, DateMode::On | DateMode::NoLater | DateMode::Between) && !manual {
             let fixed = if finish { &mut self.finish_latest_fixed } else { &mut self.start_latest_fixed };
-            ui.checkbox(fixed, "Moves the plan");
+            ui.checkbox(fixed, crate::lang::text("ti.moves_plan"));
         }
         ui.end_row();
     }
@@ -1099,16 +1146,16 @@ impl TaskInfo {
     /// Multiple Task Information keeps the plain four-field bounds grid: a combined mode
     /// cannot say "differs", the empty-means-differs date fields can.
     fn bounds_grid(&mut self, ui: &mut Ui, p: &Project) {
-        ui.label(RichText::new("No earlier than and no later than").strong());
+        ui.label(RichText::new(crate::lang::text("ti.bounds_title")).strong());
         egui::Grid::new("ti_bounds").num_columns(4).spacing([12.0, 8.0]).show(ui, |ui| {
             let start_minute = p.settings.time.default_start_time;
             let finish_minute = p.settings.time.default_finish_time;
-            let empty = if self.others.is_empty() { "geen" } else { "meerdere" };
-            ui.label("Start no earlier than:");
+            let empty = if self.others.is_empty() { crate::lang::text("common.none_lc") } else { crate::lang::text("common.multiple_lc") };
+            ui.label(crate::lang::text("ti.start_net"));
             if let Some(next) = pick_date(ui, "ti_snet", self.start_earliest, true, true, start_minute, empty) {
                 self.start_earliest = next;
             }
-            ui.label("Start no later than:");
+            ui.label(crate::lang::text("ti.start_nlt"));
             if let Some(next) = pick_date(ui, "ti_snlt", self.start_latest, true, true, start_minute, empty) {
                 self.start_latest = next;
             }
@@ -1117,19 +1164,19 @@ impl TaskInfo {
             ui.label("");
             ui.add_enabled(
                 self.start_latest.is_some(),
-                egui::Checkbox::new(&mut self.start_latest_fixed, "Start no later than moves the plan"),
+                egui::Checkbox::new(&mut self.start_latest_fixed, crate::lang::text("prop.start_fixed")),
             );
             ui.label("");
             ui.add_enabled(
                 self.finish_latest.is_some(),
-                egui::Checkbox::new(&mut self.finish_latest_fixed, "Finish no later than moves the plan"),
+                egui::Checkbox::new(&mut self.finish_latest_fixed, crate::lang::text("prop.finish_fixed")),
             );
             ui.end_row();
-            ui.label("Finish no earlier than:");
+            ui.label(crate::lang::text("ti.finish_net"));
             if let Some(next) = pick_date(ui, "ti_fnet", self.finish_earliest, true, true, finish_minute, empty) {
                 self.finish_earliest = next;
             }
-            ui.label("Finish no later than:");
+            ui.label(crate::lang::text("ti.finish_nlt"));
             if let Some(next) = pick_date(ui, "ti_fnlt", self.finish_latest, true, true, finish_minute, empty) {
                 self.finish_latest = next;
             }
@@ -1140,10 +1187,10 @@ impl TaskInfo {
     fn general(&mut self, ui: &mut Ui, p: &Project) {
         egui::Grid::new("ti_general").num_columns(4).spacing([12.0, 8.0]).show(ui, |ui| {
             // A group's progress rolls up from its subtasks: visible but not editable here.
-            ui.label("Percent complete:");
+            ui.label(crate::lang::text("ti.percent_complete"));
             ui.add_enabled(!self.summary, crate::widgets::craft::text_edit(&mut self.percent).desired_width(60.0))
                 .on_disabled_hover_text(crate::lang::text("prop.from_children"));
-            ui.label("Status:");
+            ui.label(crate::lang::text("ti.status"));
             ui.add_enabled_ui(!self.summary, |ui| {
                 let status_label = self.status.map(crate::lang::status_name).unwrap_or_else(|| crate::lang::text("common.multiple_lc"));
                 egui::ComboBox::from_id_salt("ti_status").width(120.0).selected_text(status_label).show_ui(ui, |ui| {
@@ -1155,26 +1202,26 @@ impl TaskInfo {
                 });
             });
             ui.end_row();
-            ui.label("Priority:");
+            ui.label(crate::lang::text("ti.priority"));
             ui.add(crate::widgets::craft::text_edit(&mut self.priority).desired_width(60.0));
             ui.end_row();
-            ui.label("Schedule mode:");
+            ui.label(crate::lang::text("ti.schedule_mode"));
             ui.horizontal(|ui| {
-                ui.radio_value(&mut self.mode, ScheduleMode::Manual, "Manually Scheduled");
-                ui.radio_value(&mut self.mode, ScheduleMode::Auto, "Auto Scheduled");
+                ui.radio_value(&mut self.mode, ScheduleMode::Manual, crate::lang::text("prop.mode_manual"));
+                ui.radio_value(&mut self.mode, ScheduleMode::Auto, crate::lang::text("prop.mode_auto"));
             });
-            ui.checkbox(&mut self.active, "Active");
-            ui.checkbox(&mut self.on_timeline, "Display on Timeline");
+            ui.checkbox(&mut self.active, crate::lang::text("prop.active"));
+            ui.checkbox(&mut self.on_timeline, crate::lang::text("prop.on_timeline"));
             ui.end_row();
             let manual = self.mode == ScheduleMode::Manual;
             let start_minute = p.settings.time.default_start_time;
             let finish_minute = p.settings.time.default_finish_time;
-            let empty = if self.others.is_empty() { "geen" } else { "meerdere" };
+            let empty = if self.others.is_empty() { crate::lang::text("common.none_lc") } else { crate::lang::text("common.multiple_lc") };
             // A greyed date on an unrestricted side explains itself on hover.
             let unrestricted = |this: &Self, finish: bool| !this.is_multi() && matches!(this.side_window(p, finish), (None, None));
             if self.milestone && !self.is_multi() {
                 // A milestone is one moment, not a start-finish span.
-                ui.label("Date:");
+                ui.label(crate::lang::text("ti.date"));
                 let r = ui.scope(|ui| pick_date(ui, "ti_start", self.start, false, manual, start_minute, empty));
                 if let Some(next) = r.inner {
                     self.start = next;
@@ -1184,7 +1231,7 @@ impl TaskInfo {
                 }
             } else {
                 // A summary's dates come from its subtasks: shown greyed, not editable.
-                ui.label("Start:");
+                ui.label(format!("{}:", crate::lang::text("common.start")));
                 let r = ui.scope(|ui| pick_date(ui, "ti_start", self.start, false, manual && !self.summary, start_minute, empty));
                 if let Some(next) = r.inner {
                     self.start = next;
@@ -1192,7 +1239,7 @@ impl TaskInfo {
                 if !manual && unrestricted(self, false) {
                     r.response.on_hover_text(crate::lang::text("dm.calc_deps"));
                 }
-                ui.label("Finish:");
+                ui.label(format!("{}:", crate::lang::text("common.finish")));
                 let r = ui.scope(|ui| pick_date(ui, "ti_finish", self.finish, false, manual && !self.summary, finish_minute, empty));
                 if let Some(next) = r.inner {
                     self.finish = next;
@@ -1202,44 +1249,60 @@ impl TaskInfo {
                 }
             }
             ui.end_row();
-            ui.label("Actual start:");
+            ui.label(crate::lang::text("ti.actual_start"));
             pick_date_iso(ui, p, "ti_astart", &mut self.actual_start, false, !self.summary, "NA");
-            ui.label("Actual finish:");
+            ui.label(crate::lang::text("ti.actual_finish"));
             pick_date_iso(ui, p, "ti_afinish", &mut self.actual_finish, true, !self.summary, "NA");
             ui.end_row();
             if !self.summary && !self.milestone {
                 let stop = p.task(self.id).and_then(|t| t.sched.stop);
-                ui.label("Stop:");
+                ui.label(crate::lang::text("ti.stop"));
                 ui.label(RichText::new(if stop.is_some() { format::iso(stop) } else { "NA".into() }).color(theme::pal().TEXT_WEAK))
-                    .on_hover_text("End of the work done so far");
-                ui.label("Resume:");
+                    .on_hover_text(crate::lang::text("ti.stop_hint"));
+                ui.label(crate::lang::text("ti.resume"));
                 ui.scope(|ui| {
-                    pick_date_iso(ui, p, "ti_resume", &mut self.resume, false, stop.is_some(), "right after Stop");
+                    pick_date_iso(ui, p, "ti_resume", &mut self.resume, false, stop.is_some(), crate::lang::text("ti.resume_empty"));
                 })
                 .response
-                .on_hover_text("When the remaining work restarts. A later date splits the task.");
+                .on_hover_text(crate::lang::text("ti.resume_hint"));
                 ui.end_row();
             }
             ui.label("");
-            ui.add_enabled(!self.summary, egui::Checkbox::new(&mut self.milestone, "Mark task as milestone"));
+            ui.add_enabled(!self.summary, egui::Checkbox::new(&mut self.milestone, crate::lang::text("prop.milestone")));
             ui.end_row();
             // Row mark and (for a group) the bar colour, in the pane's language.
             if !self.is_multi() {
-                ui.label("Row mark:");
+                ui.label(crate::lang::text("ti.row_mark"));
                 ui.horizontal(|ui| {
                     if let Some(mark) = self.mark {
-                        ui.add(crate::icons::image("flag", 14.0, theme::row_mark_color(mark))).on_hover_text(crate::lang::mark_name(mark));
+                        let tip = if self.mark_note.trim().is_empty() {
+                            crate::lang::mark_name(mark).into()
+                        } else {
+                            format!("{}\n{}", crate::lang::mark_name(mark), self.mark_note.trim())
+                        };
+                        ui.add(crate::icons::image("flag", 14.0, theme::row_mark_color(mark))).on_hover_text(tip);
                     }
                     let label = self.mark.map(crate::lang::mark_name).unwrap_or(crate::lang::text("common.none"));
                     egui::ComboBox::from_id_salt("ti_mark").selected_text(label).show_ui(ui, |ui| {
                         for choice in [None].into_iter().chain(RowMark::ALL.into_iter().map(Some)) {
                             let text = choice.map(crate::lang::mark_name).unwrap_or(crate::lang::text("common.none"));
-                            ui.selectable_value(&mut self.mark, choice, text);
+                            if ui.selectable_value(&mut self.mark, choice, text).clicked() && choice.is_none() {
+                                self.mark_note.clear();
+                            }
                         }
                     });
                 });
+                if self.mark.is_some() {
+                    ui.end_row();
+                    ui.label(crate::lang::text("prop.mark_note"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.mark_note)
+                            .hint_text(crate::lang::text("prop.mark_note_hint"))
+                            .desired_width(280.0),
+                    );
+                }
                 if self.summary {
-                    ui.label("Group color:");
+                    ui.label(crate::lang::text("ti.group_color"));
                     ui.horizontal(|ui| {
                         for rgb in theme::GROUP_SWATCHES {
                             let on = self.bar_color == Some(rgb);
@@ -1264,7 +1327,7 @@ impl TaskInfo {
         if !self.is_multi() {
             // One rule per side, the Project Planner way: Unrestricted, On, no earlier than,
             // no later than or Between, with only the date editors the mode needs.
-            ui.label(RichText::new("Date rules").strong());
+            ui.label(RichText::new(crate::lang::text("ti.date_rules")).strong());
             egui::Grid::new("ti_modes").num_columns(4).spacing([12.0, 8.0]).show(ui, |ui| {
                 let start_minute = p.settings.time.default_start_time;
                 let finish_minute = p.settings.time.default_finish_time;
@@ -1350,16 +1413,16 @@ impl TaskInfo {
         }
         if self.mode == ScheduleMode::Auto {
             let hint = if self.is_multi() {
-                "Start and finish of auto-scheduled tasks are calculated from links, constraints and calendars. Set a constraint on the Advanced tab to pin a date."
+                crate::lang::text("ti.auto_hint_multi")
             } else {
-                "Start and finish of auto-scheduled tasks are calculated from links, date rules and calendars. Set a date rule to On to pin a date."
+                crate::lang::text("ti.auto_hint")
             };
             ui.label(RichText::new(hint).small().color(theme::pal().TEXT_WEAK));
         }
         if let Some(t) = p.task(self.id) {
             ui.add_space(6.0);
             egui::Grid::new("ti_computed").num_columns(4).spacing([12.0, 4.0]).show(ui, |ui| {
-                ui.label(RichText::new("Scheduled:").color(theme::pal().TEXT_WEAK));
+                ui.label(RichText::new(crate::lang::text("ti.scheduled")).color(theme::pal().TEXT_WEAK));
                 if self.milestone {
                     // One moment; work does not apply to a milestone.
                     ui.label(format::date_long(t.sched.start));
@@ -1368,19 +1431,21 @@ impl TaskInfo {
                 }
                 ui.end_row();
                 if !self.milestone {
-                    ui.label(RichText::new("Work:").color(theme::pal().TEXT_WEAK));
-                    ui.label(format!("{} planned, {} actual", format_work(t.sched.work), format_work(t.sched.actual_work)));
+                    ui.label(RichText::new(crate::lang::text("ti.work")).color(theme::pal().TEXT_WEAK));
+                    ui.label(format!("{} {}, {} {}", format_work(t.sched.work), crate::lang::text("ti.planned"), format_work(t.sched.actual_work), crate::lang::text("ti.actual")));
                     ui.end_row();
                 }
-                ui.label(RichText::new("Slack:").color(theme::pal().TEXT_WEAK));
+                ui.label(RichText::new(crate::lang::text("ti.slack")).color(theme::pal().TEXT_WEAK));
                 ui.label(format!(
-                    "total {}, free {}{}",
+                    "{} {}, {} {}{}",
+                    crate::lang::text("ti.total"),
                     p.format_duration(t.sched.total_slack, false),
+                    crate::lang::text("ti.free"),
                     p.format_duration(t.sched.free_slack, false),
-                    if t.sched.critical { " · critical" } else { "" }
+                    if t.sched.critical { format!(" · {}", crate::lang::text("ti.critical")) } else { String::new() }
                 ));
                 ui.end_row();
-                ui.label(RichText::new("Cost:").color(theme::pal().TEXT_WEAK));
+                ui.label(RichText::new(crate::lang::text("ti.cost")).color(theme::pal().TEXT_WEAK));
                 ui.label(format::money(p, t.sched.cost));
                 ui.end_row();
                 for w in &t.sched.warnings {
@@ -1399,8 +1464,15 @@ impl TaskInfo {
 
     fn predecessors(&mut self, ui: &mut Ui, p: &Project) {
         let mut remove = None;
-        egui::Grid::new("ti_preds").striped(true).num_columns(5).spacing([10.0, 6.0]).show(ui, |ui| {
-            for h in ["ID", "Task Name", "Type", "Lag", ""] {
+        egui::Grid::new("ti_preds").striped(true).num_columns(6).spacing([10.0, 6.0]).show(ui, |ui| {
+            for h in [
+                crate::lang::text("col.id"),
+                crate::lang::text("col.name"),
+                crate::lang::text("prop.link_type"),
+                crate::lang::text("prop.drive"),
+                crate::lang::text("prop.lag"),
+                "",
+            ] {
                 ui.label(RichText::new(h).strong());
             }
             ui.end_row();
@@ -1416,8 +1488,21 @@ impl TaskInfo {
                         ui.selectable_value(&mut row.kind, k, k.label());
                     }
                 });
+                let drive_label = match row.drive {
+                    LinkDrive::FromPredecessor => crate::lang::text("prop.drive_pred"),
+                    LinkDrive::FromSuccessor => crate::lang::text("prop.drive_succ"),
+                };
+                egui::ComboBox::from_id_salt(("pred_drive", i)).selected_text(drive_label).width(180.0).show_ui(ui, |ui| {
+                    for d in LinkDrive::ALL {
+                        let label = match d {
+                            LinkDrive::FromPredecessor => crate::lang::text("prop.drive_pred"),
+                            LinkDrive::FromSuccessor => crate::lang::text("prop.drive_succ"),
+                        };
+                        ui.selectable_value(&mut row.drive, d, label);
+                    }
+                });
                 ui.add(crate::widgets::craft::text_edit(&mut row.lag).desired_width(80.0).hint_text("0d"));
-                if crate::icons::button(ui, "x", 18.0, "Remove").clicked() {
+                if crate::icons::button(ui, "x", 18.0, crate::lang::text("common.remove")).clicked() {
                     remove = Some(i);
                 }
                 ui.end_row();
@@ -1428,35 +1513,60 @@ impl TaskInfo {
         }
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.label("Add predecessor:");
-            egui::ComboBox::from_id_salt("pred_add").selected_text("Choose a task…").width(320.0).show_ui(ui, |ui| {
-                for (i, t) in p.tasks.iter().enumerate() {
-                    if t.id == self.id || self.preds.iter().any(|r| r.pred == TaskRef::Local(t.id)) {
-                        continue;
-                    }
-                    let label = format!("{}  {}{}", i + 1, "  ".repeat(t.outline_level as usize - 1), t.name);
-                    if ui.selectable_label(false, label).clicked() {
-                        self.preds.push(PredRow { pred: TaskRef::Local(t.id), kind: LinkType::FS, lag: String::new() });
-                    }
+            ui.label(crate::lang::text("ti.add_predecessor"));
+            let succ = self.id;
+            let choices: Vec<crate::widgets::task_picker::TaskChoice> = p
+                .tasks
+                .iter()
+                .enumerate()
+                .filter_map(|(i, t)| {
+                    let linked = self.preds.iter().any(|r| r.pred == TaskRef::Local(t.id));
+                    let outline_ok = p.task_index(succ).is_some_and(|si| {
+                        !p.descendants_range(i).contains(&si) && !p.descendants_range(si).contains(&i)
+                    });
+                    let enabled = t.id != succ && !linked && outline_ok;
+                    crate::widgets::task_picker::TaskChoice::from_project(p, i, enabled)
+                })
+                .collect();
+            if let Some(pred) =
+                crate::widgets::task_picker::show(ui, "ti_pred_add", crate::lang::text("ti.choose_task"), 320.0, &choices)
+            {
+                if !self.preds.iter().any(|r| r.pred == TaskRef::Local(pred)) {
+                    self.preds.push(PredRow {
+                        pred: TaskRef::Local(pred),
+                        kind: LinkType::FS,
+                        lag: String::new(),
+                        drive: LinkDrive::FromPredecessor,
+                    });
                 }
-                for e in &p.external_projects {
-                    for s in &e.tasks {
-                        let r = TaskRef::External { project: e.id, task: s.id };
-                        if self.preds.iter().any(|x| x.pred == r) {
-                            continue;
-                        }
-                        if ui
-                            .add(egui::Button::image_and_text(
-                                crate::icons::image("link", 12.0, theme::pal().TEXT),
-                                format!("{}\\{}", e.name, s.name),
-                            ))
-                            .clicked()
-                        {
-                            self.preds.push(PredRow { pred: r, kind: LinkType::FS, lag: String::new() });
+            }
+            // External deliverables stay in a short side menu (search is for the local sheet).
+            if !p.external_projects.is_empty() {
+                egui::ComboBox::from_id_salt("pred_add_ext").selected_text("…").width(40.0).show_ui(ui, |ui| {
+                    for e in &p.external_projects {
+                        for s in &e.tasks {
+                            let r = TaskRef::External { project: e.id, task: s.id };
+                            if self.preds.iter().any(|x| x.pred == r) {
+                                continue;
+                            }
+                            if ui
+                                .add(egui::Button::image_and_text(
+                                    crate::icons::image("link", 12.0, theme::pal().TEXT),
+                                    format!("{}\\{}", e.name, s.name),
+                                ))
+                                .clicked()
+                            {
+                                self.preds.push(PredRow {
+                                    pred: r,
+                                    kind: LinkType::FS,
+                                    lag: String::new(),
+                                    drive: LinkDrive::FromPredecessor,
+                                });
+                            }
                         }
                     }
-                }
-            });
+                });
+            }
         });
         // Typed entry besides the picker: row numbers with optional type and lag ("12", "12FS+2d").
         ui.horizontal(|ui| {
@@ -1470,7 +1580,12 @@ impl TaskInfo {
                     Ok(deps) => {
                         for d in deps {
                             if d.predecessor != TaskRef::Local(self.id) && !self.preds.iter().any(|r| r.pred == d.predecessor) {
-                                self.preds.push(PredRow { pred: d.predecessor, kind: d.kind, lag: d.lag.format(&p.settings.time) });
+                                self.preds.push(PredRow {
+                                    pred: d.predecessor,
+                                    kind: d.kind,
+                                    lag: d.lag.format(&p.settings.time),
+                                    drive: d.drive,
+                                });
                             }
                         }
                         self.error = None;
@@ -1482,9 +1597,7 @@ impl TaskInfo {
             ui.ctx().data_mut(|d| d.insert_temp(id, typed));
         });
         ui.label(
-            RichText::new(
-                "Lag examples: 2d, -1d (lead), 50%, 3ed (elapsed days). Link to tasks in other files via Project > Links Between Projects.",
-            )
+            RichText::new(crate::lang::text("ti.pred_lag_hint"))
             .small()
             .color(theme::pal().TEXT_WEAK),
         );
@@ -1493,13 +1606,19 @@ impl TaskInfo {
     fn resources_tab(&mut self, ui: &mut Ui, p: &Project) {
         if self.summary {
             let names = p.format_resource_names_only(self.id);
-            ui.label("A group's resources are the resources of its tasks.");
-            ui.label(if names.is_empty() { "geen" } else { names.as_str() });
+            ui.label(crate::lang::text("ti.group_resources"));
+            ui.label(if names.is_empty() { crate::lang::text("common.none_lc") } else { names.as_str() });
             return;
         }
         let mut remove = None;
         egui::Grid::new("ti_res").striped(true).num_columns(5).spacing([10.0, 6.0]).show(ui, |ui| {
-            for h in ["Resource Name", "Type", "Units", "Work", ""] {
+            for h in [
+                crate::lang::text("team.resource"),
+                crate::lang::text("col.type"),
+                crate::lang::text("prop.units"),
+                crate::lang::text("prop.work"),
+                "",
+            ] {
                 ui.label(RichText::new(h).strong());
             }
             ui.end_row();
@@ -1509,7 +1628,7 @@ impl TaskInfo {
                 ui.label(r.map(|r| r.category.label()).unwrap_or_default());
                 ui.add(crate::widgets::craft::text_edit(&mut row.units).desired_width(60.0));
                 ui.add(crate::widgets::craft::text_edit(&mut row.work).desired_width(70.0).hint_text("auto"));
-                if crate::icons::button(ui, "x", 18.0, "Remove").clicked() {
+                if crate::icons::button(ui, "x", 18.0, crate::lang::text("common.remove")).clicked() {
                     remove = Some(i);
                 }
                 ui.end_row();
@@ -1520,7 +1639,7 @@ impl TaskInfo {
         }
         // The same checkbox multi-select as the properties pane: tick to assign, untick to remove.
         ui.horizontal(|ui| {
-            ui.label("Add resource:");
+            ui.label(crate::lang::text("ti.add_resource"));
             let button = crate::widgets::craft::secondary_button(ui, crate::lang::text("ti.choose_resources"));
             egui::Popup::from_toggle_button_response(&button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
                 ui.set_min_width(220.0);
@@ -1539,7 +1658,7 @@ impl TaskInfo {
             });
         });
         ui.label(
-            RichText::new("Leave Work empty to derive it from the duration (or the estimate for a first assignment).")
+            RichText::new(crate::lang::text("ti.work_empty_hint"))
                 .small()
                 .color(theme::pal().TEXT_WEAK),
         );
@@ -1548,7 +1667,7 @@ impl TaskInfo {
     fn advanced(&mut self, ui: &mut Ui, p: &Project) {
         egui::Grid::new("ti_adv").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             // Same order as the Planning properties tab: constraint (start-side bound) before deadline.
-            ui.label("Constraint type:");
+            ui.label(crate::lang::text("ti.constraint_type"));
             egui::ComboBox::from_id_salt("ti_ctype").selected_text(self.constraint.label()).width(200.0).show_ui(ui, |ui| {
                 for k in ConstraintKind::ALL {
                     ui.selectable_value(&mut self.constraint, k, k.label());
@@ -1556,7 +1675,7 @@ impl TaskInfo {
             });
             ui.end_row();
             // The date only means something for a constraint type that takes one.
-            ui.label("Constraint date:");
+            ui.label(format!("{}:", crate::lang::text("prop.constraint_date")));
             pick_date_iso(
                 ui,
                 p,
@@ -1564,47 +1683,47 @@ impl TaskInfo {
                 &mut self.constraint_date,
                 !self.constraint.is_start_constraint(),
                 self.constraint.needs_date(),
-                "geen",
+                crate::lang::text("common.none_lc"),
             );
             ui.end_row();
-            ui.label("Deadline:");
+            ui.label(format!("{}:", crate::lang::text("prop.deadline")));
             pick_date_iso(ui, p, "ti_deadline", &mut self.deadline, true, true, "NA");
             ui.end_row();
-            ui.label("Task type:");
+            ui.label(format!("{}:", crate::lang::text("prop.task_type")));
             egui::ComboBox::from_id_salt("ti_ttype")
                 .selected_text(match self.task_type {
-                    TaskType::FixedUnits => "Fixed Units",
-                    TaskType::FixedDuration => "Fixed Duration",
-                    TaskType::FixedWork => "Fixed Work",
+                    TaskType::FixedUnits => crate::lang::text("prop.type_fixed_units"),
+                    TaskType::FixedDuration => crate::lang::text("prop.type_fixed_duration"),
+                    TaskType::FixedWork => crate::lang::text("prop.type_fixed_work"),
                 })
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.task_type, TaskType::FixedUnits, "Fixed Units");
-                    ui.selectable_value(&mut self.task_type, TaskType::FixedDuration, "Fixed Duration");
-                    ui.selectable_value(&mut self.task_type, TaskType::FixedWork, "Fixed Work");
+                    ui.selectable_value(&mut self.task_type, TaskType::FixedUnits, crate::lang::text("prop.type_fixed_units"));
+                    ui.selectable_value(&mut self.task_type, TaskType::FixedDuration, crate::lang::text("prop.type_fixed_duration"));
+                    ui.selectable_value(&mut self.task_type, TaskType::FixedWork, crate::lang::text("prop.type_fixed_work"));
                 });
             ui.end_row();
             ui.label("");
-            ui.checkbox(&mut self.effort_driven, "Effort driven");
+            ui.checkbox(&mut self.effort_driven, crate::lang::text("prop.effort_driven"));
             ui.end_row();
-            ui.label("Calendar:");
-            let cal_name = self.calendar.and_then(|c| p.calendar(c)).map(|c| c.name.clone()).unwrap_or_else(|| "None".into());
+            ui.label(format!("{}:", crate::lang::text("prop.calendar")));
+            let cal_name = self.calendar.and_then(|c| p.calendar(c)).map(|c| c.name.clone()).unwrap_or_else(|| crate::lang::text("common.none").to_string());
             egui::ComboBox::from_id_salt("ti_cal").selected_text(cal_name).show_ui(ui, |ui| {
-                ui.selectable_value(&mut self.calendar, None, "None");
+                ui.selectable_value(&mut self.calendar, None, crate::lang::text("common.none"));
                 for c in &p.calendars {
                     ui.selectable_value(&mut self.calendar, Some(c.id), &c.name);
                 }
             });
             ui.end_row();
             ui.label("");
-            ui.checkbox(&mut self.ignore_res_cal, "Scheduling ignores resource calendars");
+            ui.checkbox(&mut self.ignore_res_cal, crate::lang::text("prop.ignore_res_cal"));
             ui.end_row();
-            ui.label("Fixed cost:");
+            ui.label(format!("{}:", crate::lang::text("prop.fixed_cost")));
             ui.add(crate::widgets::craft::text_edit(&mut self.fixed_cost).desired_width(100.0));
             ui.end_row();
-            ui.label("WBS code:");
+            ui.label(crate::lang::text("ti.wbs"));
             ui.label(p.task_index(self.id).map(|i| p.wbs(i)).unwrap_or_default());
             ui.end_row();
-            ui.label("Unique ID:");
+            ui.label(crate::lang::text("ti.unique_id"));
             ui.label(self.id.0.to_string());
             ui.end_row();
         });
@@ -1675,7 +1794,7 @@ impl TaskInfo {
                 };
                 if f.kind == CustomFieldKind::Date {
                     let salt = format!("ti_custom_date{}", row.field.0);
-                    pick_date_iso(ui, p, &salt, &mut row.text, false, true, "geen");
+                    pick_date_iso(ui, p, &salt, &mut row.text, false, true, crate::lang::text("common.none_lc"));
                 } else if options.is_empty() {
                     let hint = match f.kind {
                         CustomFieldKind::Duration => "e.g. 3d",
@@ -1712,7 +1831,7 @@ impl TaskInfo {
         for (i, m) in self.members.iter().enumerate() {
             ui.horizontal(|ui| {
                 ui.label(p.task_ref_name(m));
-                if crate::icons::button(ui, "x", 18.0, "Remove").clicked() {
+                if crate::icons::button(ui, "x", 18.0, crate::lang::text("common.remove")).clicked() {
                     remove = Some(i);
                 }
             });

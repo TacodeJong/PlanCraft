@@ -542,19 +542,22 @@ pub enum PropTab {
     #[default]
     General,
     Planning,
+    Linkage,
     Resources,
     Progress,
     Notes,
 }
 
 impl PropTab {
-    pub const ALL: [PropTab; 5] = [PropTab::General, PropTab::Planning, PropTab::Resources, PropTab::Progress, PropTab::Notes];
+    pub const ALL: [PropTab; 6] =
+        [PropTab::General, PropTab::Planning, PropTab::Linkage, PropTab::Resources, PropTab::Progress, PropTab::Notes];
 
     /// Stable id for the panel tab strip (craft-ui panel tab key).
     pub fn id(self) -> &'static str {
         match self {
             PropTab::General => "general",
             PropTab::Planning => "planning",
+            PropTab::Linkage => "linkage",
             PropTab::Resources => "resources",
             PropTab::Progress => "progress",
             PropTab::Notes => "notes",
@@ -565,6 +568,7 @@ impl PropTab {
         crate::lang::text(match self {
             PropTab::General => "prop.tab.general",
             PropTab::Planning => "prop.tab.planning",
+            PropTab::Linkage => "prop.tab.linkage",
             PropTab::Resources => "prop.tab.resources",
             PropTab::Progress => "prop.tab.progress",
             PropTab::Notes => "prop.tab.notes",
@@ -594,6 +598,7 @@ pub struct UiState {
     pub focus: Option<ActivityFocus>,
     pub status_filter: Option<TaskStatus>,
     pub kind_filter: TaskKindFilter,
+    pub mark_filter: MarkFilter,
     pub date_window: DateWindow,
     pub date_from: Option<Date>,
     pub date_to: Option<Date>,
@@ -671,6 +676,7 @@ impl Default for UiState {
             focus: None,
             status_filter: None,
             kind_filter: TaskKindFilter::All,
+            mark_filter: MarkFilter::All,
             date_window: DateWindow::All,
             date_from: None,
             date_to: None,
@@ -833,6 +839,56 @@ impl TaskKindFilter {
             TaskKindFilter::Milestones => "filter.milestones",
             TaskKindFilter::Groups => "filter.groups",
         })
+    }
+}
+
+/// Filter bar: keep every row, only marked rows, unmarked, or one colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum MarkFilter {
+    #[default]
+    All,
+    Any,
+    None,
+    Amber,
+    Blue,
+    Pink,
+    Green,
+}
+
+impl MarkFilter {
+    pub const ALL: [MarkFilter; 7] = [
+        MarkFilter::All,
+        MarkFilter::Any,
+        MarkFilter::None,
+        MarkFilter::Amber,
+        MarkFilter::Blue,
+        MarkFilter::Pink,
+        MarkFilter::Green,
+    ];
+
+    pub fn label(self) -> &'static str {
+        crate::lang::text(match self {
+            MarkFilter::All => "filter.mark_all",
+            MarkFilter::Any => "filter.mark_any",
+            MarkFilter::None => "filter.mark_none",
+            MarkFilter::Amber => "mark.amber",
+            MarkFilter::Blue => "mark.blue",
+            MarkFilter::Pink => "mark.pink",
+            MarkFilter::Green => "mark.green",
+        })
+    }
+
+    pub fn matches(self, mark: Option<plancraft_core::model::RowMark>) -> bool {
+        use plancraft_core::model::RowMark;
+        match self {
+            MarkFilter::All => true,
+            MarkFilter::Any => mark.is_some(),
+            MarkFilter::None => mark.is_none(),
+            MarkFilter::Amber => mark == Some(RowMark::Amber),
+            MarkFilter::Blue => mark == Some(RowMark::Blue),
+            MarkFilter::Pink => mark == Some(RowMark::Pink),
+            MarkFilter::Green => mark == Some(RowMark::Green),
+        }
     }
 }
 

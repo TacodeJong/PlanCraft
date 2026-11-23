@@ -73,14 +73,14 @@ impl ResourceInfo {
     pub fn show(&mut self, ctx: &Context, doc: &mut Document) -> bool {
         let mut open = true;
         let mut close = false;
-        egui::Window::new("Resource Information")
+        egui::Window::new(crate::lang::text("dlg.resource_info"))
             .id(egui::Id::unique("resource_info"))
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 120.0))
             .title_bar(false)
             .default_width(560.0)
             .show(ctx, |ui| {
-                open = crate::widgets::craft::dialog_header(ui, "Resource Information");
+                open = crate::widgets::craft::dialog_header(ui, crate::lang::text("dlg.resource_info"));
                 ui.horizontal(|ui| {
                     for (t, l) in [(Tab::General, "General"), (Tab::TimeOff, "Time Off & Working Time"), (Tab::Availability, "Availability"), (Tab::Notes, "Notes")] {
                         ui.selectable_value(&mut self.tab, t, l);
@@ -242,10 +242,10 @@ impl ResourceInfo {
                 ui.add_space(10.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = crate::widgets::craft::ITEM_GAP + 2.0;
-                    if crate::widgets::craft::secondary_button(ui, "Cancel").clicked() {
+                    if crate::widgets::craft::secondary_button(ui, crate::lang::text("common.cancel")).clicked() {
                         close = true;
                     }
-                    if crate::widgets::craft::primary_button(ui, "OK").clicked() {
+                    if crate::widgets::craft::primary_button(ui, crate::lang::text("common.ok")).clicked() {
                         let mut draft = self.draft.clone();
                         let parsed = (|| -> Result<(), String> {
                             // Only numbers typed here: re-reading the shown text would round them.

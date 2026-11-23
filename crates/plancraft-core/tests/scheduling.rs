@@ -44,6 +44,82 @@ fn finish_to_start_chain_crosses_weekend() {
     assert!(p.task(a).unwrap().sched.critical && p.task(b).unwrap().sched.critical);
 }
 
+/// Successor-driven FS: report stays the predecessor of meeting docs, but early dates pull the
+/// report toward a pinned meeting (across groups — no ALAP on a shared parent).
+#[test]
+fn successor_driven_fs_pulls_predecessor_to_pinned_successor() {
+    let mut p = project();
+    let report = task(&mut p, "Send report", 1);
+    let docs = task(&mut p, "Send meeting docs", 1);
+    // Meeting is fixed in a later week; report would otherwise sit at project start.
+    p.set_date_mode(docs, false, DateMode::On).unwrap();
+    p.set_date_window(docs, false, Some(dt(2026, 11, 2, 8)), Some(dt(2026, 11, 2, 8))).unwrap();
+    p.link_drive(report.into(), docs, LinkType::FS, Lag::None, Some(LinkDrive::FromSuccessor)).unwrap();
+    recalculate(&mut p);
+    assert_eq!(start(&p, docs), dt(2026, 11, 2, 8), "docs stay pinned");
+    // Report finishes when docs start (FS, no lag): Friday 30 Oct.
+    assert_eq!(finish(&p, report), dt(2026, 10, 30, 17));
+    assert_eq!(start(&p, report), dt(2026, 10, 30, 8));
+    assert_eq!(p.task(docs).unwrap().predecessors[0].drive, LinkDrive::FromSuccessor);
+}
+
+#[test]
+fn predecessor_driven_fs_still_pushes_successor() {
+    let mut p = project();
+    let report = task(&mut p, "Send report", 2);
+    let docs = task(&mut p, "Send meeting docs", 1);
+    p.link(report.into(), docs, LinkType::FS, Lag::None).unwrap();
+    recalculate(&mut p);
+    assert_eq!(finish(&p, report), dt(2026, 10, 20, 17));
+    assert_eq!(start(&p, docs), dt(2026, 10, 21, 8));
+    assert!(p.task(docs).unwrap().predecessors[0].drive.is_default());
+}
+
+/// Fixed → Auto used to leave No-later / On pins in place, so share fill never ran and the
+/// duration looked unchanged. Auto now clears own date rules (like Remaining space).
+#[test]
+fn switching_to_auto_clears_date_pins_and_fills_the_group_window() {
+    let mut p = project();
+    let g = p.add_task("Group", None);
+    let end = dt(2026, 10, 30, 17); // two working weeks from Mon 19
+    {
+        let t = p.task_mut(g).unwrap();
+        t.bounds.start_earliest = Some(dt(2026, 10, 19, 8));
+        t.bounds.finish_latest = Some(end);
+    }
+    let leaf = task(&mut p, "Leaf", 2);
+    {
+        let t = p.task_mut(leaf).unwrap();
+        t.outline_level = 2;
+        t.fills_group = false;
+        t.bounds.finish_latest = Some(dt(2026, 10, 21, 17));
+        t.bounds.finish_latest_fixed = true;
+    }
+    assert_ne!(p.task(leaf).unwrap().finish_mode(), DateMode::Unrestricted);
+    p.set_duration_mode(leaf, DurationMode::Auto).unwrap();
+    assert_eq!(p.task(leaf).unwrap().finish_mode(), DateMode::Unrestricted, "Auto clears own finish pin");
+    assert_eq!(p.task(leaf).unwrap().duration_mode, DurationMode::Auto);
+    recalculate(&mut p);
+    let window = p.settings.time.minutes_per_day * 10; // Mon 19 → Fri 30 inclusive ≈ 10 workdays
+    let got = p.task(leaf).unwrap().sched.duration;
+    assert!(got > 2 * DAY, "Auto fills the group window, got {got} (stored stays {})", p.task(leaf).unwrap().duration);
+    assert!((got - window).abs() <= DAY, "expected about {window}, got {got}");
+}
+
+#[test]
+fn successor_drive_round_trips_in_predecessors_column() {
+    let mut p = project();
+    let a = task(&mut p, "A", 1);
+    let b = task(&mut p, "B", 1);
+    p.link_drive(a.into(), b, LinkType::FS, Lag::None, Some(LinkDrive::FromSuccessor)).unwrap();
+    let text = p.format_predecessors(b);
+    assert_eq!(text, "1FS<");
+    let parsed = p.parse_predecessors(&text).unwrap();
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].drive, LinkDrive::FromSuccessor);
+    assert_eq!(parsed[0].kind, LinkType::FS);
+}
+
 #[test]
 fn link_types_and_lags() {
     let mut p = project();
@@ -995,7 +1071,9 @@ fn finish_links_into_an_automatic_summary_are_refused() {
     for kind in [LinkType::FF, LinkType::SF] {
         let err = p.link(x.into(), s, kind, Lag::None).unwrap_err();
         assert!(err.to_string().contains("subtasks"), "{err}");
-        let err = p.set_predecessors(s, vec![Dependency { predecessor: x.into(), kind, lag: Lag::None }]).unwrap_err();
+        let err = p
+            .set_predecessors(s, vec![Dependency { predecessor: x.into(), kind, lag: Lag::None, drive: Default::default() }])
+            .unwrap_err();
         assert!(err.to_string().contains("subtasks"), "{err}");
     }
     assert!(p.task(s).unwrap().predecessors.is_empty(), "a refused link leaves nothing behind");

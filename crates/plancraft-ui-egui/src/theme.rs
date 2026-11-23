@@ -466,6 +466,16 @@ pub fn row_mark_color(mark: plancraft_core::model::RowMark) -> Color32 {
     }
 }
 
+/// Soft whole-row wash for a [`row_mark`](plancraft_core::model::RowMark) so the outline shows
+/// the mark even when the indicators column is hidden or truncated.
+pub fn row_mark_wash(mark: plancraft_core::model::RowMark) -> Color32 {
+    let bg = pal().BG;
+    let accent = row_mark_color(mark);
+    let t = 0.18;
+    let mix = |a: u8, b: u8| (f32::from(a) * (1.0 - t) + f32::from(b) * t).round().clamp(0.0, 255.0) as u8;
+    Color32::from_rgb(mix(bg.r(), accent.r()), mix(bg.g(), accent.g()), mix(bg.b(), accent.b()))
+}
+
 /// Row tint for a task on the highlighted dependency chain. Direct links are stronger.
 pub fn path_row(direct: bool) -> Color32 {
     let bg = pal().BG;

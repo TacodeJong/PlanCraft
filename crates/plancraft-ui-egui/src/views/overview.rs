@@ -445,6 +445,9 @@ fn row_mark_combo(ui: &mut Ui, doc: &mut Document, st: &mut UiState, id: TaskId,
             if let Err(e) = doc.edit_msg("Row mark", move |p| {
                 if let Some(t) = p.task_mut(id) {
                     t.row_mark = choice;
+                    if choice.is_none() {
+                        t.mark_note.clear();
+                    }
                 }
                 Ok(())
             }) {

@@ -548,6 +548,9 @@ fn planner_entries(t: &Task) -> Vec<(codes::PlannerField, String)> {
     if let Some(mark) = t.row_mark {
         out.push((codes::PlannerField::RowMark, mark.token().into()));
     }
+    if !t.mark_note.trim().is_empty() {
+        out.push((codes::PlannerField::MarkNote, t.mark_note.clone()));
+    }
     if t.status != TaskStatus::NotStarted {
         out.push((codes::PlannerField::Status, t.status.token().into()));
     }

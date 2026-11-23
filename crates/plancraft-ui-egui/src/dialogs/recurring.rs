@@ -136,7 +136,7 @@ impl RecurringTask {
         let date =
             |s: &str, what: &str| Date::parse_from_str(s.trim(), "%Y-%m-%d").map_err(|_| format!("{what} must look like YYYY-MM-DD"));
         let duration = parse_duration(&self.duration, p.settings.duration_unit, &p.settings.time)
-            .map(|(m, _)| m)
+            .map(|(m, _, _)| m)
             .ok_or("The duration isn't one PlanCraft understands, e.g. 1h or 2d")?;
         // Only monthly and yearly patterns read the day fields.
         let on = || -> Result<MonthDay, String> {
@@ -231,14 +231,14 @@ impl RecurringTask {
     pub fn show(&mut self, ctx: &Context, doc: &mut Document, st: &mut UiState) -> bool {
         let mut open = true;
         let mut close = false;
-        egui::Window::new("Recurring Task Information")
+        egui::Window::new(crate::lang::text("dlg.recurring_info"))
             .id(egui::Id::unique("recurring_task"))
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 120.0))
             .title_bar(false)
             .resizable(false)
             .show(ctx, |ui| {
-                open = crate::widgets::craft::dialog_header(ui, "Recurring Task Information");
+                open = crate::widgets::craft::dialog_header(ui, crate::lang::text("dlg.recurring_info"));
                 ui.horizontal(|ui| {
                     ui.label("Task name:");
                     ui.add_sized([220.0, 20.0], egui::TextEdit::singleline(&mut self.name).hint_text("e.g. Team meeting"));
@@ -337,10 +337,10 @@ impl RecurringTask {
                 let row = egui::vec2(ui.available_width(), crate::widgets::craft::CONTROL_H);
                 ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = crate::widgets::craft::ITEM_GAP + 2.0;
-                    if crate::widgets::craft::secondary_button(ui, "Cancel").clicked() {
+                    if crate::widgets::craft::secondary_button(ui, crate::lang::text("common.cancel")).clicked() {
                         close = true;
                     }
-                    if crate::widgets::craft::primary_button(ui, "OK").clicked() {
+                    if crate::widgets::craft::primary_button(ui, crate::lang::text("common.ok")).clicked() {
                         match self.apply(doc) {
                             Ok(msg) => {
                                 st.toast(ToastKind::Success, msg);

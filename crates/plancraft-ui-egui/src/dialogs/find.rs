@@ -101,7 +101,7 @@ impl FindReplace {
         if self.field.as_ref().is_some_and(|k| !shown.iter().any(|f| f.key() == *k)) {
             self.field = None;
         }
-        let title = if self.replacing { "Replace" } else { "Find" };
+        let title = if self.replacing { crate::lang::text("dlg.replace") } else { crate::lang::text("dlg.find") };
         egui::Window::new(title)
             .id(egui::Id::unique("find_dialog"))
             .pivot(egui::Align2::RIGHT_TOP)
@@ -161,7 +161,7 @@ impl FindReplace {
                     } else if crate::widgets::craft::secondary_button(ui, "Replace…").clicked() {
                         self.replacing = true;
                     }
-                    if crate::widgets::craft::secondary_button(ui, "Close").clicked() {
+                    if crate::widgets::craft::secondary_button(ui, crate::lang::text("dlg.close")).clicked() {
                         close = true;
                     }
                 });
@@ -297,14 +297,14 @@ impl GoTo {
         let mut close = false;
         let mut go = false;
         let mut in_fields = false;
-        egui::Window::new("Go To")
+        egui::Window::new(crate::lang::text("dlg.goto"))
             .id(egui::Id::unique("goto_dialog"))
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 140.0))
             .title_bar(false)
             .resizable(false)
             .show(ctx, |ui| {
-                open = crate::widgets::craft::dialog_header(ui, "Go To");
+                open = crate::widgets::craft::dialog_header(ui, crate::lang::text("dlg.goto"));
                 egui::Grid::new("goto_grid").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
                     ui.label("ID:");
                     let r = ui.add(crate::widgets::craft::text_edit(&mut self.id).desired_width(120.0).hint_text("row number"));
@@ -326,7 +326,7 @@ impl GoTo {
                     if crate::widgets::craft::primary_button(ui, "Go").clicked() {
                         go = true;
                     }
-                    if crate::widgets::craft::secondary_button(ui, "Cancel").clicked() {
+                    if crate::widgets::craft::secondary_button(ui, crate::lang::text("common.cancel")).clicked() {
                         close = true;
                     }
                 });

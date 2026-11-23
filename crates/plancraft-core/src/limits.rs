@@ -659,7 +659,12 @@ mod tests {
         t.outline_level = 9;
         t.deadline = crate::dates::ymd(9999, 1, 1).and_then(|d| d.and_hms_opt(0, 0, 0));
         t.name = "x".repeat(5000);
-        t.predecessors.push(crate::model::Dependency { predecessor: b.into(), kind: LinkType::FS, lag: Lag::Percent(i32::MIN) });
+        t.predecessors.push(crate::model::Dependency {
+            predecessor: b.into(),
+            kind: LinkType::FS,
+            lag: Lag::Percent(i32::MIN),
+            drive: Default::default(),
+        });
         p.settings.time.minutes_per_day = 0;
         let notes = sanitize(&mut p);
         let t = p.task(a).unwrap();
@@ -697,7 +702,12 @@ mod tests {
         };
         p.external_projects = vec![link("First"), link("Second")];
         let missing = TaskId(p.ids.task + 1);
-        let dep = |predecessor: TaskRef| Dependency { predecessor, kind: LinkType::FS, lag: Lag::None };
+        let dep = |predecessor: TaskRef| Dependency {
+            predecessor,
+            kind: LinkType::FS,
+            lag: Lag::None,
+            drive: Default::default(),
+        };
         p.task_mut(b).unwrap().predecessors = vec![
             dep(TaskRef::Local(a)),
             dep(TaskRef::Local(missing)),

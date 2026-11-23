@@ -3,7 +3,7 @@
 use egui::{Rect, RichText, Ui, vec2};
 use plancraft_core::prelude::*;
 
-use crate::state::{ActivityFocus, DateWindow, FocusScope, PageGroup, TaskKindFilter, UiState};
+use crate::state::{ActivityFocus, DateWindow, FocusScope, MarkFilter, PageGroup, TaskKindFilter, UiState};
 use crate::theme;
 use crate::widgets::craft;
 use crate::widgets::date_picker::{self, DateField};
@@ -55,6 +55,13 @@ pub fn task(ui: &mut Ui, rect: Rect, p: &Project, st: &mut UiState) -> Rect {
             for kind in TaskKindFilter::ALL {
                 if ui.selectable_label(st.kind_filter == kind, kind.label()).clicked() {
                     st.kind_filter = kind;
+                }
+            }
+        });
+        egui::ComboBox::from_id_salt("filter_mark").width(120.0).selected_text(st.mark_filter.label()).show_ui(ui, |ui| {
+            for mark in MarkFilter::ALL {
+                if ui.selectable_label(st.mark_filter == mark, mark.label()).clicked() {
+                    st.mark_filter = mark;
                 }
             }
         });
@@ -134,6 +141,7 @@ pub fn task(ui: &mut Ui, rect: Rect, p: &Project, st: &mut UiState) -> Rect {
             st.focus = None;
             st.status_filter = None;
             st.kind_filter = TaskKindFilter::All;
+            st.mark_filter = MarkFilter::All;
             st.date_window = DateWindow::All;
             st.date_from = None;
             st.date_to = None;

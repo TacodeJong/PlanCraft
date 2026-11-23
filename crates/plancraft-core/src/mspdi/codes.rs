@@ -375,11 +375,12 @@ pub enum PlannerField {
     FillsGroup,
     PercentOfGroup,
     RowMark,
+    MarkNote,
     Status,
 }
 
 impl PlannerField {
-    pub const ALL: [PlannerField; 10] = [
+    pub const ALL: [PlannerField; 11] = [
         PlannerField::StartEarliest,
         PlannerField::StartLatest,
         PlannerField::FinishEarliest,
@@ -389,6 +390,7 @@ impl PlannerField {
         PlannerField::FillsGroup,
         PlannerField::PercentOfGroup,
         PlannerField::RowMark,
+        PlannerField::MarkNote,
         PlannerField::Status,
     ];
 
@@ -403,6 +405,7 @@ impl PlannerField {
             PlannerField::FillsGroup => "Planner Fills Group",
             PlannerField::PercentOfGroup => "Planner Percent Of Group",
             PlannerField::RowMark => "Planner Row Mark",
+            PlannerField::MarkNote => "Planner Mark Note",
             PlannerField::Status => "Planner Status",
         }
     }
@@ -419,6 +422,7 @@ impl PlannerField {
             PlannerField::FillsGroup => (CustomFieldKind::Flag, 18),
             PlannerField::PercentOfGroup => (CustomFieldKind::Number, 20),
             PlannerField::RowMark => (CustomFieldKind::Text, 30),
+            PlannerField::MarkNote => (CustomFieldKind::Text, 28),
             PlannerField::Status => (CustomFieldKind::Text, 29),
         };
         Slot { kind, number }

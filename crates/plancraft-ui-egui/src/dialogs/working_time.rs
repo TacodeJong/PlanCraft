@@ -53,11 +53,11 @@ impl WorkingTime {
     fn month_view(&mut self, ui: &mut Ui, cal: &Calendar) {
         let wc = WorkCal::single(cal);
         ui.horizontal(|ui| {
-            if crate::icons::button(ui, "chevron-left", 20.0, "Previous month").clicked() {
+            if crate::icons::button(ui, "chevron-left", 20.0, crate::lang::text("cal.prev_month")).clicked() {
                 self.month = (plancraft_core::dates::shift_days(self.month, -1)).with_day(1).unwrap_or(self.month);
             }
             ui.label(RichText::new(crate::format::month_year(self.month)).strong());
-            if crate::icons::button(ui, "chevron-right", 20.0, "Next month").clicked() {
+            if crate::icons::button(ui, "chevron-right", 20.0, crate::lang::text("cal.next_month")).clicked() {
                 self.month = (plancraft_core::dates::shift_days(self.month, 32)).with_day(1).unwrap_or(self.month);
             }
         });
@@ -144,14 +144,14 @@ impl WorkingTime {
         if self.week_loaded_for != Some(cal.id) {
             self.load_week(&cal);
         }
-        egui::Window::new("Change Working Time")
+        egui::Window::new(crate::lang::text("dlg.change_working"))
             .id(egui::Id::unique("working_time"))
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 120.0))
             .title_bar(false)
             .default_width(760.0)
             .show(ctx, |ui| {
-                open = crate::widgets::craft::dialog_header(ui, "Change Working Time");
+                open = crate::widgets::craft::dialog_header(ui, crate::lang::text("dlg.change_working"));
                 ui.horizontal(|ui| {
                     ui.label("For calendar:");
                     egui::ComboBox::from_id_salt("wt_cal").selected_text(&cal.name).width(180.0).show_ui(ui, |ui| {
@@ -211,7 +211,7 @@ impl WorkingTime {
                                         } else {
                                             e.working.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(", ")
                                         });
-                                        if crate::icons::button(ui, "x", 18.0, "Remove").clicked() {
+                                        if crate::icons::button(ui, "x", 18.0, crate::lang::text("common.remove")).clicked() {
                                             remove = Some(i);
                                         }
                                         ui.end_row();
@@ -330,7 +330,7 @@ impl WorkingTime {
                 }
                 crate::widgets::craft::confirm_actions_rule(ui);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if crate::widgets::craft::secondary_button(ui, "Close").clicked() {
+                    if crate::widgets::craft::secondary_button(ui, crate::lang::text("dlg.close")).clicked() {
                         close = true;
                     }
                     if cal.id != doc.project.calendar && crate::widgets::craft::secondary_button(ui, "Delete Calendar").clicked() {

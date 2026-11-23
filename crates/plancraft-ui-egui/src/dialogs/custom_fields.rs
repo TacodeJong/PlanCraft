@@ -39,14 +39,14 @@ impl CustomFields {
     pub fn show(&mut self, ctx: &Context, doc: &mut Document) -> bool {
         let mut open = true;
         let mut close = false;
-        egui::Window::new("Custom Fields")
+        egui::Window::new(crate::lang::text("dlg.custom_fields"))
             .id(egui::Id::unique("custom_fields_dialog"))
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 100.0))
             .default_width(560.0)
             .title_bar(false)
             .show(ctx, |ui| {
-                open = crate::widgets::craft::dialog_header(ui, "Custom Fields");
+                open = crate::widgets::craft::dialog_header(ui, crate::lang::text("dlg.custom_fields"));
                 ui.label(
                     RichText::new("Fields you add here can be shown as columns (right-click a column header, then Insert Column), sorted and grouped by.")
                         .small()
@@ -135,7 +135,7 @@ impl CustomFields {
                         ));
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::widgets::craft::secondary_button(ui, "Close").clicked() {
+                        if crate::widgets::craft::secondary_button(ui, crate::lang::text("dlg.close")).clicked() {
                             close = true;
                         }
                     });

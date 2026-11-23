@@ -28,6 +28,8 @@ pub struct SharePlan {
 enum Share {
     Percent(f64),
     Fill,
+    /// Auto with Finish **On**: length is early start → pinned finish, not an equal group fill.
+    FinishOn,
 }
 
 /// Whether share resolution should run: global stretch/span rules, per-task Auto, or any
@@ -75,11 +77,19 @@ pub fn resolve(p: &Project) -> SharePlan {
         t.duration_percent = None;
     }
     for (i, share) in shares.iter().enumerate() {
-        if share.is_some()
+        // Zero Fill / Finish-On / percent rows so the probe exposes a true early start.
+        // Finish-On also drops its finish pin for the probe — otherwise a zero-length bar is
+        // pulled onto the On date and start≈pin, which made length fall back to the typed duration.
+        if matches!(share, Some(Share::Fill) | Some(Share::FinishOn) | Some(Share::Percent(_)))
             && !summary.get(i).copied().unwrap_or(false)
             && let Some(t) = base.tasks.get_mut(i)
         {
             t.duration = 0;
+            if matches!(share, Some(Share::FinishOn)) {
+                t.bounds.finish_earliest = None;
+                t.bounds.finish_latest = None;
+                t.bounds.finish_latest_fixed = false;
+            }
         }
     }
     schedule::recalculate(&mut base);
@@ -109,6 +119,8 @@ pub fn resolve(p: &Project) -> SharePlan {
             .unwrap_or_else(|| cal.add(window_start, length.max(0)));
         let mut remaining = length;
         let mut fills: Vec<usize> = Vec::new();
+        let mut finish_ons: Vec<usize> = Vec::new();
+        let mut fixed: Vec<usize> = Vec::new();
         for &i in rows {
             match shares.get(i).copied().flatten() {
                 Some(Share::Percent(pct)) => {
@@ -117,11 +129,33 @@ pub fn resolve(p: &Project) -> SharePlan {
                     remaining = remaining.saturating_sub(value);
                 }
                 Some(Share::Fill) => fills.push(i),
-                None => {
-                    let used = own_minutes(p, &base, i, summary.get(i).copied().unwrap_or(false), &cal);
-                    remaining = remaining.saturating_sub(used);
-                }
+                Some(Share::FinishOn) => finish_ons.push(i),
+                None => fixed.push(i),
             }
+        }
+        // Finish-On Auto: duration is early start → pinned finish (the date rule wins over typed
+        // length and over equal group fill). Cap at the group window end when the pin is later.
+        for &i in &finish_ons {
+            let Some(t) = p.tasks.get(i) else { continue };
+            let Some(finish_pin) = t.finish_window().1 else { continue };
+            let start = base.tasks.get(i).and_then(|r| r.sched.start).unwrap_or(window_start);
+            let pin = finish_pin.min(window_end);
+            let value = if pin > start { cal.between(start, pin).max(0) } else { 0 };
+            assign(&mut plan, &summary, i, value, &mut allotted, Some(start), Some(pin));
+            // Serial Finish-On rows consume exclusive time before later fills in the chain.
+            if !fills.is_empty() && fixed_precedes_any_fill(p, i, &fills, rows) {
+                remaining = remaining.saturating_sub(value);
+            }
+        }
+        // Own-duration siblings only shrink fill budgets when they sit *before* a fill in the
+        // dependency order (serial). Parallel own-duration rows overlap in time — subtracting
+        // them left Auto tasks with scraps (e.g. 0.2d) after a Fixed 10d neighbour.
+        for &i in &fixed {
+            if !fills.is_empty() && !fixed_precedes_any_fill(p, i, &fills, rows) {
+                continue;
+            }
+            let used = own_minutes(p, &base, i, summary.get(i).copied().unwrap_or(false), &cal);
+            remaining = remaining.saturating_sub(used);
         }
         if fills.is_empty() {
             continue;
@@ -210,6 +244,33 @@ fn fills_are_independent(p: &Project, fills: &[usize]) -> bool {
     })
 }
 
+/// Whether a fixed-duration sibling is an ancestor (via local predecessor links among `siblings`)
+/// of any fill row. Only then does it consume exclusive time before the fill.
+fn fixed_precedes_any_fill(p: &Project, fixed: usize, fills: &[usize], siblings: &[usize]) -> bool {
+    let sibling: std::collections::HashSet<usize> = siblings.iter().copied().collect();
+    let fill_set: std::collections::HashSet<usize> = fills.iter().copied().collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![fixed];
+    while let Some(i) = stack.pop() {
+        if !seen.insert(i) {
+            continue;
+        }
+        if fill_set.contains(&i) {
+            return true;
+        }
+        let Some(id) = p.tasks.get(i).map(|t| t.id) else { continue };
+        for (si, t) in p.tasks.iter().enumerate() {
+            if !sibling.contains(&si) {
+                continue;
+            }
+            if t.predecessors.iter().any(|d| d.predecessor.local() == Some(id)) {
+                stack.push(si);
+            }
+        }
+    }
+    false
+}
+
 /// Auto tasks that could not fill (no parent, own dates, or no window) must not look calculated.
 fn note_unresolved_auto(p: &Project, parent: &[Option<usize>], summary: &[bool], shares: &[Option<Share>], plan: &mut SharePlan) {
     for (i, t) in p.tasks.iter().enumerate() {
@@ -220,11 +281,11 @@ fn note_unresolved_auto(p: &Project, parent: &[Option<usize>], summary: &[bool],
             // Got a fill classification; a missing allotment already produced a group note.
             continue;
         }
-        let name = t.name.as_str();
         if parent.get(i).copied().flatten().is_none() {
-            plan.notes.push(format!("'{name}' is set to Auto duration but has no parent group; it keeps its own duration"));
-        } else if t.start_mode() != DateMode::Unrestricted || t.finish_mode() != DateMode::Unrestricted {
-            plan.notes.push(format!("'{name}' is set to Auto duration but has its own start or finish rule; it keeps its own duration"));
+            plan.notes.push(format!(
+                "'{}' is set to Auto duration but has no parent group; it keeps its own duration",
+                t.name
+            ));
         }
     }
 }
@@ -260,10 +321,13 @@ fn assign(
 }
 
 /// Project Planner `groupShare`: a percentage when set; otherwise fill while `fills_group` or
-/// explicit [`DurationMode::Auto`], and both date sides are unrestricted. Nested summaries take
-/// part too (Fill allotment via `group_min`). Global stretch/span flags are no longer required —
-/// Size-in-group sets the per-task flags directly. Any own date on either side keeps the stored duration.
-/// Paired date-driven leaves (`date_duration_bounds`) are never shares — length comes from the window.
+/// explicit [`DurationMode::Auto`]. Nested summaries take part too (Fill allotment via `group_min`).
+/// Global stretch/span flags are no longer required — Size-in-group sets the per-task flags directly.
+///
+/// Explicit Auto fills the group window unless a Finish **On** pin drives length from early start
+/// to that date. Soft finish-no-later alone must not leave Auto on the typed duration. Legacy
+/// `fills_group` still needs unrestricted sides. Paired date-driven leaves
+/// (`date_duration_bounds`) are never shares — length comes from the window.
 fn share_of(p: &Project, i: usize, parent: Option<usize>, is_summary: bool) -> Option<Share> {
     parent?;
     let t = p.tasks.get(i)?;
@@ -280,10 +344,15 @@ fn share_of(p: &Project, i: usize, parent: Option<usize>, is_summary: bool) -> O
     {
         return Some(Share::Percent(pct.min(1000.0)));
     }
-    // Fill: Auto duration, or Size-in-group Remaining space (`fills_group`), including when
-    // project-wide stretch is off. Summaries are allowed here (ops forbids Auto on summaries).
-    let wants_fill = t.duration_mode == DurationMode::Auto || t.fills_group;
-    if wants_fill && t.start_mode() == DateMode::Unrestricted && t.finish_mode() == DateMode::Unrestricted {
+    if t.duration_mode == DurationMode::Auto {
+        // Finish On is a date rule: duration runs to that pin, not an equal sibling fill.
+        if t.finish_mode() == DateMode::On {
+            return Some(Share::FinishOn);
+        }
+        return Some(Share::Fill);
+    }
+    // Legacy Remaining space (`fills_group`) still requires unrestricted sides.
+    if t.fills_group && t.start_mode() == DateMode::Unrestricted && t.finish_mode() == DateMode::Unrestricted {
         return Some(Share::Fill);
     }
     None
@@ -459,13 +528,26 @@ fn cap_for_successors(p: &Project, plan: &mut SharePlan) {
     apply_plan_durations(&mut probe, plan);
     schedule::recalculate(&mut probe);
     let cal = project_calendar(p);
-    let hard_finish = successor_hard_finishes(p, &probe, &cal, false);
-    let soft_finish = budgets.iter().any(|(_, _, include_soft)| *include_soft).then(|| successor_hard_finishes(p, &probe, &cal, true));
+    let hard_finish = successor_hard_finishes(p, &cal, false);
+    let soft_finish = budgets.iter().any(|(_, _, include_soft)| *include_soft).then(|| successor_hard_finishes(p, &cal, true));
     for &(i, current, include_soft) in &budgets {
         let Some(start) = probe.tasks.get(i).and_then(|t| t.sched.start) else { continue };
         let Some(task) = p.tasks.get(i) else { continue };
-        let caps = if include_soft { soft_finish.as_ref().unwrap_or(&hard_finish) } else { &hard_finish };
-        let Some(cap) = caps.get(i).copied().flatten() else { continue };
+        // Auto may honour soft successor pins, but a soft cap at or before the probe start is not
+        // a real window (e.g. soft Start-no-later on a later milestone). Ignore those; only a hard
+        // pin may force the typed-duration fallback.
+        let hard_cap = hard_finish.get(i).copied().flatten();
+        let soft_cap = soft_finish.as_ref().and_then(|v| v.get(i).copied().flatten());
+        let cap = if include_soft {
+            match (soft_cap.filter(|s| *s > start), hard_cap) {
+                (Some(s), Some(h)) => Some(s.min(h)),
+                (Some(s), None) => Some(s),
+                (None, h) => h,
+            }
+        } else {
+            hard_cap
+        };
+        let Some(cap) = cap else { continue };
         if cap <= start {
             // Keep stored/current budget; note the impossible window without collapsing the bar.
             let kept = p.tasks.get(i).map(|t| t.duration.max(0)).unwrap_or(current);
@@ -539,11 +621,16 @@ fn apply_plan_durations(probe: &mut Project, plan: &SharePlan) {
 
 /// Latest finish each task may keep so every fixed successor date still holds (Swift `successorHard`
 /// on F). Own fixed finishes seed the cap; dependency edges carry it backward with lag.
-fn successor_hard_finishes(p: &Project, probe: &Project, cal: &crate::calendar::WorkCal<'_>, include_soft: bool) -> Vec<Option<DateTime>> {
+///
+/// Uses each task's **stored** duration when converting a finish pin into a start bound. The share
+/// probe's fill allotments are often far larger than the typed length; subtracting those from a
+/// successor MFO/FNLT invented impossible July caps on August Auto bars (cyclus #93–#99 via the
+/// ALAP Autofill on the calendar chain after #102).
+fn successor_hard_finishes(p: &Project, cal: &crate::calendar::WorkCal<'_>, include_soft: bool) -> Vec<Option<DateTime>> {
     let n = p.tasks.len();
     let mut hard = vec![None; n];
     for (i, t) in p.tasks.iter().enumerate() {
-        if let Some(cap) = own_finish_cap(t, probe.tasks.get(i).map(|r| r.sched.duration).unwrap_or(t.duration), cal, include_soft)
+        if let Some(cap) = own_finish_cap(t, t.duration.max(0), cal, include_soft)
             && let Some(slot) = hard.get_mut(i)
         {
             *slot = Some(cap);
@@ -555,7 +642,7 @@ fn successor_hard_finishes(p: &Project, probe: &Project, cal: &crate::calendar::
         for succ_i in (0..n).rev() {
             let Some(succ) = p.tasks.get(succ_i) else { continue };
             let succ_hard = hard.get(succ_i).copied().flatten();
-            let succ_start_hard = hard_start_of(p, probe, cal, succ_i, succ_hard, include_soft);
+            let succ_start_hard = hard_start_of(succ, cal, succ_hard, include_soft);
             for dep in &succ.predecessors {
                 let Some(pred_id) = dep.predecessor.local() else { continue };
                 let Some(pred_i) = p.tasks.iter().position(|t| t.id == pred_id) else { continue };
@@ -629,20 +716,16 @@ fn link_pred_finish_cap(
 }
 
 fn hard_start_of(
-    p: &Project,
-    probe: &Project,
+    t: &Task,
     cal: &crate::calendar::WorkCal<'_>,
-    i: usize,
     finish_hard: Option<DateTime>,
     include_soft: bool,
 ) -> Option<DateTime> {
-    let t = p.tasks.get(i)?;
     if let Some(d) = hard_pinned_start(t) {
         return Some(d);
     }
-    let finish =
-        finish_hard.or_else(|| own_finish_cap(t, probe.tasks.get(i).map(|r| r.sched.duration).unwrap_or(t.duration), cal, include_soft))?;
-    let dur = probe.tasks.get(i).map(|r| r.sched.duration).unwrap_or(t.duration).max(0);
+    let dur = t.duration.max(0);
+    let finish = finish_hard.or_else(|| own_finish_cap(t, dur, cal, include_soft))?;
     if dur > 0 { Some(cal.sub(finish, dur)) } else { Some(finish) }
 }
 
@@ -749,6 +832,73 @@ mod tests {
         assert!(bs >= af, "the successor still starts when the predecessor finishes");
         assert_eq!(p.task(a).unwrap().duration, 2 * 480);
         assert_eq!(p.task(b).unwrap().sched.duration, 480);
+    }
+
+    /// Parallel Fixed + Auto: the Fixed neighbour must not eat the Auto budget. Both start from
+    /// the same predecessor and overlap — Auto fills the full group window (not window − Fixed).
+    #[test]
+    fn parallel_fixed_sibling_does_not_starve_auto_duration() {
+        let (mut p, g) = group_with_window(10);
+        let pred = p.add_task("Pred", None);
+        let auto = p.add_task("Auto talks", None);
+        let fixed = p.add_task("Fixed writeup", None);
+        for id in [pred, auto, fixed] {
+            let t = p.task_mut(id).unwrap();
+            t.outline_level = 2;
+            t.fills_group = false;
+            t.estimated = false;
+        }
+        p.task_mut(pred).unwrap().duration = 480;
+        {
+            let t = p.task_mut(auto).unwrap();
+            t.duration = 96; // 0.2d leftover people used to see when Fixed ate the window
+            t.duration_mode = DurationMode::Auto;
+        }
+        p.task_mut(fixed).unwrap().duration = 10 * 480;
+        p.link(pred.into(), auto, LinkType::FS, Lag::None).unwrap();
+        p.link(pred.into(), fixed, LinkType::FS, Lag::None).unwrap();
+        recalculate(&mut p);
+        let window = {
+            let t = p.task(g).unwrap();
+            project_calendar(&p).between(t.bounds.start_earliest.unwrap(), t.bounds.finish_latest.unwrap())
+        };
+        // Pred (1d) is serial before Auto; Fixed writeup is parallel and must not eat the budget.
+        let expect = window - 480;
+        let auto_span = span(&p, auto);
+        assert!(
+            (auto_span - expect).abs() <= 1,
+            "Auto should get window minus serial pred ({expect}), got {auto_span}; Fixed sibling is parallel"
+        );
+        assert!(auto_span > 96, "must not leave the old 0.2d scrap");
+        assert_eq!(p.task(fixed).unwrap().sched.duration, 10 * 480);
+    }
+
+    #[test]
+    fn serial_fixed_predecessor_still_shrinks_auto_remaining() {
+        let (mut p, g) = group_with_window(10);
+        let fixed = p.add_task("Fixed first", None);
+        let auto = p.add_task("Auto after", None);
+        for id in [fixed, auto] {
+            let t = p.task_mut(id).unwrap();
+            t.outline_level = 2;
+            t.fills_group = false;
+            t.estimated = false;
+        }
+        p.task_mut(fixed).unwrap().duration = 4 * 480;
+        {
+            let t = p.task_mut(auto).unwrap();
+            t.duration = 480;
+            t.duration_mode = DurationMode::Auto;
+        }
+        p.link(fixed.into(), auto, LinkType::FS, Lag::None).unwrap();
+        recalculate(&mut p);
+        let window = {
+            let t = p.task(g).unwrap();
+            project_calendar(&p).between(t.bounds.start_earliest.unwrap(), t.bounds.finish_latest.unwrap())
+        };
+        let expect = window - 4 * 480;
+        let got = span(&p, auto);
+        assert!((got - expect).abs() <= 1, "serial Fixed should leave {expect}, got {got}");
     }
 
     #[test]
@@ -958,6 +1108,103 @@ mod tests {
         assert!(window > 480, "deadline opens a multi-day window");
         assert!((span(&p, leaf) - window).abs() <= 1, "Auto leaf {} vs window {window}", span(&p, leaf));
         assert_eq!(p.task(leaf).unwrap().duration, 480, "stored duration stays the fallback");
+    }
+
+    /// Auto + Finish On: the pin drives length from early start (not equal group fill).
+    #[test]
+    fn auto_with_finish_on_uses_pin_not_equal_fill() {
+        let (mut p, g) = group_with_window(10);
+        let pred = p.add_task("Pred", None);
+        let pinned = p.add_task("Finish on", None);
+        let other = p.add_task("Other auto", None);
+        for id in [pred, pinned, other] {
+            let t = p.task_mut(id).unwrap();
+            t.outline_level = 2;
+            t.fills_group = false;
+            t.estimated = false;
+        }
+        p.task_mut(pred).unwrap().duration = 0; // milestone-like early start at group start
+        let on = day(&p, 3);
+        {
+            let t = p.task_mut(pinned).unwrap();
+            t.duration = 10 * 480;
+            t.duration_mode = DurationMode::Auto;
+            t.bounds.finish_earliest = Some(on);
+            t.bounds.finish_latest = Some(on);
+        }
+        {
+            let t = p.task_mut(other).unwrap();
+            t.duration = 480;
+            t.duration_mode = DurationMode::Auto;
+        }
+        p.link(pred.into(), pinned, LinkType::FS, Lag::None).unwrap();
+        p.link(pred.into(), other, LinkType::FS, Lag::None).unwrap();
+        assert!(
+            share_of(&p, p.task_index(pinned).unwrap(), Some(p.task_index(g).unwrap()), false)
+                .is_some_and(|s| matches!(s, Share::FinishOn)),
+            "Finish On must select pin-driven Auto, not equal Fill"
+        );
+        recalculate(&mut p);
+        let start = p.task(pinned).unwrap().sched.start.unwrap();
+        let want = project_calendar(&p).between(start, on);
+        assert!(
+            (span(&p, pinned) - want).abs() <= 1,
+            "Auto+Finish On span {} vs start→pin {want} (not equal-fill scraps)",
+            span(&p, pinned)
+        );
+        assert_eq!(p.task(pinned).unwrap().sched.finish, Some(on));
+    }
+
+    /// Soft finish-no-later on Auto must not leave the typed duration in place (PLANNER 91/92).
+    /// Rules win: Auto still classifies as Fill; the soft No-later then caps length.
+    #[test]
+    fn auto_with_soft_finish_no_later_still_fills() {
+        let (mut p, g) = group_with_window(10);
+        let a = p.add_task("Short scrap", None);
+        let b = p.add_task("Soft pin", None);
+        let stored_long = 10 * 480;
+        for (id, stored) in [(a, 480), (b, stored_long)] {
+            let t = p.task_mut(id).unwrap();
+            t.outline_level = 2;
+            t.duration = stored;
+            t.estimated = false;
+            t.duration_mode = DurationMode::Auto;
+            t.fills_group = false;
+        }
+        let soft_cap = day(&p, 3);
+        {
+            let t = p.task_mut(b).unwrap();
+            t.bounds.finish_latest = Some(soft_cap);
+            t.bounds.finish_latest_fixed = false;
+        }
+        assert_eq!(p.task(b).unwrap().finish_mode(), DateMode::NoLater);
+        let bi = p.task_index(b).unwrap();
+        let gi = p.task_index(g).unwrap();
+        assert!(
+            share_of(&p, bi, Some(gi), false).is_some_and(|s| matches!(s, Share::Fill)),
+            "soft No-later must not block Auto fill classification"
+        );
+        recalculate(&mut p);
+        let window = {
+            let t = p.task(g).unwrap();
+            project_calendar(&p).between(t.bounds.start_earliest.unwrap(), t.bounds.finish_latest.unwrap())
+        };
+        let soft_span = project_calendar(&p).between(p.start, soft_cap);
+        assert!(
+            (span(&p, b) - soft_span).abs() <= 1,
+            "soft No-later overrules typed 10d: got {} soft {soft_span}",
+            span(&p, b)
+        );
+        assert!(
+            span(&p, b) < stored_long,
+            "typed duration must not win over the soft rule"
+        );
+        // Parallel Auto siblings each take the full remaining window (not a half-split).
+        assert!(
+            (span(&p, a) - window).abs() <= 1,
+            "sibling Auto fills the group window: got {} window {window}",
+            span(&p, a)
+        );
     }
 
     /// Nested unrestricted summary with fills_group under a parent deadline: the nest is Fill,
@@ -1190,6 +1437,165 @@ mod tests {
             "impossible window is still warned: {:?}",
             p.task(row).unwrap().sched.warnings
         );
+    }
+
+    /// Soft start-no-later on a successor must not invent an Auto predecessor cap before the
+    /// real schedule (cyclus #99/#100: soft start_latest 18 Aug → bogus "17 Aug" cap).
+    #[test]
+    fn soft_successor_start_no_later_does_not_cap_auto_before_its_start() {
+        let mut p = Project::new("SoftSL", crate::dates::ymd(2027, 8, 2).unwrap()); // Monday
+        p.settings.rules = ScheduleRules::on();
+        let g = p.add_task("Group", None);
+        let auto = p.add_task("Write", None);
+        let mile = p.add_task("Gate", None);
+        let g_end = day(&p, 40);
+        let g_start = p.start;
+        {
+            let t = p.task_mut(g).unwrap();
+            t.bounds.start_earliest = Some(g_start);
+            t.bounds.finish_latest = Some(g_end);
+            t.bounds.finish_latest_fixed = true;
+        }
+        for id in [auto, mile] {
+            p.task_mut(id).unwrap().outline_level = 2;
+        }
+        {
+            let t = p.task_mut(auto).unwrap();
+            t.duration = 480;
+            t.estimated = false;
+            t.duration_mode = DurationMode::Auto;
+        }
+        let on = day(&p, 26);
+        let soft_sl = day(&p, 12); // ~18 Aug region
+        {
+            let t = p.task_mut(mile).unwrap();
+            t.kind = TaskKind::Milestone;
+            t.duration = 0;
+            // Finish On + soft Start no-later (cyclus #100 pattern).
+            t.bounds.finish_earliest = Some(on);
+            t.bounds.finish_latest = Some(on);
+            t.bounds.start_latest = Some(soft_sl);
+            t.bounds.start_latest_fixed = false;
+        }
+        p.link(auto.into(), mile, LinkType::FS, Lag::None).unwrap();
+        recalculate(&mut p);
+        let t = p.task(auto).unwrap();
+        assert!(
+            !t.sched.warnings.iter().any(|w| w.contains("no room left")),
+            "soft successor start_latest must not invent an impossible Auto cap: {:?}",
+            t.sched.warnings
+        );
+        assert!(t.sched.duration > 480, "Auto should still fill toward the Finish On gate, got {}", t.sched.duration);
+    }
+
+    /// Soft finish-no-later on a successor that lands before Auto's probe start must be ignored
+    /// (cyclus soft Start-no-later on #100), not treated as "no room left".
+    #[test]
+    fn soft_successor_finish_before_auto_start_is_ignored() {
+        let mut p = Project::new("SoftJuly", crate::dates::ymd(2027, 7, 5).unwrap()); // Monday
+        p.settings.rules = ScheduleRules::on();
+        let g = p.add_task("Group", None);
+        let early = p.add_task("Early", None);
+        let auto = p.add_task("Late Auto", None);
+        let g_start = p.start;
+        let g_end = day(&p, 50);
+        let soft_july = day(&p, 10);
+        let auto_snet = day(&p, 25); // August region
+        {
+            let t = p.task_mut(g).unwrap();
+            t.bounds.start_earliest = Some(g_start);
+            t.bounds.finish_latest = Some(g_end);
+            t.bounds.finish_latest_fixed = true;
+        }
+        for id in [early, auto] {
+            p.task_mut(id).unwrap().outline_level = 2;
+        }
+        {
+            let t = p.task_mut(early).unwrap();
+            t.duration = 5 * 480;
+            t.estimated = false;
+            t.duration_mode = DurationMode::Fixed;
+            // Soft FNLT in July — earlier than Auto's August start after pred chain.
+            t.bounds.finish_latest = Some(soft_july);
+            t.bounds.finish_latest_fixed = false;
+        }
+        {
+            let t = p.task_mut(auto).unwrap();
+            t.duration = 2 * 480;
+            t.estimated = false;
+            t.duration_mode = DurationMode::Auto;
+            t.bounds.start_earliest = Some(auto_snet);
+        }
+        // Soft FNLT on Early is Auto's soft successor cap (before Auto's SNET start).
+        p.link(auto.into(), early, LinkType::FS, Lag::None).unwrap();
+        recalculate(&mut p);
+        let t = p.task(auto).unwrap();
+        assert!(
+            !t.sched.warnings.iter().any(|w| w.contains("no room left")),
+            "soft July successor finish must not invent no-room: {:?}",
+            t.sched.warnings
+        );
+        assert!(t.sched.duration > 0, "Auto must keep a positive duration");
+    }
+
+    /// Successor MFO must use stored duration when backing into a start cap — not the probe's
+    /// inflated Auto fill (cyclus #129 ALAP Auto + #130 MFO pulled July caps onto #93–#99).
+    #[test]
+    fn successor_cap_uses_stored_duration_not_fill_allotment() {
+        let mut p = Project::new("FillCap", crate::dates::ymd(2027, 8, 2).unwrap()); // Monday
+        p.settings.rules = ScheduleRules::on();
+        let g = p.add_task("Group", None);
+        let write = p.add_task("Write", None);
+        let gate = p.add_task("Gate", None);
+        let send = p.add_task("Send", None); // Auto in a wide window → huge fill allotment
+        let board = p.add_task("Board", None); // MFO
+        let g_start = p.start;
+        let g_end = day(&p, 45);
+        let mfo = day(&p, 40);
+        {
+            let t = p.task_mut(g).unwrap();
+            t.bounds.start_earliest = Some(g_start);
+            t.bounds.finish_latest = Some(g_end);
+            t.bounds.finish_latest_fixed = true;
+        }
+        for id in [write, gate, send, board] {
+            p.task_mut(id).unwrap().outline_level = 2;
+        }
+        {
+            let t = p.task_mut(write).unwrap();
+            t.duration = 480;
+            t.estimated = false;
+            t.duration_mode = DurationMode::Auto;
+        }
+        {
+            let t = p.task_mut(gate).unwrap();
+            t.kind = TaskKind::Milestone;
+            t.duration = 0;
+        }
+        {
+            let t = p.task_mut(send).unwrap();
+            t.duration = 480; // stored 1d; fill would want many weeks
+            t.estimated = false;
+            t.duration_mode = DurationMode::Auto;
+            t.constraint = Constraint { kind: ConstraintKind::Alap, date: None };
+        }
+        {
+            let t = p.task_mut(board).unwrap();
+            t.kind = TaskKind::Milestone;
+            t.duration = 0;
+            t.constraint = Constraint { kind: ConstraintKind::Mfo, date: Some(mfo) };
+        }
+        p.link(write.into(), gate, LinkType::FS, Lag::None).unwrap();
+        p.link(gate.into(), send, LinkType::SS, Lag::None).unwrap();
+        p.link(send.into(), board, LinkType::FS, Lag::None).unwrap();
+        recalculate(&mut p);
+        let t = p.task(write).unwrap();
+        assert!(
+            !t.sched.warnings.iter().any(|w| w.contains("no room left")),
+            "MFO minus fill allotment must not invent no-room: {:?}",
+            t.sched.warnings
+        );
+        assert!(t.sched.duration > 0);
     }
 
     #[test]

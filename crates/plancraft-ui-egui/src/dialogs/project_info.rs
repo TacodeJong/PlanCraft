@@ -141,7 +141,7 @@ impl ProjectInfo {
         if self.critical_slack != o.critical_slack || time_changed {
             let ts = s.time.clone();
             s.critical_slack =
-                parse_duration(&self.critical_slack, DurationUnit::Days, &ts).map(|(m, _)| m).ok_or("Invalid critical slack")?;
+                parse_duration(&self.critical_slack, DurationUnit::Days, &ts).map(|(m, _, _)| m).ok_or("Invalid critical slack")?;
         }
         if self.ev_baseline != o.ev_baseline {
             p.set_earned_value_baseline(self.ev_baseline).map_err(|e| e.to_string())?;
@@ -157,7 +157,7 @@ impl ProjectInfo {
             let Some(doc) = ws.index_of(handle).and_then(|i| ws.docs.get_mut(i)) else {
                 return false;
             };
-            let title = format!("Project Information for '{}'", doc.project.name);
+            let title = format!("{} '{}'", crate::lang::text("dlg.project_info"), doc.project.name);
             egui::Window::new(&title)
             .id(egui::Id::unique("project_info"))
             .pivot(egui::Align2::CENTER_TOP)
@@ -252,10 +252,10 @@ impl ProjectInfo {
                 ui.add_space(10.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = crate::widgets::craft::ITEM_GAP + 2.0;
-                    if crate::widgets::craft::secondary_button(ui, "Cancel").clicked() {
+                    if crate::widgets::craft::secondary_button(ui, crate::lang::text("common.cancel")).clicked() {
                         close = true;
                     }
-                    if crate::widgets::craft::primary_button(ui, "OK").clicked() {
+                    if crate::widgets::craft::primary_button(ui, crate::lang::text("common.ok")).clicked() {
                         apply = true;
                     }
                 });

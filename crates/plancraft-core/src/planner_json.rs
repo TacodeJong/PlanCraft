@@ -85,6 +85,8 @@ struct RawTask {
     color: String,
     #[serde(default)]
     mark: String,
+    #[serde(default, rename = "markNote")]
+    mark_note: String,
     #[serde(default, rename = "durationPercent")]
     duration_percent: Option<f64>,
     #[serde(default = "yes", rename = "fillsGroup")]
@@ -290,6 +292,7 @@ fn fill_task(row: &mut Task, task: &RawTask, level: u16, is_summary: bool, minut
     }
     if let Some(mark) = RowMark::parse(&task.mark) {
         row.row_mark = Some(mark);
+        row.mark_note = clip(&task.mark_note, MAX_NOTES_CHARS);
     }
     let deliverable = if task.deliverable.trim().is_empty() { task.milestone_type.trim() } else { task.deliverable.trim() };
     row.deliverable = clip(deliverable, MAX_NAME_CHARS);

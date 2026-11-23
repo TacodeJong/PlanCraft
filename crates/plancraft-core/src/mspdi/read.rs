@@ -690,6 +690,9 @@ fn apply_planner(task: &mut Task, field: codes::PlannerField, raw: &str) -> bool
         codes::PlannerField::FillsGroup => task.fills_group = flag().unwrap_or(false),
         codes::PlannerField::PercentOfGroup => task.duration_percent = codes::num_of(raw),
         codes::PlannerField::RowMark => task.row_mark = RowMark::parse(raw),
+        codes::PlannerField::MarkNote => {
+            task.mark_note = raw.trim().to_string();
+        }
         codes::PlannerField::Status => task.status = TaskStatus::from_token(raw).unwrap_or_default(),
     }
     match field {
@@ -702,6 +705,7 @@ fn apply_planner(task: &mut Task, field: codes::PlannerField, raw: &str) -> bool
         }
         codes::PlannerField::PercentOfGroup => task.duration_percent.is_some(),
         codes::PlannerField::RowMark => task.row_mark.is_some(),
+        codes::PlannerField::MarkNote => !task.mark_note.trim().is_empty(),
         codes::PlannerField::Status => TaskStatus::from_token(raw).is_some(),
     }
 }
@@ -970,7 +974,12 @@ fn predecessors(p: &mut Project, links: Links, notes: &mut Notes) {
             notes.add("a repeated link between the same two tasks was left out");
             continue;
         }
-        task.predecessors.push(Dependency { predecessor: TaskRef::Local(pred), kind: l.kind, lag: l.lag });
+        task.predecessors.push(Dependency {
+            predecessor: TaskRef::Local(pred),
+            kind: l.kind,
+            lag: l.lag,
+            drive: Default::default(),
+        });
     }
 }
 

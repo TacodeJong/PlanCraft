@@ -574,8 +574,22 @@ impl Project {
         false
     }
 
-    /// Adds (or updates) a dependency `pred -> succ`.
+    /// Adds (or updates) a dependency `pred -> succ`. Keeps an existing link's [`LinkDrive`] when
+    /// only type/lag change; new links default to [`LinkDrive::FromPredecessor`].
     pub fn link(&mut self, pred: TaskRef, succ: TaskId, kind: LinkType, lag: Lag) -> PlanResult<()> {
+        self.link_drive(pred, succ, kind, lag, None)
+    }
+
+    /// Adds (or updates) a dependency and sets its schedule drive. Pass `Some(drive)` to change
+    /// drive; `None` keeps the existing drive (or the default on insert).
+    pub fn link_drive(
+        &mut self,
+        pred: TaskRef,
+        succ: TaskId,
+        kind: LinkType,
+        lag: Lag,
+        drive: Option<crate::model::LinkDrive>,
+    ) -> PlanResult<()> {
         let si = self.require_task(succ)?;
         if !self.finish_link_allowed(si, kind) {
             return invalid(SUMMARY_FINISH_LINK);
@@ -597,10 +611,18 @@ impl Project {
         if let Some(d) = t.predecessors.iter_mut().find(|d| d.predecessor == pred) {
             d.kind = kind;
             d.lag = lag;
+            if let Some(drive) = drive {
+                d.drive = drive;
+            }
         } else if t.predecessors.len() >= MAX_LINKS_PER_TASK {
             return invalid(format!("a task can have at most {MAX_LINKS_PER_TASK} predecessors"));
         } else {
-            t.predecessors.push(Dependency { predecessor: pred, kind, lag });
+            t.predecessors.push(Dependency {
+                predecessor: pred,
+                kind,
+                lag,
+                drive: drive.unwrap_or_default(),
+            });
         }
         Ok(())
     }
@@ -660,8 +682,14 @@ impl Project {
                         format!("{name}\\{}", task.0)
                     }
                 };
-                let kind = if d.kind == LinkType::FS && d.lag.is_zero() { String::new() } else { d.kind.code().to_string() };
-                format!("{base}{kind}{}", d.lag.format(&self.settings.time))
+                // Omit FS only for the classic default `3`. Successor-driven needs `3FS<`.
+                let kind = if d.kind == LinkType::FS && d.lag.is_zero() && d.drive.is_default() {
+                    String::new()
+                } else {
+                    d.kind.code().to_string()
+                };
+                // Successor-driven: `3FS<` / `3<` / `3FS<+2d` (see parse_predecessors).
+                format!("{base}{kind}{}{}", d.drive.code(), d.lag.format(&self.settings.time))
             })
             .collect::<Vec<_>>()
             .join(",")
@@ -702,8 +730,13 @@ impl Project {
                 (Some(kind), Some(lag)) => (kind, lag),
                 _ => (LinkType::FS, rest),
             };
+            // Optional `<` after the type marks successor-driven scheduling (`3FS<`, `3<+1d`).
+            let (lag_text, drive) = match lag_text.strip_prefix('<') {
+                Some(rest) => (rest, crate::model::LinkDrive::FromSuccessor),
+                None => (lag_text, crate::model::LinkDrive::FromPredecessor),
+            };
             let lag = Lag::parse(lag_text, &self.settings.time).ok_or_else(|| PlanError::Invalid(format!("invalid lag '{lag_text}'")))?;
-            out.push(Dependency { predecessor: pred, kind, lag });
+            out.push(Dependency { predecessor: pred, kind, lag, drive });
         }
         Ok(out)
     }
@@ -1015,7 +1048,7 @@ impl Project {
     }
 
     /// Sets a task's duration as typed: working or elapsed time (see [`TypedDuration`]). A
-    /// summary task takes working time only.
+    /// summary task takes working time only. Remembers the typed unit for display (`1d`, `2wk`).
     pub fn set_typed_duration(&mut self, id: TaskId, typed: TypedDuration) -> PlanResult<()> {
         let idx = self.require_task(id)?;
         if typed.elapsed && self.has_children(idx) {
@@ -1026,9 +1059,13 @@ impl Project {
         }
         let elapsed = typed.elapsed && typed.minutes > 0;
         let was = self.row(idx)?.elapsed;
+        let was_unit = self.row(idx)?.duration_unit;
         self.row_mut(idx)?.elapsed = elapsed;
+        self.row_mut(idx)?.duration_unit = Some(typed.unit);
         if let Err(e) = self.set_duration(id, typed.minutes, typed.estimated) {
-            self.row_mut(idx)?.elapsed = was;
+            let t = self.row_mut(idx)?;
+            t.elapsed = was;
+            t.duration_unit = was_unit;
             return Err(e);
         }
         Ok(())
@@ -1108,6 +1145,9 @@ impl Project {
 
     /// Sets Fixed vs Auto duration. Auto is a per-task opt-in; it does not enable project-wide
     /// stretch/span rules. Switching back to Fixed restores the stored duration as the plan.
+    ///
+    /// Choosing Auto clears own date rules (same as Size-in-group Remaining space). Soft No-later
+    /// pins left on an Auto task no longer block fill — Auto always shares the group window.
     pub fn set_duration_mode(&mut self, id: TaskId, mode: DurationMode) -> PlanResult<()> {
         let idx = self.require_task(id)?;
         if mode == DurationMode::Auto
@@ -1121,6 +1161,7 @@ impl Project {
             DurationMode::Auto => {
                 // Percent-of-group and Auto both size duration; picking Auto clears the percent.
                 t.duration_percent = None;
+                t.clear_date_constraints();
             }
             DurationMode::Fixed => {
                 // Explicit Fixed opts this task out of legacy share sizing while keeping project
@@ -2038,7 +2079,7 @@ impl Project {
     }
 
     /// Parses a duration with the project's default unit.
-    pub fn parse_duration(&self, text: &str) -> Option<(Minutes, bool)> {
+    pub fn parse_duration(&self, text: &str) -> Option<(Minutes, bool, crate::duration::DurationUnit)> {
         parse_duration(text, self.settings.duration_unit, &self.settings.time)
     }
 
@@ -2072,16 +2113,18 @@ impl Project {
     }
 
     /// `minutes` of a task's own kind of time (elapsed for an elapsed task), as shown.
+    /// Uses the unit the user typed when present (`1d`, `2wk`); otherwise the project default.
     pub fn format_task_minutes(&self, t: &Task, minutes: Minutes, estimated: bool) -> String {
+        let unit = t.duration_unit.unwrap_or(self.settings.duration_unit);
         if t.elapsed && !t.sched.is_summary {
-            crate::duration::format_elapsed(minutes, self.settings.duration_unit, estimated)
+            crate::duration::format_elapsed_compact(minutes, unit, estimated)
         } else {
-            self.format_duration(minutes, estimated)
+            crate::duration::format_duration_compact(minutes, unit, &self.settings.time, estimated)
         }
     }
 
     pub fn format_duration(&self, minutes: Minutes, estimated: bool) -> String {
-        crate::duration::format_duration(minutes, self.settings.duration_unit, &self.settings.time, estimated)
+        crate::duration::format_duration_compact(minutes, self.settings.duration_unit, &self.settings.time, estimated)
     }
 
     pub fn format_duration_unit(&self, minutes: Minutes, unit: DurationUnit) -> String {

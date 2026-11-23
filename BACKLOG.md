@@ -44,7 +44,7 @@ Also covered by the fork work above (not always separate commits): milestone dia
 1. **Reminders on macOS** — native notification crate (signing/permission), `osascript` display notification, or in-app only (bell + Overview card)? Recommend in-app first.
 2. **Distill follow-ups** — ship PDF/Word parsing later, or stay text/Markdown? Any additional AI providers beyond the landed keychain path?
 3. **MSPDI silent fields** — remaining fork fields still need export notes / ExtendedAttribute mapping completeness (bounded in next-batch §1); keep MSPDI correct as the interchange format.
-4. **Row-mark notes (`markNote`)** — import currently drops the reason text; when to add `mark_note` + tooltip?
+4. **Row-mark notes (`markNote`)** — **DONE**: `mark_note` on the task, planner-JSON + MSPDI, General/Task Info field, row wash + flag tooltip.
 5. **Milestone types** — managed type list vs deliverable text only?
 6. **Export to Microsoft Planner** — **DONE 2026-11-20** (MVP on `fork-main`)
    - Plan 1+ PSS path for dependencies; basic Graph board without deps; Entra device-code + keyring.

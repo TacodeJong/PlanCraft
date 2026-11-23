@@ -90,6 +90,17 @@ impl DurationUnit {
             (DurationUnit::Months, true) => "mons",
         }
     }
+
+    /// Short unit token as typed (`d`, `wk`, `h`, `min`, `mo`).
+    pub fn compact_label(self) -> &'static str {
+        match self {
+            DurationUnit::Minutes => "min",
+            DurationUnit::Hours => "h",
+            DurationUnit::Days => "d",
+            DurationUnit::Weeks => "wk",
+            DurationUnit::Months => "mo",
+        }
+    }
 }
 
 fn trim_number(v: f64) -> String {
@@ -119,6 +130,26 @@ pub fn format_duration(mins: Minutes, unit: DurationUnit, s: &TimeSettings, esti
     out
 }
 
+/// Compact duration text matching typed entry, e.g. `"1d"`, `"2wk"`, `"4h"`, `"30min"`, `"1mo?"`.
+pub fn format_duration_compact(mins: Minutes, unit: DurationUnit, s: &TimeSettings, estimated: bool) -> String {
+    let v = mins as f64 / unit.minutes(s) as f64;
+    let mut out = format!("{}{}", trim_number(v), unit.compact_label());
+    if estimated {
+        out.push('?');
+    }
+    out
+}
+
+/// Compact elapsed duration, e.g. `"33ed"`, `"2ewk?"`.
+pub fn format_elapsed_compact(mins: Minutes, unit: DurationUnit, estimated: bool) -> String {
+    let v = mins as f64 / unit.elapsed_minutes() as f64;
+    let mut out = format!("{}e{}", trim_number(v), unit.compact_label());
+    if estimated {
+        out.push('?');
+    }
+    out
+}
+
 /// Formats an elapsed duration (calendar time), e.g. `"33 edays"`, `"1 eday?"`.
 pub fn format_elapsed(mins: Minutes, unit: DurationUnit, estimated: bool) -> String {
     let v = mins as f64 / unit.elapsed_minutes() as f64;
@@ -130,21 +161,23 @@ pub fn format_elapsed(mins: Minutes, unit: DurationUnit, estimated: bool) -> Str
     out
 }
 
-/// A task duration as typed: its minutes, whether it is an estimate (a trailing `?`), and whether
+/// A task duration as typed: its minutes, whether it is an estimate (a trailing `?`), whether
 /// it is elapsed time (`ed`, `eh`, `ew`...: calendar time, nights and non-working days included)
-/// rather than working time.
+/// rather than working time, and the unit the user typed (so `"2wk"` stays `"2wk"` on display).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TypedDuration {
     pub minutes: Minutes,
     pub estimated: bool,
     pub elapsed: bool,
+    /// Unit taken from the typed text (`d`, `wk`, …), or the project default for a bare number.
+    pub unit: DurationUnit,
 }
 
 /// Parses a task duration: anything [`parse_duration`] reads, or elapsed time such as `"33ed"`,
 /// `"2 ewks"`, `"12eh"` or `"1 emo"` (see [`DurationUnit::elapsed_minutes`]).
 pub fn parse_task_duration(text: &str, default_unit: DurationUnit, s: &TimeSettings) -> Option<TypedDuration> {
-    if let Some((minutes, estimated)) = parse_duration(text, default_unit, s) {
-        return Some(TypedDuration { minutes, estimated, elapsed: false });
+    if let Some((minutes, estimated, unit)) = parse_duration(text, default_unit, s) {
+        return Some(TypedDuration { minutes, estimated, elapsed: false, unit });
     }
     let mut t = text.trim().to_ascii_lowercase();
     let estimated = t.ends_with('?');
@@ -165,7 +198,7 @@ pub fn parse_task_duration(text: &str, default_unit: DurationUnit, s: &TimeSetti
         _ => return None,
     };
     let minutes = to_minutes(value * unit.elapsed_minutes() as f64)?;
-    Some(TypedDuration { minutes, estimated, elapsed: true })
+    Some(TypedDuration { minutes, estimated, elapsed: true, unit })
 }
 
 /// Formats an amount of work in hours, e.g. `"40 hrs"`.
@@ -177,9 +210,8 @@ pub fn format_work(mins: Minutes) -> String {
 
 /// Parses a duration such as `"3"`, `"3d"`, `"2.5 days"`, `"4h"`, `"1w"`, `"30m"`, `"1mo"`, `"3d?"`.
 ///
-/// A bare number uses `default_unit`.  Returns the minutes and whether the value
-/// was marked as an estimate with a trailing `?`.
-pub fn parse_duration(text: &str, default_unit: DurationUnit, s: &TimeSettings) -> Option<(Minutes, bool)> {
+/// A bare number uses `default_unit`. Returns minutes, estimate flag, and the unit used.
+pub fn parse_duration(text: &str, default_unit: DurationUnit, s: &TimeSettings) -> Option<(Minutes, bool, DurationUnit)> {
     let mut t = text.trim().to_ascii_lowercase();
     let estimated = t.ends_with('?');
     if estimated {
@@ -205,7 +237,7 @@ pub fn parse_duration(text: &str, default_unit: DurationUnit, s: &TimeSettings) 
         "mo" | "mon" | "mons" | "month" | "months" => DurationUnit::Months,
         _ => return None,
     };
-    Some((to_minutes(value * unit.minutes(s) as f64)?, estimated))
+    Some((to_minutes(value * unit.minutes(s) as f64)?, estimated, unit))
 }
 
 /// Rounds a number of minutes, refusing values beyond [`crate::limits::MAX_MINUTES`] (either sign).
@@ -216,7 +248,7 @@ fn to_minutes(v: f64) -> Option<Minutes> {
 
 /// Parses an amount of work. A bare number means hours.
 pub fn parse_work(text: &str, s: &TimeSettings) -> Option<Minutes> {
-    parse_duration(text, DurationUnit::Hours, s).map(|(m, _)| m)
+    parse_duration(text, DurationUnit::Hours, s).map(|(m, _, _)| m)
 }
 
 /// Lag (positive) or lead (negative) applied to a dependency.
@@ -299,30 +331,40 @@ mod tests {
         assert_eq!(format_duration(480 * 5, DurationUnit::Days, &s, false), "5 days");
         assert_eq!(format_duration(480, DurationUnit::Days, &s, true), "1 day?");
         assert_eq!(format_duration(240, DurationUnit::Days, &s, false), "0.5 days");
-        assert_eq!(parse_duration("5", DurationUnit::Days, &s), Some((2400, false)));
-        assert_eq!(parse_duration("2.5 days?", DurationUnit::Days, &s), Some((1200, true)));
-        assert_eq!(parse_duration("4h", DurationUnit::Days, &s), Some((240, false)));
-        assert_eq!(parse_duration("1w", DurationUnit::Days, &s), Some((2400, false)));
-        assert_eq!(parse_duration("1mo", DurationUnit::Days, &s), Some((9600, false)));
+        assert_eq!(parse_duration("5", DurationUnit::Days, &s), Some((2400, false, DurationUnit::Days)));
+        assert_eq!(parse_duration("2.5 days?", DurationUnit::Days, &s), Some((1200, true, DurationUnit::Days)));
+        assert_eq!(parse_duration("4h", DurationUnit::Days, &s), Some((240, false, DurationUnit::Hours)));
+        assert_eq!(parse_duration("1w", DurationUnit::Days, &s), Some((2400, false, DurationUnit::Weeks)));
+        assert_eq!(parse_duration("1mo", DurationUnit::Days, &s), Some((9600, false, DurationUnit::Months)));
         assert_eq!(parse_duration("abc", DurationUnit::Days, &s), None);
         assert_eq!(format_work(2400), "40 hrs");
+        assert_eq!(format_duration_compact(480, DurationUnit::Days, &s, false), "1d");
+        assert_eq!(format_duration_compact(4800, DurationUnit::Weeks, &s, false), "2wk");
+        assert_eq!(format_duration_compact(240, DurationUnit::Hours, &s, true), "4h?");
     }
 
     #[test]
     fn elapsed_durations_format_and_parse() {
         let s = TimeSettings::default();
         let typed = |text: &str| parse_task_duration(text, DurationUnit::Days, &s);
-        let elapsed = |minutes, estimated| Some(TypedDuration { minutes, estimated, elapsed: true });
-        assert_eq!(typed("33ed"), elapsed(33 * 1440, false));
-        assert_eq!(typed("33 edays"), elapsed(33 * 1440, false));
-        assert_eq!(typed("1 eday?"), elapsed(1440, true));
-        assert_eq!(typed("12eh"), elapsed(12 * 60, false));
-        assert_eq!(typed("2 ewks"), elapsed(2 * 7 * 1440, false));
-        assert_eq!(typed("1emo"), elapsed(30 * 1440, false));
-        assert_eq!(typed("90 emins"), elapsed(90, false));
-        assert_eq!(typed("3e"), elapsed(3 * 1440, false));
+        let elapsed = |minutes, estimated, unit| Some(TypedDuration { minutes, estimated, elapsed: true, unit });
+        assert_eq!(typed("33ed"), elapsed(33 * 1440, false, DurationUnit::Days));
+        assert_eq!(typed("33 edays"), elapsed(33 * 1440, false, DurationUnit::Days));
+        assert_eq!(typed("1 eday?"), elapsed(1440, true, DurationUnit::Days));
+        assert_eq!(typed("12eh"), elapsed(12 * 60, false, DurationUnit::Hours));
+        assert_eq!(typed("2 ewks"), elapsed(2 * 7 * 1440, false, DurationUnit::Weeks));
+        assert_eq!(typed("1emo"), elapsed(30 * 1440, false, DurationUnit::Months));
+        assert_eq!(typed("90 emins"), elapsed(90, false, DurationUnit::Minutes));
+        assert_eq!(typed("3e"), elapsed(3 * 1440, false, DurationUnit::Days));
         // Working time stays working time.
-        assert_eq!(typed("5d"), Some(TypedDuration { minutes: 2400, estimated: false, elapsed: false }));
+        assert_eq!(
+            typed("5d"),
+            Some(TypedDuration { minutes: 2400, estimated: false, elapsed: false, unit: DurationUnit::Days })
+        );
+        assert_eq!(
+            typed("2wk"),
+            Some(TypedDuration { minutes: 4800, estimated: false, elapsed: false, unit: DurationUnit::Weeks })
+        );
         for bad in ["3ex", "e", "ed", "3e5x", "nan ed", "inf ed"] {
             assert_eq!(typed(bad), None, "{bad}");
         }
@@ -330,10 +372,11 @@ mod tests {
         assert_eq!(format_elapsed(33 * 1440, DurationUnit::Days, false), "33 edays");
         assert_eq!(format_elapsed(1440, DurationUnit::Days, true), "1 eday?");
         assert_eq!(format_elapsed(36 * 60, DurationUnit::Hours, false), "36 ehrs");
+        assert_eq!(format_elapsed_compact(2 * 7 * 1440, DurationUnit::Weeks, false), "2ewk");
         // Formatting and parsing agree.
         for unit in [DurationUnit::Minutes, DurationUnit::Hours, DurationUnit::Days, DurationUnit::Weeks, DurationUnit::Months] {
             let text = format_elapsed(210 * 1440, unit, true);
-            assert_eq!(typed(&text), elapsed(210 * 1440, true), "{text}");
+            assert_eq!(typed(&text), elapsed(210 * 1440, true, unit), "{text}");
         }
     }
 

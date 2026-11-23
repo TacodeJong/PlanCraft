@@ -11,7 +11,7 @@ use crate::theme;
 use crate::views::{self, Row};
 use crate::widgets::date_picker;
 
-fn titles(st: &UiState) -> [&'static str; 11] {
+fn titles(st: &UiState) -> [&'static str; 13] {
     [
         st.t("rpt.wbs"),
         st.t("rpt.name"),
@@ -24,14 +24,20 @@ fn titles(st: &UiState) -> [&'static str; 11] {
         st.t("rpt.predecessors"),
         st.t("rpt.percent"),
         st.t("rpt.status"),
+        st.t("rpt.mark"),
+        st.t("rpt.mark_note"),
     ]
 }
 
 struct Line {
-    cells: [String; 11],
+    cells: [String; 13],
     milestone: bool,
     group: bool,
     mark: Option<RowMark>,
+}
+
+fn mark_label(mark: Option<RowMark>) -> String {
+    mark.map(|m| crate::lang::mark_name(m).to_string()).unwrap_or_default()
 }
 
 pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, _out: &mut Vec<Command>) {
@@ -49,8 +55,15 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, _out:
                     if i == 1 {
                         ui.horizontal(|ui| {
                             if let Some(mark) = line.mark {
-                                ui.add(crate::icons::image("flag", 13.0, theme::row_mark_color(mark)))
-                                    .on_hover_text(crate::lang::mark_name(mark));
+                                let tip = {
+                                    let note = line.cells[12].trim();
+                                    if note.is_empty() {
+                                        crate::lang::mark_name(mark).into()
+                                    } else {
+                                        format!("{}\n{note}", crate::lang::mark_name(mark))
+                                    }
+                                };
+                                ui.add(crate::icons::image("flag", 13.0, theme::row_mark_color(mark))).on_hover_text(tip);
                             }
                             if line.group {
                                 ui.label(RichText::new(text).strong().color(theme::pal().ACCENT));
@@ -97,7 +110,7 @@ pub fn workbook(p: &Project, st: &UiState) -> Result<Vec<u8>, String> {
 
 /// The same rows, laid out for the print preview. Column widths sum to a landscape page.
 pub fn sheet(p: &Project, st: &UiState) -> Sheet {
-    let widths = [46.0, 144.0, 52.0, 72.0, 72.0, 58.0, 80.0, 46.0, 90.0, 58.0, 70.0];
+    let widths = [42.0, 120.0, 46.0, 64.0, 64.0, 52.0, 70.0, 42.0, 72.0, 48.0, 58.0, 52.0, 90.0];
     let columns =
         titles(st).iter().zip(widths).map(|(title, width)| PrintColumn { title: (*title).into(), width, align: Align::Left }).collect();
     let rows = lines(p, st)
@@ -118,6 +131,8 @@ fn lines(p: &Project, st: &UiState) -> Vec<Line> {
                 cells: [
                     String::new(),
                     g.label,
+                    String::new(),
+                    String::new(),
                     String::new(),
                     String::new(),
                     String::new(),
@@ -151,6 +166,8 @@ fn lines(p: &Project, st: &UiState) -> Vec<Line> {
                         p.format_predecessors(t.id),
                         t.percent_complete.to_string(),
                         crate::lang::status_name(p.displayed_status(idx)).into(),
+                        mark_label(t.row_mark),
+                        t.mark_note.clone(),
                     ],
                     milestone: t.is_milestone(),
                     group: false,
@@ -161,7 +178,7 @@ fn lines(p: &Project, st: &UiState) -> Vec<Line> {
         .collect()
 }
 
-fn report_sheet(p: &Project, idxs: &[usize], headers: &[String; 11]) -> plancraft_core::xlsx_out::XlsxSheet {
+fn report_sheet(p: &Project, idxs: &[usize], headers: &[String; 13]) -> plancraft_core::xlsx_out::XlsxSheet {
     let mut rows = vec![header_row(headers)];
     for &idx in idxs {
         let Some(t) = p.tasks.get(idx) else { continue };
@@ -182,6 +199,8 @@ fn report_sheet(p: &Project, idxs: &[usize], headers: &[String; 11]) -> plancraf
             p.format_predecessors(t.id),
             t.percent_complete.to_string(),
             crate::lang::status_name(p.displayed_status(idx)).into(),
+            mark_label(t.row_mark),
+            t.mark_note.clone(),
         ];
         let cells = values
             .into_iter()
@@ -218,6 +237,8 @@ fn data_sheet(p: &Project, idxs: &[usize]) -> plancraft_core::xlsx_out::XlsxShee
             "Units",
             "% complete",
             "Status",
+            crate::lang::text("rpt.mark"),
+            crate::lang::text("rpt.mark_note"),
         ]
         .map(str::to_string),
     );
@@ -250,6 +271,8 @@ fn data_sheet(p: &Project, idxs: &[usize]) -> plancraft_core::xlsx_out::XlsxShee
             p.format_resource_units(t.id),
             t.percent_complete.to_string(),
             p.displayed_status(idx).label().into(),
+            mark_label(t.row_mark),
+            t.mark_note.clone(),
         ] {
             cells.push(plancraft_core::xlsx_out::XlsxCell::text(text));
         }
@@ -324,6 +347,24 @@ mod tests {
         assert!(text.contains("Design"), "{text}");
         assert!(text.contains("Build"), "{text}");
         assert!(text.contains("sheet1.xml") || text.contains("<sheetData"), "{text}");
+    }
+
+    #[test]
+    fn export_includes_mark_and_mark_note() {
+        let mut p = Project::new("Marks", plancraft_core::dates::ymd(2026, 10, 15).unwrap());
+        let id = p.add_task("Flagged", None);
+        {
+            let t = p.task_mut(id).unwrap();
+            t.row_mark = Some(RowMark::Pink);
+            t.mark_note = "open question".into();
+        }
+        plancraft_core::schedule::recalculate(&mut p);
+        let bytes = workbook(&p, &UiState::default()).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains(crate::lang::text("rpt.mark")), "{text}");
+        assert!(text.contains(crate::lang::text("rpt.mark_note")), "{text}");
+        assert!(text.contains(crate::lang::mark_name(RowMark::Pink)), "{text}");
+        assert!(text.contains("open question"), "{text}");
     }
 
     /// The workbook carries the names and the units as their own columns, no `[50%]` suffixes.

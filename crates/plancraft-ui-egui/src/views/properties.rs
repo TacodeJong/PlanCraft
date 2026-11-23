@@ -213,6 +213,7 @@ fn task_pane(ui: &mut Ui, doc: &mut Document, st: &mut UiState) {
     match st.properties_tab {
         PropTab::General => general_tab(ui, doc, st, &ids, &snap, first, multi, any_summary, milestone_only, share),
         PropTab::Planning => planning_tab(ui, doc, st, &ids, &snap, first, multi, share),
+        PropTab::Linkage => linkage_tab(ui, doc, st, &ids, first, multi),
         PropTab::Resources => resources_tab(ui, doc, st, &ids, &snap, first, multi, any_summary),
         PropTab::Progress => progress_tab(ui, doc, st, &ids, &snap, first, multi, any_summary, milestone_only),
         PropTab::Notes => notes_block(ui, doc, st, &ids, &snap, first, multi),
@@ -283,7 +284,11 @@ fn general_tab(
     label(ui, st.t("prop.mark"));
     let mark_label = snap.mark.map(|m| m.map(crate::lang::mark_name).unwrap_or(st.t("common.none"))).unwrap_or(st.t("common.multiple"));
     if let Some(Some(mark)) = snap.mark {
-        ui.add(crate::icons::image("flag", 14.0, theme::row_mark_color(mark))).on_hover_text(crate::lang::mark_name(mark));
+        let tip = match snap.mark_note.as_deref() {
+            Some(n) if !n.trim().is_empty() => format!("{}\n{n}", crate::lang::mark_name(mark)),
+            _ => crate::lang::mark_name(mark).into(),
+        };
+        ui.add(crate::icons::image("flag", 14.0, theme::row_mark_color(mark))).on_hover_text(tip);
     }
     egui::ComboBox::from_id_salt(("task_mark", first, multi)).selected_text(mark_label).show_ui(ui, |ui| {
         let choices = [None].into_iter().chain(RowMark::ALL.into_iter().map(Some));
@@ -295,6 +300,9 @@ fn general_tab(
                     for id in &ids {
                         if let Some(t) = p.task_mut(*id) {
                             t.row_mark = choice;
+                            if choice.is_none() {
+                                t.mark_note.clear();
+                            }
                         }
                     }
                     Ok(())
@@ -302,12 +310,27 @@ fn general_tab(
             }
         }
     });
+    if matches!(snap.mark, Some(Some(_))) {
+        label(ui, st.t("prop.mark_note"));
+        let shown = snap.mark_note.as_deref().unwrap_or("");
+        if let Some(text) = line(ui, ("task_mark_note", first, multi), shown, st.t("prop.mark_note_hint")) {
+            let ids = ids.to_vec();
+            edit(doc, st, "Mark note", move |p| {
+                for id in &ids {
+                    if let Some(t) = p.task_mut(*id) {
+                        t.mark_note = text.clone();
+                    }
+                }
+                Ok(())
+            });
+        }
+    }
     placement_row(ui, doc, st, ids, first, multi, any_summary, share);
     // The everyday fields, like the Swift inspector: no tab-hopping for normal work.
     schedule_fields(ui, doc, st, ids, snap, first, multi, any_summary, milestone_only, share);
     label(ui, st.t("prop.predecessors"));
     predecessors(ui, doc, st, ids, multi);
-    // Names only on General: units/work stay on the Resources tab.
+    // Names only on General: units/work stay on the Resources tab. Successors stay on Linkage.
     general_resources(ui, doc, st, ids, snap, any_summary);
     if milestone_only {
         label(ui, st.t("prop.deliverable"));
@@ -440,11 +463,20 @@ fn schedule_fields(
             if auto {
                 // Show the calculated span (sched), not the stale stored input.
                 let mut text = snap.duration.as_deref().unwrap_or("").to_string();
+                let fallback = ids.iter().any(|id| {
+                    doc.project.task(*id).is_some_and(|t| {
+                        t.duration_mode == DurationMode::Auto && t.sched.duration == t.duration.max(0)
+                    })
+                });
+                let tip = if fallback { st.t("prop.duration_auto_fallback") } else { st.t("prop.duration_auto_hint") };
                 ui.add_enabled(
                     false,
                     crate::widgets::craft::text_edit(&mut text).desired_width((ui.available_size_before_wrap().x - 8.0).max(72.0)),
                 )
-                .on_disabled_hover_text(st.t("prop.duration_auto_hint"));
+                .on_disabled_hover_text(tip);
+                if fallback {
+                    ui.label(RichText::new(st.t("prop.duration_auto_fallback")).size(11.0).color(theme::pal().TEXT_WEAK));
+                }
             } else if let Some(text) = line_bounded(
                 ui,
                 ("task_dur", first, multi),
@@ -454,9 +486,9 @@ fn schedule_fields(
             ) {
                 let ids = ids.to_vec();
                 edit(doc, st, "Duration", move |p| {
-                    let (minutes, estimated) = p.parse_duration(&text).ok_or_else(|| format!("'{text}' is not a valid duration"))?;
+                    let typed = p.parse_task_duration(&text).ok_or_else(|| format!("'{text}' is not a valid duration"))?;
                     for id in &ids {
-                        p.set_duration(*id, minutes, estimated).map_err(|e| e.to_string())?;
+                        p.set_typed_duration(*id, typed).map_err(|e| e.to_string())?;
                     }
                     Ok(())
                 });
@@ -735,7 +767,9 @@ fn planning_tab(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId
             edit(doc, st, "Leveling delay", move |p| {
                 let typed = p
                     .parse_task_duration(&text)
-                    .or_else(|| p.parse_duration(&text).map(|(minutes, estimated)| TypedDuration { minutes, estimated, elapsed: false }))
+                    .or_else(|| {
+                        p.parse_duration(&text).map(|(minutes, estimated, unit)| TypedDuration { minutes, estimated, elapsed: false, unit })
+                    })
                     .ok_or_else(|| invalid.clone())?;
                 if typed.elapsed {
                     return Err(working_only.clone());
@@ -1366,6 +1400,7 @@ struct Snap {
     percent: Option<String>,
     status: Option<TaskStatus>,
     mark: Option<Option<RowMark>>,
+    mark_note: Option<String>,
     notes: Option<String>,
     active: Option<bool>,
     on_timeline: Option<bool>,
@@ -1437,6 +1472,7 @@ fn snapshot(p: &Project, ids: &[TaskId]) -> Snap {
         percent: text(&|t| t.percent_complete.to_string()),
         status: common_status(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.status)),
         mark: common_mark(ids.iter().filter_map(|id| p.task(*id)).map(|t| t.row_mark)),
+        mark_note: text(&|t| t.mark_note.clone()),
         notes: text(&|t| t.notes.clone()),
         active: flag(&|t| t.active),
         on_timeline: flag(&|t| t.show_on_timeline),
@@ -1762,73 +1798,143 @@ fn edit(doc: &mut Document, st: &mut UiState, label: &str, f: impl FnOnce(&mut P
     }
 }
 
+fn linkage_tab(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], first: TaskId, multi: bool) {
+    label(ui, st.t("prop.predecessors"));
+    predecessors(ui, doc, st, ids, multi);
+    ui.add_space(12.0);
+    label(ui, st.t("prop.successors"));
+    successors(ui, doc, st, first, multi);
+}
+
 fn predecessors(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], multi: bool) {
     let Some(&first) = ids.first() else { return };
     if !multi {
-        let links: Vec<(TaskRef, LinkType, Lag)> =
-            doc.project.task(first).map(|t| t.predecessors.iter().map(|d| (d.predecessor, d.kind, d.lag)).collect()).unwrap_or_default();
+        let links: Vec<(TaskRef, LinkType, Lag, LinkDrive)> = doc
+            .project
+            .task(first)
+            .map(|t| t.predecessors.iter().map(|d| (d.predecessor, d.kind, d.lag, d.drive)).collect())
+            .unwrap_or_default();
+        if links.is_empty() {
+            ui.label(RichText::new(crate::lang::text("prop.no_predecessors")).size(11.0).color(theme::pal().TEXT_WEAK));
+        }
         let mpd = doc.project.settings.time.minutes_per_day.max(1);
-        for (pred, kind, lag) in links {
-            ui.horizontal(|ui| {
-                let row = pred.local().and_then(|id| doc.project.task_index(id)).map(|i| i.saturating_add(1));
-                let name = doc.project.task_ref_name(&pred);
-                let title = match row {
-                    Some(n) => format!("{n}  {name}"),
-                    None => name,
-                };
-                ui.label(RichText::new(title).color(theme::pal().TEXT));
-                egui::ComboBox::from_id_salt(("pred_kind", first, pred)).width(52.0).selected_text(kind.code()).show_ui(ui, |ui| {
-                    for next in LinkType::ALL {
-                        if ui.selectable_label(kind == next, next.code()).clicked() {
-                            edit(doc, st, "Predecessor", move |p| {
-                                p.link(pred, first, next, lag).map_err(|e| e.to_string())?;
-                                Ok(())
-                            });
-                        }
-                    }
-                });
-                let mut days = lag_days(lag, mpd);
-                if ui.add(egui::DragValue::new(&mut days).range(-365.0..=365.0).speed(1.0).suffix("d")).changed() {
-                    let minutes = (days as i64).saturating_mul(mpd);
-                    let next_lag = if minutes == 0 { Lag::None } else { Lag::Working(minutes) };
-                    edit(doc, st, "Lag", move |p| {
-                        p.link(pred, first, kind, next_lag).map_err(|e| e.to_string())?;
-                        Ok(())
-                    });
-                }
-                if ui.button("×").on_hover_text(crate::lang::text("prop.remove_predecessor")).clicked() {
-                    edit(doc, st, "Remove predecessor", move |p| {
-                        p.unlink(pred, first).map_err(|e| e.to_string())?;
-                        Ok(())
-                    });
-                }
-            });
+        for (pred, kind, lag, drive) in links {
+            dependency_row(ui, doc, st, first, pred, kind, lag, drive, mpd, true);
         }
     } else {
         ui.label(RichText::new(crate::lang::text("prop.add_fs")).size(11.0).color(theme::pal().TEXT_WEAK));
     }
-    let choices: Vec<(TaskId, String)> = doc
+    let choices: Vec<crate::widgets::task_picker::TaskChoice> = doc
         .project
         .tasks
         .iter()
         .enumerate()
-        .filter(|(_, t)| ids.iter().all(|id| can_link(&doc.project, *id, t.id) && (multi || !already(&doc.project, *id, t.id))))
-        .map(|(i, t)| (t.id, format!("{}  {}", i.saturating_add(1), t.name)))
+        .filter_map(|(i, t)| {
+            let enabled = ids.iter().all(|id| can_link(&doc.project, *id, t.id) && (multi || !already(&doc.project, *id, t.id)));
+            crate::widgets::task_picker::TaskChoice::from_project(&doc.project, i, enabled)
+        })
         .collect();
-    egui::ComboBox::from_id_salt(("pred_add", first)).selected_text(crate::lang::text("prop.add_predecessor")).show_ui(ui, |ui| {
-        for (pred, title) in &choices {
-            if ui.selectable_label(false, title).clicked() {
-                let pred = *pred;
-                let ids = ids.to_vec();
-                edit(doc, st, "Add predecessor", move |p| {
-                    for id in &ids {
-                        if can_link(p, *id, pred) {
-                            p.link(TaskRef::Local(pred), *id, LinkType::FS, Lag::None).map_err(|e| e.to_string())?;
-                        }
-                    }
-                    Ok(())
-                });
+    if let Some(pred) = crate::widgets::task_picker::show(ui, ("pred_add", first), crate::lang::text("prop.add_predecessor"), 280.0, &choices) {
+        let ids = ids.to_vec();
+        edit(doc, st, "Add predecessor", move |p| {
+            for id in &ids {
+                if can_link(p, *id, pred) && !already(p, *id, pred) {
+                    p.link(TaskRef::Local(pred), *id, LinkType::FS, Lag::None).map_err(|e| e.to_string())?;
+                }
             }
+            Ok(())
+        });
+    }
+}
+
+fn successors(ui: &mut Ui, doc: &mut Document, st: &mut UiState, first: TaskId, multi: bool) {
+    if multi {
+        ui.label(RichText::new(crate::lang::text("common.multiple")).size(11.0).color(theme::pal().TEXT_WEAK));
+        return;
+    }
+    let links: Vec<(TaskId, LinkType, Lag, LinkDrive)> =
+        doc.project.successors(first).into_iter().map(|(succ, d)| (succ, d.kind, d.lag, d.drive)).collect();
+    if links.is_empty() {
+        ui.label(RichText::new(crate::lang::text("prop.no_successors")).size(11.0).color(theme::pal().TEXT_WEAK));
+        return;
+    }
+    let mpd = doc.project.settings.time.minutes_per_day.max(1);
+    for (succ, kind, lag, drive) in links {
+        dependency_row(ui, doc, st, succ, TaskRef::Local(first), kind, lag, drive, mpd, false);
+    }
+}
+
+/// One predecessor or successor row: name, type, drive, lag, and an explicit remove control.
+fn dependency_row(
+    ui: &mut Ui,
+    doc: &mut Document,
+    st: &mut UiState,
+    succ: TaskId,
+    pred: TaskRef,
+    kind: LinkType,
+    lag: Lag,
+    drive: LinkDrive,
+    mpd: i64,
+    show_pred_name: bool,
+) {
+    ui.horizontal(|ui| {
+        let focus = if show_pred_name { pred } else { TaskRef::Local(succ) };
+        let row = focus.local().and_then(|id| doc.project.task_index(id)).map(|i| i.saturating_add(1));
+        let name = doc.project.task_ref_name(&focus);
+        let title = match row {
+            Some(n) => format!("{n}  {name}"),
+            None => name,
+        };
+        ui.label(RichText::new(title).color(theme::pal().TEXT));
+        egui::ComboBox::from_id_salt(("dep_kind", succ, pred, show_pred_name))
+            .width(52.0)
+            .selected_text(kind.code())
+            .show_ui(ui, |ui| {
+                for next in LinkType::ALL {
+                    if ui.selectable_label(kind == next, next.code()).clicked() {
+                        edit(doc, st, "Dependency type", move |p| {
+                            p.link_drive(pred, succ, next, lag, Some(drive)).map_err(|e| e.to_string())?;
+                            Ok(())
+                        });
+                    }
+                }
+            });
+        let drive_label = match drive {
+            LinkDrive::FromPredecessor => crate::lang::text("prop.drive_pred_short"),
+            LinkDrive::FromSuccessor => crate::lang::text("prop.drive_succ_short"),
+        };
+        egui::ComboBox::from_id_salt(("dep_drive", succ, pred, show_pred_name))
+            .width(56.0)
+            .selected_text(drive_label)
+            .show_ui(ui, |ui| {
+                for next in LinkDrive::ALL {
+                    let label = match next {
+                        LinkDrive::FromPredecessor => crate::lang::text("prop.drive_pred"),
+                        LinkDrive::FromSuccessor => crate::lang::text("prop.drive_succ"),
+                    };
+                    if ui.selectable_label(drive == next, label).clicked() {
+                        edit(doc, st, "Schedule drive", move |p| {
+                            p.link_drive(pred, succ, kind, lag, Some(next)).map_err(|e| e.to_string())?;
+                            Ok(())
+                        });
+                    }
+                }
+            });
+        let mut days = lag_days(lag, mpd);
+        if ui.add(egui::DragValue::new(&mut days).range(-365.0..=365.0).speed(1.0).suffix("d")).changed() {
+            let minutes = (days as i64).saturating_mul(mpd);
+            let next_lag = if minutes == 0 { Lag::None } else { Lag::Working(minutes) };
+            edit(doc, st, "Lag", move |p| {
+                p.link_drive(pred, succ, kind, next_lag, Some(drive)).map_err(|e| e.to_string())?;
+                Ok(())
+            });
+        }
+        let remove = crate::icons::button(ui, "trash-2", 18.0, crate::lang::text("prop.remove_predecessor"));
+        if remove.clicked() {
+            edit(doc, st, "Remove dependency", move |p| {
+                p.unlink(pred, succ).map_err(|e| e.to_string())?;
+                Ok(())
+            });
         }
     });
 }

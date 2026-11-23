@@ -130,14 +130,14 @@ impl ImportSheet {
         let mut open = true;
         let mut outcome = Outcome::Open;
         let file = self.path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
-        egui::Window::new("Import Spreadsheet")
+        egui::Window::new(crate::lang::text("dlg.import_sheet"))
             .id(egui::Id::unique("import_spreadsheet"))
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 100.0))
             .default_width((ctx.content_rect().width() - 80.0).clamp(560.0, 1100.0))
             .title_bar(false)
             .show(ctx, |ui| {
-                open = crate::widgets::craft::dialog_header(ui, "Import Spreadsheet");
+                open = crate::widgets::craft::dialog_header(ui, crate::lang::text("dlg.import_sheet"));
                 ui.label(RichText::new(bidi::display(&file)).strong());
                 if self.sheets.sheets.len() > 1 {
                     let mut sheet = self.sheet;
@@ -189,11 +189,11 @@ impl ImportSheet {
                 let row = egui::vec2(ui.available_width(), crate::widgets::craft::CONTROL_H);
                 ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = crate::widgets::craft::ITEM_GAP + 2.0;
-                    if crate::widgets::craft::secondary_button(ui, "Cancel").clicked() {
+                    if crate::widgets::craft::secondary_button(ui, crate::lang::text("common.cancel")).clicked() {
                         outcome = Outcome::Cancelled;
                     }
                     ui.add_enabled_ui(has_name, |ui| {
-                        if crate::widgets::craft::primary_button(ui, "Import").clicked() {
+                        if crate::widgets::craft::primary_button(ui, crate::lang::text("dlg.import")).clicked() {
                             match self.import(ws) {
                                 Ok(handle) => outcome = Outcome::Imported(handle),
                                 Err(e) => self.error = Some(e),

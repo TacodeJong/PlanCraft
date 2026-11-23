@@ -137,7 +137,12 @@ fn build_plan(grid: &Grid, options: &ImportOptions) -> Result<(Project, Vec<Stri
                 // working week; counting further would only take time.
                 (Some(s), Some(f)) if f >= s => {
                     let f = s.checked_add_signed(crate::dates::days(25 * 366)).map_or(f, |cap| f.min(cap));
-                    Some(TypedDuration { minutes: cal.between(s, f), estimated: false, elapsed: false })
+                    Some(TypedDuration {
+                        minutes: cal.between(s, f),
+                        estimated: false,
+                        elapsed: false,
+                        unit: p.settings.duration_unit,
+                    })
                 }
                 _ => None,
             },
@@ -149,6 +154,7 @@ fn build_plan(grid: &Grid, options: &ImportOptions) -> Result<(Project, Vec<Stri
             t.duration = typed.minutes.clamp(0, MAX_MINUTES);
             t.estimated = typed.estimated;
             t.elapsed = typed.elapsed && t.duration > 0;
+            t.duration_unit = Some(typed.unit);
             if t.duration == 0 {
                 t.kind = TaskKind::Milestone;
             }
@@ -442,7 +448,12 @@ fn links(p: &mut Project, grid: &Grid, options: &ImportOptions, rows: &[usize], 
                 notes.add(format!("a task can have at most {MAX_LINKS_PER_TASK} predecessors; the rest were left out"));
                 break;
             }
-            task.predecessors.push(Dependency { predecessor: TaskRef::Local(pred), kind, lag });
+            task.predecessors.push(Dependency {
+                predecessor: TaskRef::Local(pred),
+                kind,
+                lag,
+                drive: Default::default(),
+            });
         }
     }
 }

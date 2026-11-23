@@ -126,6 +126,12 @@ pub fn task_table(
                 Row::Task(idx) => *idx,
             };
             let mut cell = field.cell(p, idx, &ctx);
+            // Whole-row mark wash (unless a dependency-path tint already won).
+            if cell.bg.is_none()
+                && let Some(mark) = p.tasks.get(idx).and_then(|t| t.row_mark)
+            {
+                cell.bg = Some(theme::row_mark_wash(mark));
+            }
             if field == Field::Builtin(TaskCol::Name) {
                 if grouped {
                     // Grouped rows are not an outline: no indent or summary toggles.

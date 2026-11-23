@@ -354,6 +354,44 @@ impl From<TaskId> for TaskRef {
     }
 }
 
+/// Which end of a dependency drives early dates in the forward pass.
+///
+/// Link *meaning* stays successor-centric (predecessor finishes before successor for FS). Drive is
+/// orthogonal: [`LinkDrive::FromPredecessor`] pushes the successor from the predecessor (default);
+/// [`LinkDrive::FromSuccessor`] pulls the predecessor toward the successor — including across
+/// outline groups — without flipping who is predecessor or successor.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkDrive {
+    /// Early dates: successor is constrained by the predecessor (classic CPM forward).
+    #[default]
+    FromPredecessor,
+    /// Early dates: predecessor is pulled to align with the successor (successor-driven).
+    FromSuccessor,
+}
+
+impl LinkDrive {
+    pub const ALL: [LinkDrive; 2] = [LinkDrive::FromPredecessor, LinkDrive::FromSuccessor];
+
+    pub fn is_default(&self) -> bool {
+        matches!(self, LinkDrive::FromPredecessor)
+    }
+
+    pub fn code(self) -> &'static str {
+        match self {
+            LinkDrive::FromPredecessor => "",
+            LinkDrive::FromSuccessor => "<",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            LinkDrive::FromPredecessor => "Schedule from predecessor",
+            LinkDrive::FromSuccessor => "Schedule from successor",
+        }
+    }
+}
+
 /// A predecessor link stored on the successor task.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Dependency {
@@ -362,11 +400,18 @@ pub struct Dependency {
     pub kind: LinkType,
     #[serde(default, skip_serializing_if = "Lag::is_zero")]
     pub lag: Lag,
+    #[serde(default, skip_serializing_if = "LinkDrive::is_default")]
+    pub drive: LinkDrive,
 }
 
 impl Dependency {
     pub fn fs(pred: impl Into<TaskRef>) -> Self {
-        Self { predecessor: pred.into(), kind: LinkType::FS, lag: Lag::None }
+        Self {
+            predecessor: pred.into(),
+            kind: LinkType::FS,
+            lag: Lag::None,
+            drive: LinkDrive::FromPredecessor,
+        }
     }
 }
 
@@ -607,6 +652,10 @@ pub struct Task {
     /// holidays included, instead of in working time.
     #[serde(default, skip_serializing_if = "is_false")]
     pub elapsed: bool,
+    /// Unit the user typed for this duration (`1d`, `2wk`, …). When set, tables and properties
+    /// show that unit instead of the project default. Absent on old files → project unit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_unit: Option<DurationUnit>,
     #[serde(default)]
     pub task_type: TaskType,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -708,6 +757,10 @@ pub struct Task {
     /// Independent of `bar_color`. Absent on plans that never set one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row_mark: Option<RowMark>,
+    /// Free-text reason for [`Self::row_mark`] ("open question or reason"). Empty when unmarked
+    /// or when the mark has no note. Planner-JSON `markNote` / MSPDI Planner Mark Note.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mark_note: String,
     /// Values of the project's custom fields (see [`crate::custom`]).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub custom: std::collections::BTreeMap<CustomFieldId, crate::custom::CustomValue>,
@@ -873,6 +926,7 @@ impl Task {
             duration: minutes_per_day,
             estimated: true,
             elapsed: false,
+            duration_unit: None,
             task_type: TaskType::FixedUnits,
             effort_driven: false,
             constraint: Constraint::default(),
@@ -910,6 +964,7 @@ impl Task {
             show_on_timeline: false,
             bar_color: None,
             row_mark: None,
+            mark_note: String::new(),
             custom: std::collections::BTreeMap::new(),
             sched: TaskSchedule::default(),
         }

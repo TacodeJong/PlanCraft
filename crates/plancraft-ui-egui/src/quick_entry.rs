@@ -37,6 +37,7 @@ pub struct Ticket {
     pub level: u16,
     pub minutes: Option<i64>,
     pub estimated: bool,
+    pub unit: DurationUnit,
     pub duration_label: String,
     pub milestone: bool,
     pub group: bool,
@@ -58,6 +59,7 @@ struct Draft {
     raw: u16,
     minutes: Option<i64>,
     estimated: bool,
+    unit: DurationUnit,
     duration_label: String,
     milestone: bool,
     resources: Vec<String>,
@@ -96,18 +98,19 @@ pub fn parse(text: &str, settings: &TimeSettings) -> Sheet {
         if group && !draft.resources.is_empty() {
             issue = issue.or(Some(Issue::GroupResource));
         }
-        let (minutes, label, estimated) = if group || draft.milestone {
-            (None, String::new(), false)
+        let (minutes, label, estimated, unit) = if group || draft.milestone {
+            (None, String::new(), false, DurationUnit::Days)
         } else if let Some(mins) = draft.minutes {
-            (Some(mins), draft.duration_label.clone(), draft.estimated)
+            (Some(mins), draft.duration_label.clone(), draft.estimated, draft.unit)
         } else {
-            (Some(settings.minutes_per_day.max(1)), "1d".to_string(), false)
+            (Some(settings.minutes_per_day.max(1)), "1d".to_string(), false, DurationUnit::Days)
         };
         tickets.push(Ticket {
             name: draft.name.clone(),
             level,
             minutes,
             estimated,
+            unit,
             duration_label: label,
             milestone: draft.milestone && !group,
             group,
@@ -168,6 +171,7 @@ fn draft_line(line: &str, settings: &TimeSettings) -> Option<Draft> {
     let mut name_words = Vec::new();
     let mut minutes = None;
     let mut estimated = false;
+    let mut unit = DurationUnit::Days;
     let mut duration_label = String::new();
     let mut milestone = false;
     let mut resources = Vec::new();
@@ -195,9 +199,10 @@ fn draft_line(line: &str, settings: &TimeSettings) -> Option<Draft> {
             }
             continue;
         }
-        if let Some((mins, est, label)) = duration_word(word, settings) {
+        if let Some((mins, est, u, label)) = duration_word(word, settings) {
             minutes = Some(mins);
             estimated = est;
+            unit = u;
             duration_label = label;
             continue;
         }
@@ -207,7 +212,7 @@ fn draft_line(line: &str, settings: &TimeSettings) -> Option<Draft> {
     if name.is_empty() && issue.is_none() {
         issue = Some(Issue::NeedsName);
     }
-    Some(Draft { name, raw, minutes, estimated, duration_label, milestone, resources, link_kinds, issue })
+    Some(Draft { name, raw, minutes, estimated, unit, duration_label, milestone, resources, link_kinds, issue })
 }
 
 fn push_resources(out: &mut Vec<String>, spec: &str) -> bool {
@@ -232,16 +237,16 @@ fn link_kind(spec: &str) -> Option<LinkKind> {
     if spec.contains('.') { Some(LinkKind::Wbs(spec.to_string())) } else { spec.parse().ok().map(LinkKind::Number) }
 }
 
-fn duration_word(word: &str, settings: &TimeSettings) -> Option<(i64, bool, String)> {
+fn duration_word(word: &str, settings: &TimeSettings) -> Option<(i64, bool, DurationUnit, String)> {
     if !word.chars().any(|c| c.is_ascii_alphabetic()) {
         return None;
     }
-    let (mins, est) = duration::parse_duration(word, DurationUnit::Days, settings)?;
+    let (mins, est, unit) = duration::parse_duration(word, DurationUnit::Days, settings)?;
     if mins <= 0 {
         return None;
     }
     let label = word.trim().trim_end_matches('?').trim().to_string();
-    Some((mins, est, label))
+    Some((mins, est, unit, label))
 }
 
 /// Leading tabs, each two spaces, a run of dots, and `>` each add one indent level.
@@ -385,7 +390,11 @@ pub fn apply(p: &mut Project, sheet: &Sheet, at: Option<usize>) -> Result<Vec<Ta
         } else if !ticket.milestone
             && let Some(minutes) = ticket.minutes
         {
-            p.set_duration(*id, minutes, ticket.estimated).map_err(|e| e.to_string())?;
+            p.set_typed_duration(
+                *id,
+                TypedDuration { minutes, estimated: ticket.estimated, elapsed: false, unit: ticket.unit },
+            )
+            .map_err(|e| e.to_string())?;
         }
         if !ticket.group && !ticket.resources.is_empty() {
             p.apply_resource_names(*id, &ticket.resources.join(", ")).map_err(|e| e.to_string())?;

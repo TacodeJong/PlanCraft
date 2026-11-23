@@ -59,8 +59,8 @@ pub mod prelude {
     pub use crate::custom::{CustomFieldDef, CustomFieldKind, CustomValue, TableLayout};
     pub use crate::dates::{Date, DateTime, Time, Weekday};
     pub use crate::duration::{
-        DurationUnit, Lag, Minutes, TimeSettings, TypedDuration, format_duration, format_elapsed, format_work, parse_duration,
-        parse_task_duration, parse_work,
+        DurationUnit, Lag, Minutes, TimeSettings, TypedDuration, format_duration, format_duration_compact, format_elapsed,
+        format_elapsed_compact, format_work, parse_duration, parse_task_duration, parse_work,
     };
     pub use crate::ids::*;
     pub use crate::model::*;

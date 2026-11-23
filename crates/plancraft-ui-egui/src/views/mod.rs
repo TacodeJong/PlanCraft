@@ -88,6 +88,7 @@ pub fn task_matches(p: &Project, st: &UiState, t: &Task) -> bool {
         && focus_hit(p, st, t)
         && status_hit(p, st, t)
         && kind_hit(p, st, t)
+        && mark_hit(st, t)
         && date_hit(p, st, t)
         && resource_hit(p, st, t)
 }
@@ -99,6 +100,7 @@ pub fn criteria_active(st: &UiState) -> bool {
         || st.focus.is_some()
         || st.status_filter.is_some()
         || st.kind_filter != TaskKindFilter::All
+        || st.mark_filter != crate::state::MarkFilter::All
         || st.date_window != DateWindow::All
         || !st.filter_resources.is_empty()
 }
@@ -137,6 +139,10 @@ fn kind_hit(p: &Project, st: &UiState, t: &Task) -> bool {
         TaskKindFilter::Milestones => t.is_milestone(),
         TaskKindFilter::Groups => p.has_children(idx),
     }
+}
+
+fn mark_hit(st: &UiState, t: &Task) -> bool {
+    st.mark_filter.matches(t.row_mark)
 }
 
 fn date_hit(p: &Project, st: &UiState, t: &Task) -> bool {
@@ -727,5 +733,25 @@ mod tests {
         assert!(task_matches(&p, &st, delayed_task), "new filter combines with existing criteria");
         st.search = "no-such-task".into();
         assert!(!task_matches(&p, &st, delayed_task));
+    }
+
+    #[test]
+    fn mark_filter_keeps_only_matching_row_marks() {
+        use crate::state::MarkFilter;
+        use plancraft_core::model::RowMark;
+        let mut p = Project::new("Marks", plancraft_core::dates::ymd(2026, 10, 15).unwrap());
+        let pink = p.add_task("Pink", None);
+        let plain = p.add_task("Plain", None);
+        p.task_mut(pink).unwrap().row_mark = Some(RowMark::Pink);
+        plancraft_core::schedule::recalculate(&mut p);
+        let mut st = UiState { mark_filter: MarkFilter::Pink, ..UiState::default() };
+        assert!(task_matches(&p, &st, p.task(pink).unwrap()));
+        assert!(!task_matches(&p, &st, p.task(plain).unwrap()));
+        st.mark_filter = MarkFilter::Any;
+        assert!(task_matches(&p, &st, p.task(pink).unwrap()));
+        assert!(!task_matches(&p, &st, p.task(plain).unwrap()));
+        st.mark_filter = MarkFilter::None;
+        assert!(!task_matches(&p, &st, p.task(pink).unwrap()));
+        assert!(task_matches(&p, &st, p.task(plain).unwrap()));
     }
 }

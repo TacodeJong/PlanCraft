@@ -48,6 +48,7 @@ struct Edge {
     succ: usize,
     kind: LinkType,
     lag: Lag,
+    drive: LinkDrive,
     /// When the dependency was inherited from an ancestor summary, that summary's
     /// `fixedStartCap` limits how late this drive may push the leaf (Swift: drive through
     /// capped `S(group)` before `S(group)→S(child)`).
@@ -947,7 +948,14 @@ impl<'a> Engine<'a> {
                     if let Some(inc) = self.incoming.get_mut(succ) {
                         inc.push(e);
                     }
-                    self.edges.push(Edge { pred: src, succ, kind: d.kind, lag: d.lag, via_summary_cap });
+                    self.edges.push(Edge {
+                        pred: src,
+                        succ,
+                        kind: d.kind,
+                        lag: d.lag,
+                        drive: d.drive,
+                        via_summary_cap,
+                    });
                 }
             }
         }
@@ -1117,6 +1125,11 @@ impl<'a> Engine<'a> {
             let inherited = self.inherited(i);
             for &e in self.incoming(i) {
                 let Some(edge) = self.edges.get(e) else { continue };
+                // Successor-driven links pull the predecessor after this pass; they must not push
+                // the successor's early start here.
+                if edge.drive == LinkDrive::FromSuccessor {
+                    continue;
+                }
                 let Some((ps, pf, pdur)) = self.pred_dates(&edge.pred) else {
                     continue;
                 };
@@ -1289,6 +1302,86 @@ impl<'a> Engine<'a> {
                 self.segments.insert(i, segments);
             }
             self.set_early(i, s, f);
+        }
+    }
+
+    /// Pull predecessor early dates toward successors for [`LinkDrive::FromSuccessor`] edges.
+    /// Runs after [`Self::forward`] so successor early dates (pins, constraints) are settled.
+    fn pull_successor_driven(&mut self) {
+        for e in (0..self.edges.len()).rev() {
+            let Some(edge) = self.edges.get(e).cloned() else { continue };
+            if edge.drive != LinkDrive::FromSuccessor {
+                continue;
+            }
+            let Some(succ) = self.task(edge.succ) else { continue };
+            if !succ.active {
+                continue;
+            }
+            let (Some(succ_es), Some(succ_ef)) = (self.date(edge.succ).es, self.date(edge.succ).ef) else {
+                continue;
+            };
+            let leaves: Vec<usize> = match &edge.pred {
+                PredSource::Leaf(pi) => vec![*pi],
+                PredSource::SummaryStart { leaves, .. } | PredSource::SummaryAnchored { leaves, .. } => leaves.clone(),
+                PredSource::Fixed { .. } => continue,
+            };
+            for pi in leaves {
+                let Some(pred) = self.task(pi) else { continue };
+                if pred.mode == ScheduleMode::Manual || pred.actual_finish.is_some() || !pred.active {
+                    continue;
+                }
+                if self.p.has_children(pi) {
+                    continue;
+                }
+                let (Some(cur_es), Some(_cur_ef)) = (self.date(pi).es, self.date(pi).ef) else {
+                    continue;
+                };
+                let cal = self.cal(pi);
+                let dur = self.duration_of(pi);
+                let elapsed = pred.elapsed && dur > 0;
+                let span = if pred.mode == ScheduleMode::Auto && !elapsed { span_of(pred, dur) } else { dur };
+                let along = |from: DateTime, forward: bool| match (elapsed, forward) {
+                    (true, true) => shift(from, span),
+                    (true, false) => shift(from, span.saturating_neg()),
+                    (false, true) => cal.add(from, span),
+                    (false, false) => cal.sub(from, span),
+                };
+                let (aligned_es, aligned_ef) = match edge.kind {
+                    LinkType::FS => {
+                        let ef = unapply_lag(&self.proj_cal, succ_es, edge.lag, dur);
+                        let es = if dur > 0 { along(ef, false) } else { ef };
+                        (es, ef)
+                    }
+                    LinkType::SS => {
+                        let es = unapply_lag(&self.proj_cal, succ_es, edge.lag, dur);
+                        let ef = if dur > 0 { along(es, true) } else { es };
+                        (es, ef)
+                    }
+                    LinkType::FF => {
+                        let ef = unapply_lag(&self.proj_cal, succ_ef, edge.lag, dur);
+                        let es = if dur > 0 { along(ef, false) } else { ef };
+                        (es, ef)
+                    }
+                    LinkType::SF => {
+                        let es = unapply_lag(&self.proj_cal, succ_ef, edge.lag, dur);
+                        let ef = if dur > 0 { along(es, true) } else { es };
+                        (es, ef)
+                    }
+                };
+                // Only slide later toward the successor so own predecessor floors stay intact.
+                if aligned_es > cur_es {
+                    let (es, ef) = if elapsed {
+                        (aligned_es, aligned_ef)
+                    } else if dur > 0 {
+                        let s = cal.snap_forward(aligned_es);
+                        (s, along(s, true))
+                    } else {
+                        let s = cal.snap_event(aligned_es);
+                        (s, s)
+                    };
+                    self.set_early(pi, es, ef);
+                }
+            }
         }
     }
 
@@ -1580,6 +1673,7 @@ fn calculate(p: &mut Project) -> ScheduleReport {
         eng.build_edges();
         eng.topo_sort();
         eng.forward(&HashMap::new(), false);
+        eng.pull_successor_driven();
         eng.backward();
         // As-late-as-possible tasks are pinned to their late start and the forward pass is repeated
         // so successors stay consistent.
@@ -1625,6 +1719,7 @@ fn calculate(p: &mut Project) -> ScheduleReport {
             }
         }
         eng.forward(&pins, true);
+        eng.pull_successor_driven();
         eng.backward();
         let (total_slack, free_slack) = eng.slack();
         (eng.dates, eng.warnings, total_slack, free_slack, eng.segments)

@@ -187,7 +187,7 @@ impl PrintDialog {
         let mut close = false;
         let mut print_now = false;
         let mut save_pdf = false;
-        egui::Window::new("Print")
+        egui::Window::new(crate::lang::text("dlg.print"))
             .id(egui::Id::unique("print_dialog"))
             .default_size([1080.0, 720.0])
             .min_size([760.0, 520.0])
@@ -196,7 +196,7 @@ impl PrintDialog {
             .resizable(true)
             .title_bar(false)
             .show(ctx, |ui| {
-                open = crate::widgets::craft::dialog_header(ui, "Print");
+                open = crate::widgets::craft::dialog_header(ui, crate::lang::text("dlg.print"));
                 let h = ui.available_height().max(480.0);
                 ui.horizontal_top(|ui| {
                     ui.vertical(|ui| {
@@ -297,7 +297,7 @@ impl PrintDialog {
             if crate::widgets::craft::secondary_button_enabled(ui, "Save as PDF…", !pages.pages.is_empty()).clicked() {
                 *save_pdf = true;
             }
-            if crate::widgets::craft::secondary_button(ui, "Close").clicked() {
+            if crate::widgets::craft::secondary_button(ui, crate::lang::text("dlg.close")).clicked() {
                 *close = true;
             }
         });

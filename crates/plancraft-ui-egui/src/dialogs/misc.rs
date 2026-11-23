@@ -157,7 +157,7 @@ pub fn statistics(ctx: &Context, doc: &Document, open: &mut bool) -> Option<Task
     let mut goto = None;
     let p = &doc.project;
     let s = report::project_stats(p);
-    let title = format!("Project Statistics for '{}'", p.name);
+    let title = crate::lang::text("dlg.statistics_for").replacen("{}", &p.name, 1);
     egui::Window::new(&title)
         .id(egui::Id::unique("stats"))
         .pivot(egui::Align2::CENTER_TOP)
@@ -394,10 +394,10 @@ impl ExternalLinks {
 
     pub fn show(&mut self, ctx: &Context, doc: &mut Document, st: &mut UiState) -> bool {
         let mut open = true;
-        egui::Window::new("Links Between Projects").id(egui::Id::unique("external_links"))
+        egui::Window::new(crate::lang::text("dlg.links_projects")).id(egui::Id::unique("external_links"))
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 120.0)).title_bar(false).default_width(640.0).show(ctx, |ui| {
-            open = crate::widgets::craft::dialog_header(ui, "Links Between Projects");
+            open = crate::widgets::craft::dialog_header(ui, crate::lang::text("dlg.links_projects"));
             ui.label("Tasks and milestones can depend on tasks stored in other PlanCraft files. Linked dates are cached in this file and refreshed when it opens.");
             if doc.path.is_none() {
                 ui.colored_label(theme::pal().WARN, "Save this project first so links can be stored relative to its location.");
@@ -487,7 +487,7 @@ impl ExternalLinks {
 // ---------------------------------------------------------------------------
 
 pub fn about(ctx: &Context, open: &mut bool) {
-    egui::Window::new("About PlanCraft")
+    egui::Window::new(crate::lang::text("dlg.about"))
         .id(egui::Id::unique("about"))
         .pivot(egui::Align2::CENTER_TOP)
         .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 120.0))
@@ -495,7 +495,7 @@ pub fn about(ctx: &Context, open: &mut bool) {
         .resizable(false)
         .default_width(380.0)
         .show(ctx, |ui| {
-            if !crate::widgets::craft::dialog_header(ui, "About PlanCraft") {
+            if !crate::widgets::craft::dialog_header(ui, crate::lang::text("dlg.about")) {
                 *open = false;
             }
             ui.vertical_centered(|ui| {

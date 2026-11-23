@@ -24,7 +24,8 @@
 //! println!("MCP endpoint: {} (Authorization: Bearer {})", handle.url(), handle.token());
 //! ```
 //!
-//! All mutations go through `Document::try_edit` with `ChangeSource::Agent`,
+//! Mutations use `Session::execute` when an engine command exists; otherwise
+//! `Document::try_edit` with `ChangeSource::Agent`. Both paths end in `try_edit`,
 //! so every agent change is undoable in the app and triggers recalculation.
 
 #![recursion_limit = "512"]

@@ -4,26 +4,29 @@ PlanCraft follows Craft-suite layering (see `xtask/src/layers.rs`, `cargo xtask 
 
 ```
 apps/plancraft · apps/plancraft-cli          (L7 exempt)
-        │                │
-        ▼                ▼
-plancraft-ui-egui ──► plancraft-mcp ──► plancraft-engine ──► plancraft-core
-        │                                      ▲                    ▲
-        └──────────► plancraft-server ─────────┴────────────────────┘
+        │
+        ▼
+plancraft-ui-egui (L6) ──► plancraft-mcp (L6) ──► plancraft-engine (L5) ──► plancraft-core (L1)
+        │                       │                      │                      ▲
+        │                       └──────────────────────┴──────────────────────┘
+        ├─────────────────────► plancraft-server (L4) ────────────────────────┘
+        └─────────────────────► engine / core (direct)
 ```
 
 | Layer | Crates |
 |---|---|
 | L7 exempt | `plancraft`, `plancraft-cli`, `xtask` |
-| L6 | `plancraft-ui-egui`, `plancraft-mcp` |
+| L6 | `plancraft-ui-egui`, `plancraft-mcp` (same layer; `INTRA_LAYER_ORDER` allows `ui-egui → mcp` only) |
 | L5 | `plancraft-engine` (`Session::execute`, command registry) |
-| L4 | `plancraft-server` |
+| L4 | `plancraft-server` (depends on `plancraft-core` only — not on engine) |
+| L2–L3 | Reserved empty until `plancraft-core` is split |
 | L1 | `plancraft-core` (domain monolith for now) |
 
-**Commands.** Document-mutating work goes through `plancraft_engine::Session::execute` (registry: `file.*`, `edit.*`, `task.*`, `resource.*`, `project.*`, plus queries). Desktop maps UI `Command` values via `plancraft_ui_egui::engine_bridge` onto those ids; MCP domain tools thin-wrap the same Session when an equivalent engine command exists (`list_commands` / `run_command` expose the full registry, matching `plancraft-cli`).
+**Commands.** Prefer `plancraft_engine::Session::execute` when a registry command exists (`file.*`, `edit.*`, `task.*`, `resource.*`, `project.*`, plus queries). Desktop maps UI `Command` values via `plancraft_ui_egui::engine_bridge` onto those ids. MCP tools use Session where an engine command exists (`list_commands` / `run_command` expose the full registry, matching `plancraft-cli`); otherwise they call `Document::try_edit` with `ChangeSource::Agent`. Both paths end in `try_edit` (undo journal, recalculation, events).
 
 **UI-only** (stay local — no engine id): dialog *open/close* and chrome (find/goto, print/export surfaces, import, AI/server panels), cut/copy staging, view/zoom/filter/table/column layout, theme/lang/settings, pane toggles, Gantt/network display flags, window chrome, file pickers / save dialogs (path choice only), recovery, and split-task click mode. Clipboard paste and several dialog *applies* (project info, assign, resource delete, quick entry, distill) go through `engine_bridge::edit_doc` / Session; remaining multi-field dialog drafts (task/resource info, baselines, working time, find/replace, …) still use `Document::try_edit` via `EditExt` (same undo stack) because they do not map cleanly onto discrete CommandSpec ids.
 
-**Craft-libs pin (partial).** Window chrome uses live `craft-window` + `craft-ui-shell` at rev `77c7c623…`. Still deferred: full `craft-ui` / docking `TabStrip`, `craft-theme` / `craft-settings` / `craft-fonts`, `apps/plancraft-web`, a control-channel beyond MCP, and splitting `plancraft-core` into L0–L4. Panel inspectors use a local `widgets::panel_tabs` mirror of `TabKind::Panel` until dock hosts land (see `designspecs/ui-placement/panel-tabs-notes.md`).
+**Craft-libs pin (partial).** Window chrome uses live `craft-window` + `craft-ui-shell` at rev [`77c7c62345c1f4213f59a07d9fdc156ecde0b540`](https://github.com/storytold/craft-libs/commit/77c7c62345c1f4213f59a07d9fdc156ecde0b540). Still deferred: full `craft-ui` / docking `TabStrip`, `craft-theme` / `craft-settings` / `craft-fonts`, `apps/plancraft-web`, a control-channel beyond MCP, and splitting `plancraft-core` into L0–L4. Panel inspectors use a local `widgets::panel_tabs` mirror of `TabKind::Panel` until dock hosts land (see `designspecs/ui-placement/panel-tabs-notes.md`).
 
 ## plancraft-engine
 
@@ -61,7 +64,8 @@ This crate is pure logic with no UI. Every other component builds on it.
 
 ### Time model
 
-- Everything is stored in **working minutes**. Days, weeks and months are display units derived from `TimeSettings` (default 8 h/day, 40 h/week, 20 days/month).
+- Durations and lags are stored as **minutes**. Ordinary values are **working** minutes; days, weeks and months are display units derived from `TimeSettings` (default 8 h/day, 40 h/week, 20 days/month).
+- **Elapsed** (`ed`) durations and lags (`33ed`, `3ed`) are wall-clock minutes: they run around the clock (including non-working time) and are still stored as a minute count with an elapsed flag / `Lag::Elapsed`.
 - Dates are `NaiveDateTime` in the project's local time.
 - A task that finishes at the end of a working day finishes at **17:00, not at 08:00 the next day**. Successors snap forward to the next working minute.
 
@@ -73,9 +77,14 @@ A `WorkCal` is the **intersection** of one or more layers. Each layer is a base 
 - For each assigned *work* resource, it adds that resource's base calendar plus its time off. This step applies unless `ignore_resource_calendars` is set or the project option is off.
 - If the combination contains no working time at all, it falls back to the task or project calendar.
 
-So a vacation of any assigned person pauses the task. Lags and summary durations use the project calendar.
+So a vacation of any assigned person pauses the task. **Which calendar where:** leaf CPM forward/backward uses each task's calendar (`TaskCalendars`); **lags**, **summary durations**, and share resolve (`P`, successor caps, lag on cap edges) use the **project calendar** (`schedule::project_calendar`).
 
 ### Scheduling (`schedule::recalculate`)
+
+Group fill / Auto duration / successor-date caps (and how “no room” / “shortened” warnings are
+computed) are documented in [SCHEDULING-RULESET.md](SCHEDULING-RULESET.md). Share resolve runs
+before the CPM passes below when Auto, Size-of-group fill/percent, or project-wide stretch/span
+is in play (`shares::resolve`).
 
 1. **Mark summaries.** A task with deeper rows below it is a summary task.
 2. **Roll up tracking.** Work, actual work and cost per leaf come from assignments, time entries and estimates.
@@ -137,7 +146,7 @@ A `Document` opened from a server (`Document::shared`, `Workspace::add_shared`) 
 
 ### Robustness
 
-- **No panics in shipped code.** Workspace clippy lints deny `unwrap`, `expect`, `panic!` and indexing; code returns `Result`/`Option` and uses `get()` and checked or saturating arithmetic. Date arithmetic saturates (`calendar::shift`) and never walks past a horizon (1800–2500), so hostile durations can't hang the scheduler.
+- **No panics in shipped code.** Workspace clippy lints deny `unwrap`, `expect`, `panic!` and indexing; code returns `Result`/`Option` and uses `get()` and checked or saturating arithmetic. Date arithmetic saturates (`calendar::shift`) and never walks past a horizon (1800–2500), so hostile durations can't hang the scheduler. That horizon is an **arithmetic guard**; user-facing **input limits** are tighter (`limits`: dates 1900–2300, durations up to 5 years).
 - **Guards as a last resort.** `guard::catch` turns a panic into an error. Edits roll back, `recalculate` leaves a warning, the MCP server answers with a tool error, and the app keeps running and writes recovery copies.
 - **Hostile input.** `limits` caps counts (50,000 tasks, …), durations (5 years), dates (1900–2300), numbers and text. Loading clamps values and reports what it changed (`io::load_with_notes`); oversized files, too many items or duplicate ids are refused.
 - **Atomic, private files.** `io::write_atomic` writes a temporary file in the same directory, fsyncs it, renames it over the target and fsyncs the directory. Per-user files are owner-only (0600/0700 on Unix).
@@ -151,7 +160,7 @@ The MCP server is a hand-rolled JSON-RPC 2.0 server. It has no async runtime, wh
   - Each request locks the shared workspace briefly.
   - The change callback runs after the lock is released.
 - **`tools/*`:** 92 tools grouped by domain.
-  - All mutations go through `Document::try_edit(…, ChangeSource::Agent, …)`.
+  - Mutations use `Session::execute` / `execute_mut` when an engine command exists; otherwise `Document::try_edit(…, ChangeSource::Agent, …)`. Both end in `try_edit` (same undo journal and recalculation).
   - Unknown arguments are rejected so agents find their typos.
 - **Transports:**
   - `run_stdio`: newline-delimited JSON.
@@ -174,7 +183,7 @@ PlanCraft Server shares a folder of plans for several people to edit at once (op
 
 The desktop UI library (`plancraft-ui-egui`) and thin binary (`apps/plancraft`) use egui/eframe **0.37** (storytold forks) with the wgpu renderer. Side inspectors use `panes::PaneHost` plus PhotoCraft-style panel tab chrome (`widgets::panel_tabs`).
 
-**Craft suite pin:** [storytold/craft-libs](https://github.com/storytold/craft-libs) rev `77c7c62345c1f4213f59a07d9fdc156ecde0b540` (PhotoCraft’s pin). Live deps: `craft-window` (`ui`, macOS `appkit`) and `craft-ui-shell`. Workspace `[patch.crates-io]` matches PhotoCraft / `craft::egui_fork::REV` (egui @ `8a3c5ecb…`, winit @ `a517b384…`). See `designspecs/ui-placement/title-bar-notes.md`.
+**Craft suite pin:** [storytold/craft-libs](https://github.com/storytold/craft-libs) rev [`77c7c62345c1f4213f59a07d9fdc156ecde0b540`](https://github.com/storytold/craft-libs/commit/77c7c62345c1f4213f59a07d9fdc156ecde0b540) (PhotoCraft’s pin; same as the partial pin above). Live deps: `craft-window` (`ui`, macOS `appkit`) and `craft-ui-shell`. Workspace `[patch.crates-io]` matches PhotoCraft / `craft::egui_fork::REV` (egui @ `8a3c5ecb…`, winit @ `a517b384…`). See `designspecs/ui-placement/title-bar-notes.md`.
 
 **Design reference:** the approved chrome is ArtCraft brutalist-dark (and its derived light). `docs/images/` documents the current app with generated demo-data captures; it is not an independent design target. Use the approved ArtCraft reference when restyling, not screenshots of an earlier build.
 
@@ -189,7 +198,7 @@ The desktop UI library (`plancraft-ui-egui`) and thin binary (`apps/plancraft`) 
 - **`widgets::timescale`:** the two-tier timescale (units from `plancraft_core::timescale`).
 - **`fonts`:** adds the system fallback fonts to egui the first time a plan's text, typed text or a recent file name needs them.
 - **`printing` / `dialogs::print`:** the printed sheet built from the current view (columns left of the divider, sort, group and filter as on screen), or the Network Diagram or Task Board as on screen (filter, search, collapsed summaries, view options), the Print window with its preview, and hand-off to the system print service (`lp`; the PDF viewer on Windows) in a background thread with a timeout.
-- **`views/*`:** the thirteen views. The Gantt view (also the Tracking Gantt and the Multiple Baselines Gantt) combines the task grid with `gantt_chart`, which draws bars, links, milestone connectors and baselines and handles drag-to-move, resize, progress and link. `network` draws the core's Network Diagram layout (cached per edit) and handles selection, Task Information, drag-to-link, panning and zoom. `board` paints the Task Board's columns and cards and handles selection, dragging cards between columns and the column menu.
+- **`views/*`:** the **sixteen** entries in `ViewKind::ALL` (each Change-view / View ▸ Views item counts once). That includes three Gantt variants — Gantt, Tracking Gantt, and Multiple Baselines Gantt — each a separate view that combines the task grid with `gantt_chart` (bars, links, milestone connectors, baselines; drag-to-move, resize, progress and link). `network` draws the core's Network Diagram layout (cached per edit) and handles selection, Task Information, drag-to-link, panning and zoom. `board` paints the Task Board's columns and cards and handles selection, dragging cards between columns and the column menu.
 - **`columns`:** task table definitions. Each column defines how to display, edit and commit its value. Tables: Entry, Schedule, Tracking, Work, Cost, Estimates, Variance, Summary.
 - **`dialogs/*`:** Task, Resource and Project Information, Change Working Time, Assign Resources, External Links, Statistics, History, About, and the MCP panel.
 - **`disk_watch`:** a background thread polls the open plans' files every second (`plancraft_core::watch`), without the workspace lock, and queues what it finds. `app` then reloads a plan without unsaved changes (undoably, with a toast), shows a bar above a plan with unsaved changes (Reload, Keep Mine, Compare, Save As), keeps a plan whose file was deleted or moved as unsaved work, and refreshes link snapshots when a linked plan changes. A plan another PlanCraft has open (`Document::lock`) shows a bar saying who has it.

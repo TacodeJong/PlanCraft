@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use plancraft_core::calendar::TimeRange;
 use plancraft_core::dates::prelude::*;
-use plancraft_core::duration::{Lag, Minutes, TypedDuration, parse_work};
+use plancraft_core::duration::{DurationUnit, Lag, Minutes, TypedDuration, parse_work};
 use plancraft_core::ids::*;
 use plancraft_core::model::*;
 use serde_json::{Map, Value};
@@ -314,7 +314,7 @@ pub fn parse_duration_value(p: &Project, v: &Value, key: &str) -> ToolResult<(Mi
             Ok(((d * p.settings.time.minutes_per_day as f64).round() as Minutes, false))
         }
         Value::String(s) => {
-            let (m, est) = p.parse_duration(s).ok_or_else(|| {
+            let (m, est, _) = p.parse_duration(s).ok_or_else(|| {
                 ToolError(format!("'{key}': cannot parse duration '{s}'; use e.g. \"3d\", \"4h\", \"2w\", \"1.5 days\" or \"3d?\""))
             })?;
             if m < 0 {
@@ -342,7 +342,8 @@ pub fn parse_task_duration_value(p: &Project, v: &Value, key: &str) -> ToolResul
             "'{key}': cannot parse duration {v}; use e.g. \"3d\", \"4h\", \"2w\", \"1.5 days\", \"3d?\" or elapsed time like \"33ed\""
         ))
     })?;
-    Ok(TypedDuration { minutes, estimated, elapsed: false })
+    // A bare JSON number is days (see [`parse_duration_value`]).
+    Ok(TypedDuration { minutes, estimated, elapsed: false, unit: DurationUnit::Days })
 }
 
 /// Parses a leveling delay: working time only (no elapsed `ed`), and no estimated `?` marker.
@@ -766,7 +767,7 @@ pub fn parse_predecessor_list(p: &Project, v: &Value, keys: Option<&TaskKeys>) -
                     }
                     other => (TaskRef::Local(resolve_task_with(p, other, keys)?), LinkType::FS, Lag::None),
                 };
-                out.push(Dependency { predecessor: pred, kind, lag });
+                out.push(Dependency { predecessor: pred, kind, lag, drive: Default::default() });
             }
             Ok(out)
         }

@@ -559,6 +559,7 @@ fn planner_fields_round_trip_and_dates_hold() {
         let t = p.task_mut(id).unwrap();
         t.outline_level = 2;
         t.row_mark = Some(mark);
+        t.mark_note = format!("note-{mark:?}");
         t.status = status;
         t.duration = 480;
         t.estimated = false;
@@ -659,6 +660,7 @@ fn planner_fields_round_trip_and_dates_hold() {
         assert_eq!(a.fills_group, b.fills_group, "{name}");
         assert_eq!(a.duration_percent, b.duration_percent, "{name}");
         assert_eq!(a.row_mark, b.row_mark, "{name}");
+        assert_eq!(a.mark_note, b.mark_note, "{name}");
         assert_eq!(a.status, b.status, "{name}");
         assert_eq!(a.kind, b.kind, "{name}");
     };
