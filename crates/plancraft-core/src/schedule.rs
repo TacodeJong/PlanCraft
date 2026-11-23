@@ -360,7 +360,10 @@ fn apply_lag(cal: &WorkCal, base: DateTime, lag: Lag, pred_duration: Minutes) ->
     }
 }
 
-fn unapply_lag(cal: &WorkCal, base: DateTime, lag: Lag, pred_duration: Minutes) -> DateTime {
+/// Pull a successor hard date backward across a link lag (working, elapsed, or percent of the
+/// predecessor's stored duration). Shared with share successor-cap math so Auto/Fill budgets
+/// match CPM.
+pub(crate) fn unapply_lag(cal: &WorkCal, base: DateTime, lag: Lag, pred_duration: Minutes) -> DateTime {
     match lag {
         Lag::None | Lag::Working(0) => base,
         Lag::Working(m) => cal.sub(base, m),

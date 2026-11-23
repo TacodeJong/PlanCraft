@@ -38,7 +38,7 @@ The Properties / Task Information **Size of group** control sets per-task flags 
 |---|---|---|
 | Spans its activities / Own duration | `fills_group=false`, `duration_percent=None` | Stored duration (or children for summaries) |
 | % of group | `duration_percent = q` (clears fill) | **Span**: `P × q / 100` |
-| Remaining space in group | `fills_group=true`, `duration_percent=None`, both sides Unrestricted | **Fill**: along a serial chain, divide the remaining group window; each independent parallel branch gets the **full** remaining window |
+| Remaining space in group | `fills_group=true`, `duration_percent=None`, both sides Unrestricted | **Fill**: all-or-nothing among sibling fills — if **any** fill depends on another, **every** fill divides remaining by the fill count; only when none depends on another does each get the full remaining window |
 
 **Defaults:** `Task::new` / `add_task` set `fills_group = true` (Swift Remaining space). A missing
 `fills_group` field on deserialize still yields `false`, so older PlanCraft files keep stored
@@ -101,7 +101,7 @@ only. Only soft **finish-latest** seeds a finish cap; soft **start-latest** does
 | Situation | Result |
 |---|---|
 | Leaf with stored duration, FS chain, Size = Own | CPM as usual (not the create default — see Defaults) |
-| `fills_group`, both sides **Unrestricted** | **Fill**: serial chain splits remaining `P`; each parallel branch gets the full remaining window |
+| `fills_group`, both sides **Unrestricted** | **Fill**: all-or-nothing (`fills_are_independent`) — any link among fills → split by fill count; else each gets full remaining `P` |
 | `fills_group` with any own start/finish date | **Not a fill** (`groupShare` is nil); stored duration |
 | `DurationMode::Auto`, finish not On | **Fill** (even with soft NLT) |
 | `DurationMode::Auto`, finish **On** | **FinishOn**: early start → pin |
@@ -111,18 +111,19 @@ only. Only soft **finish-latest** seeds a finish cap; soft **start-latest** does
 | Nested Auto/fill under unrestricted summary | Ancestor finish/start bounds trickle into the nested group’s `P` (summary need not be Fill) |
 | Nested summary with `fills_group` + unrestricted | Classifies as Fill; allotment feeds children |
 | Nested share allotment `L` in parent window `[Ws, We]` | Place a block of length `L` by alignment (below); children schedule inside that placed block |
-| Nested share + **ASAP** | Positioned start edge `S = Ws`, `F = S + L` (empty trails). `Ws` is the parent **window** start (`group_start`), which may be later than the parent bar’s own early start when links delay the nest |
-| Nested share + **ALAP** | Positioned finish edge `F = We`, `S = F − L` (empty leads). `We` is the parent window end |
-| Parent positioned edge → descendants | Nested ASAP children start at that positioned parent start (`S`); they do not independently re-derive `Ws` |
+| Nested share + **ASAP** | Positioned block aims for `S = Ws`, `F = S + L`. Roll-up start is `min(child starts, Ws)` — children already before `Ws` pull the group earlier (`nested_percent_asap_starts_at_parent_window`) |
+| Nested share + **ALAP** | Positioned block aims for `F = We`, `S = F − L`. Roll-up finish is `max(child finishes, We)` — children past `We` push the group later (`nested_percent_alap_finishes_with_parent_window`) |
+| Parent positioned edge → descendants | Nested ASAP children start at the positioned parent start when it is the floor; they do not independently re-derive `Ws` |
 | Nested share children shorter than `L` | Group bar still spans the full `L` (pad) |
 | Nested share children longer than `L` | Group grows; “needs more than its share… grows to fit” note |
-| Independent parallel fill children | Each occupies the full remaining window; overlapping rows do not divide time |
-| Serially linked fill children | Divide the remaining window along the serial chain |
+| Independent parallel fill children | Each occupies the full remaining window (`parallel_stretch_children_each_fill_the_fixed_window`) |
+| Any link among fill siblings | **All** fills (including an unlinked peer) divide remaining by fill count — e.g. A→B plus independent C → each gets `P/3`, not full window for C |
+| Serially linked fill children | Divide the remaining window along the serial chain (`serial_stretch_children_split_a_fixed_window`) |
 | Parallel **fixed** sibling | Does **not** shrink Auto remaining (overlap in time); serial fixed predecessor still does |
-| ALAP on a nested share summary | Positions the group block at the parent-window end; descendants move with that window but retain their own ASAP/ALAP policy |
+| ALAP on a nested share summary | Positions the group block at the parent-window end via `effective_alap` (own ALAP **or** nearest ancestor ALAP). A nested summary that is ASAP itself cannot opt out of an ancestor’s ALAP; leaf ASAP/ALAP inside the moved window is unchanged |
 | Edit Size of group on a selected summary | Changes that summary only; selected/hidden descendants retain their own `%` / fill policy |
 | Child fixed SNLT / start-latest | Caps ancestor group early start (`fixedStartCap`) and unrestricted siblings |
-| Leaf On/On (or hard start floor + finish deadline) | Working duration from the date window before CPM (date-driven) |
+| Leaf On/On (or hard start floor + finish deadline) | Working duration from the date window before CPM (`date_duration_bounds` → `apply_date_driven_durations`). Manual tasks with both typed dates read as On/On via `start_window`/`finish_window`, so they get the same date-driven length |
 | Percent sum ≤ / = / > 100% | No hard cap; group grows; slack/deadline shows the overrun |
 | No room for fills in a windowed group | Fills keep stored duration; note on the group |
 | No window at all | Fills keep stored duration; “no window” note |
@@ -147,9 +148,11 @@ For each parent with children:
    remaining (serial). Parallel FinishOn does not starve fills.
 4. Subtract **fixed** siblings that **precede** any fill in the sibling dependency graph
    (serial only — parallel fixed neighbours must not starve Auto).
-5. Give **Fill** rows the remaining window:
-   - Independent parallel fills → each gets the full remaining amount.
-   - Serially linked fills → split remaining along the chain (with remainder minutes).
+5. Give **Fill** rows the remaining window (`fills_are_independent`):
+   - **No** fill depends on another fill → each gets the full remaining amount.
+   - **Any** fill→fill link among siblings → **all** fills divide remaining by fill count
+     (remainder minutes distributed). A mixed graph (A→B plus independent C) still splits
+     three ways — C does not keep a full window.
 6. If remaining is zero → fills keep **stored** duration as a budget (so capping can still
    shrink them); group note if the group was windowed.
 
@@ -167,10 +170,21 @@ pinned successor dates (Swift `limitingSuccessorShares`).
 Every row that received a plan duration, plus share rows that fell back to stored duration,
 enters the budget list. Auto rows set `include_soft = true`; others hard-only.
 
-### 2. Probe schedule
+### 2. Early-start probe + re-cap passes
 
-Clone the project, force Fixed modes, apply plan durations, recalculate. Each budget row’s
-**probe start** is the early start used for the window check.
+Clone the project, force Fixed modes, apply plan durations, then **zero every share budget**
+and recalculate. Each budget row’s window start is that **early** ASAP start — not the start
+after inflated fill lengths (those let soft Finish-On predecessors slip and made later Auto
+rows look like they had “no room”).
+
+Each pass sets the budget to `min(original fill, start→cap)` (and may **grow back** when a
+later pass moves the start earlier because a predecessor Auto also shortened). A single
+early probe can still over-allow duration: soft Finish-On predecessors slip under the first
+capped lengths, the real start moves later, and the bar would finish after the cap (cyclus
+`#101` Auto → `#102` milestone → SS‹ `#129` soft On). Re-capping against the slipped start
+is what lets successor-driven (Opv) links see the predecessor on the successor’s date.
+Shrink-only iteration left `#101` stuck at mid-pass `2.4d` after its start moved back to
+Tuesday — finishing Thursday instead of Friday before the Monday pin.
 
 ### 3. Build finish-cap maps (`successor_hard_finishes`)
 
@@ -191,8 +205,8 @@ allotment):
 
 | Link | Predecessor finish must be ≤ |
 |---|---|
-| FS / SS | successor **start** hard (− working lag) |
-| FF / SF | successor **finish** hard (− working lag) |
+| FS / SS | successor **start** hard, pulled back by lag (`unapply_lag`: working, elapsed, or % of predecessor stored duration) |
+| FF / SF | successor **finish** hard, same lag treatment |
 
 Successor **start** hard = pinned start, else `finish_hard − stored duration` (milestone → finish).
 
@@ -223,8 +237,8 @@ else:
 | Condition | Action | User-visible note |
 |---|---|---|
 | No cap | Leave budget | — |
-| `cap ≤ probe_start` | Keep **stored** duration (never collapse to zero) | `… has no room left because successor cap is {date}; keeping {dur}` |
-| Working minutes `start→cap` < budget | Shorten budget to that window | `… shortened from A to B because successor cap is {date}` |
+| `cap ≤ probe_start`, or `between(start, cap) == 0` | Keep **stored** duration (never collapse to zero) | `… has no room left because successor cap is {date}; keeping {dur}` |
+| Working minutes `start→cap` < budget (and > 0) | Shorten budget to that window | `… shortened … because successor cap is {date}` |
 | Window ≥ budget | Leave budget | — |
 
 Notes land on the task (`sched.warnings` after recalculate) via `SharePlan.task_notes`.
@@ -235,13 +249,19 @@ Notes land on the task (`sched.warnings` after recalculate) via `SharePlan.task_
 allotments
     │
     ▼
-probe (Fixed + plan durations) ──► probe starts
+pass 0: zero share budgets ──► earliest ASAP starts
     │
     ├─► hard finish caps (stored durations)
     └─► soft finish caps (Auto only)
             │
             ▼
-     per budget: pick cap ──► keep / shorten / no-op + notes
+     per budget: pick cap ──► shorten
+            │
+            ▼
+pass 1..n: re-probe with capped lengths ──► shrink again if soft preds slipped
+            │
+            ▼
+     notes from original allotment → final budget
 ```
 
 ---
@@ -253,6 +273,7 @@ probe (Fixed + plan durations) ──► probe starts
 | `shortened from … to … because successor cap is D` | Fill/Auto wanted more than `start→D` | Yes — a real pin (or soft pin after start) binds the bar |
 | `has no room left … keeping {stored}` | Effective cap ≤ probe start | Only when a **hard** pin truly sits at/before that start. Soft-only or fill-inflated caps must not produce this |
 | Group `has no room left for its unrestricted activities` | Group window exhausted before fills | Yes — fills fall back to stored length |
+| `Finishes after successor … pinned` / `Pinned date overrides the finish-to-start link` | CPM overrun flags | Only when **project-wide** `ScheduleRules` are enabled (`flag_pinned_successor_overruns`); per-task Fill/Auto alone does not emit these |
 | `Cannot finish by ancestor summary … fixed finish date` | CPM / summary deadline (not share-cap) | Separate from successor-cap notes |
 
 If a hover date on a warning looks months earlier than the bar on the Gantt, treat it as a
@@ -264,8 +285,11 @@ subtracted from an MFO/FNLT.
 ## Intentional notes / approximations
 
 - When Project Planner leaves a fill out of `shareBudgets` (no room), PlanCraft still registers
-  the stored duration as a budget so successor capping can shrink it. Bars must not cross a
-  pinned successor without a warning.
+  the stored duration as a budget so successor capping can shrink it. Share-cap notes still fire
+  for Auto/Fill without project-wide rules. The separate CPM warnings that a bar finishes after
+  a pinned successor (`flag_pinned_successor_overruns`) run **only** when `settings.rules` is
+  enabled — so “bars must not cross a pinned successor without a warning” is true for share-cap
+  notes always, and for those CPM pin warnings only with the ruleset on.
 - Progressive binary-search redistribution of independent fill branches (Swift’s multi-pass
   freeze of binding paths) is approximated by a single probe-and-cap pass; nested percent
   re-resolution uses the allotted group minimum from the first pass.

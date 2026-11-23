@@ -7,7 +7,7 @@
 //! left as the fallback; the scheduler reads the resolved minutes for that pass.
 
 use crate::dates::prelude::*;
-use crate::duration::{Lag, Minutes};
+use crate::duration::Minutes;
 use crate::ids::TaskId;
 use crate::model::*;
 use crate::schedule::{self, project_calendar};
@@ -501,6 +501,7 @@ fn cap_for_successors(p: &Project, plan: &mut SharePlan) {
     let n = p.tasks.len();
     let parent = schedule::parents(p);
     let summary: Vec<bool> = (0..n).map(|i| p.has_children(i)).collect();
+    // (index, original allotment, honour soft successor pins)
     let mut budgets: Vec<(usize, Minutes, bool)> = Vec::new();
     for i in 0..n {
         let include_soft = p.tasks.get(i).is_some_and(|t| t.duration_mode == DurationMode::Auto);
@@ -518,40 +519,91 @@ fn cap_for_successors(p: &Project, plan: &mut SharePlan) {
     if budgets.is_empty() {
         return;
     }
-    let mut probe = p.clone();
-    probe.settings.rules = ScheduleRules::default();
-    for t in &mut probe.tasks {
-        t.duration_mode = DurationMode::Fixed;
-        t.fills_group = false;
-        t.duration_percent = None;
-    }
-    apply_plan_durations(&mut probe, plan);
-    schedule::recalculate(&mut probe);
     let cal = project_calendar(p);
     let hard_finish = successor_hard_finishes(p, &cal, false);
     let soft_finish = budgets.iter().any(|(_, _, include_soft)| *include_soft).then(|| successor_hard_finishes(p, &cal, true));
-    for &(i, current, include_soft) in &budgets {
-        let Some(start) = probe.tasks.get(i).and_then(|t| t.sched.start) else { continue };
-        let Some(task) = p.tasks.get(i) else { continue };
-        // Auto may honour soft successor pins, but a soft cap at or before the probe start is not
-        // a real window (e.g. soft Start-no-later on a later milestone). Ignore those; only a hard
-        // pin may force the typed-duration fallback.
-        let hard_cap = hard_finish.get(i).copied().flatten();
-        let soft_cap = soft_finish.as_ref().and_then(|v| v.get(i).copied().flatten());
-        let cap = if include_soft {
-            match (soft_cap.filter(|s| *s > start), hard_cap) {
-                (Some(s), Some(h)) => Some(s.min(h)),
-                (Some(s), None) => Some(s),
-                (None, h) => h,
+
+    // Shrink until stable. Pass 0 zeros share budgets (early-start probe) so inflated fills do not
+    // invent a late "no room" start. Later passes re-probe with the capped lengths — soft Finish-On
+    // predecessors can still slip under those lengths (cyclus #99/#101 → #102 SS< #129), so a single
+    // early probe over-allows duration and the Opv successor never sees the predecessor on its date.
+    let mut current: Vec<Minutes> = budgets.iter().map(|(_, m, _)| *m).collect();
+    let mut final_cap: Vec<Option<DateTime>> = vec![None; budgets.len()];
+    let mut impossible: Vec<bool> = vec![false; budgets.len()];
+    const MAX_PASSES: usize = 8;
+    for pass in 0..MAX_PASSES {
+        let mut probe = p.clone();
+        probe.settings.rules = ScheduleRules::default();
+        for t in &mut probe.tasks {
+            t.duration_mode = DurationMode::Fixed;
+            t.fills_group = false;
+            t.duration_percent = None;
+        }
+        apply_plan_durations(&mut probe, plan);
+        for (bi, &(i, _, _)) in budgets.iter().enumerate() {
+            if let Some(t) = probe.tasks.get_mut(i)
+                && !t.is_milestone()
+            {
+                // Pass 0: earliest ASAP starts. Later: starts under the lengths we just chose.
+                t.duration = if pass == 0 { 0 } else { current[bi] };
             }
-        } else {
-            hard_cap
-        };
-        let Some(cap) = cap else { continue };
-        if cap <= start {
-            // Keep stored/current budget; note the impossible window without collapsing the bar.
-            let kept = p.tasks.get(i).map(|t| t.duration.max(0)).unwrap_or(current);
-            set_duration(plan, i, kept);
+        }
+        schedule::recalculate(&mut probe);
+
+        let mut changed = false;
+        for (bi, &(i, _, include_soft)) in budgets.iter().enumerate() {
+            let Some(start) = probe.tasks.get(i).and_then(|t| t.sched.start) else { continue };
+            // Auto may honour soft successor pins, but a soft cap at or before the early start is not
+            // a real window (e.g. soft Start-no-later on a later milestone). Ignore those; only a hard
+            // pin may force the typed-duration fallback.
+            let hard_cap = hard_finish.get(i).copied().flatten();
+            let soft_cap = soft_finish.as_ref().and_then(|v| v.get(i).copied().flatten());
+            let cap = if include_soft {
+                match (soft_cap.filter(|s| *s > start), hard_cap) {
+                    (Some(s), Some(h)) => Some(s.min(h)),
+                    (Some(s), None) => Some(s),
+                    (None, h) => h,
+                }
+            } else {
+                hard_cap
+            };
+            let Some(cap) = cap else { continue };
+            final_cap[bi] = Some(cap);
+            // Impossible window: cap at/before start, or cap after start with no working minutes
+            // between (lunch/weekend gap). Keep stored duration — never collapse the bar to zero.
+            let max_dur = if cap <= start { 0 } else { cal.between(start, cap).max(0) };
+            if max_dur == 0 {
+                let kept = p.tasks.get(i).map(|t| t.duration.max(0)).unwrap_or(current[bi]);
+                if current[bi] != kept {
+                    current[bi] = kept;
+                    changed = true;
+                }
+                impossible[bi] = true;
+                continue;
+            }
+            impossible[bi] = false;
+            // Target is min(original fill, room to cap). Must grow back when a later pass moves
+            // the start earlier (predecessor Autos also shortened) — otherwise a mid-pass shrink
+            // sticks (cyclus #101: 2.4d frozen from a Wed start, then start moved to Tue → ended
+            // Thursday instead of Friday before the Monday Opv successor).
+            let original = budgets[bi].1;
+            let target = max_dur.min(original);
+            if current[bi] != target {
+                current[bi] = target;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    for (bi, &(i, original, _)) in budgets.iter().enumerate() {
+        let Some(task) = p.tasks.get(i) else { continue };
+        let capped = current[bi];
+        set_duration(plan, i, capped);
+        let Some(cap) = final_cap[bi] else { continue };
+        if impossible[bi] {
             let policy = if task.duration_mode == DurationMode::Auto {
                 "Auto duration"
             } else if task.duration_percent.is_some() {
@@ -565,17 +617,12 @@ fn cap_for_successors(p: &Project, plan: &mut SharePlan) {
                     "WBS {}: {policy} has no room left because successor cap is {}; keeping {}",
                     p.wbs(i),
                     cap.format("%Y-%m-%d %H:%M"),
-                    p.format_duration(kept, false),
+                    p.format_duration(capped, false),
                 ),
             ));
-            continue;
+        } else if capped < original {
+            note_cap(plan, task, p, i, original, capped, cap);
         }
-        let max_dur = cal.between(start, cap).max(0);
-        if max_dur >= current {
-            continue;
-        }
-        set_duration(plan, i, max_dur);
-        note_cap(plan, task, p, i, current, max_dur, cap);
     }
 }
 
@@ -646,7 +693,8 @@ fn successor_hard_finishes(p: &Project, cal: &crate::calendar::WorkCal<'_>, incl
             for dep in &succ.predecessors {
                 let Some(pred_id) = dep.predecessor.local() else { continue };
                 let Some(pred_i) = p.tasks.iter().position(|t| t.id == pred_id) else { continue };
-                let Some(at) = link_pred_finish_cap(cal, dep, succ_start_hard, succ_hard) else {
+                let pred_dur = p.tasks.get(pred_i).map(|t| t.duration.max(0)).unwrap_or(0);
+                let Some(at) = link_pred_finish_cap(cal, dep, succ_start_hard, succ_hard, pred_dur) else {
                     continue;
                 };
                 let slot = match hard.get_mut(pred_i) {
@@ -675,44 +723,15 @@ fn link_pred_finish_cap(
     dep: &Dependency,
     succ_start_hard: Option<DateTime>,
     succ_finish_hard: Option<DateTime>,
+    pred_duration: Minutes,
 ) -> Option<DateTime> {
-    let lag = dep.lag;
-    match dep.kind {
-        LinkType::FS => {
-            let hard = succ_start_hard?;
-            Some(match lag {
-                Lag::None | Lag::Working(0) => hard,
-                Lag::Working(m) => cal.sub(hard, m),
-                _ => hard,
-            })
-        }
-        LinkType::SS => {
-            // A start-to-start hard date still bounds how late the predecessor may run when we
-            // only have a finish-side budget: treat it like FS for duration limiting.
-            let hard = succ_start_hard?;
-            Some(match lag {
-                Lag::None | Lag::Working(0) => hard,
-                Lag::Working(m) => cal.sub(hard, m),
-                _ => hard,
-            })
-        }
-        LinkType::FF => {
-            let hard = succ_finish_hard?;
-            Some(match lag {
-                Lag::None | Lag::Working(0) => hard,
-                Lag::Working(m) => cal.sub(hard, m),
-                _ => hard,
-            })
-        }
-        LinkType::SF => {
-            let hard = succ_finish_hard?;
-            Some(match lag {
-                Lag::None | Lag::Working(0) => hard,
-                Lag::Working(m) => cal.sub(hard, m),
-                _ => hard,
-            })
-        }
-    }
+    // FS/SS bound the predecessor's finish by the successor's start; FF/SF by its finish.
+    // Lag (working, elapsed, percent) matches CPM via `schedule::unapply_lag`.
+    let hard = match dep.kind {
+        LinkType::FS | LinkType::SS => succ_start_hard?,
+        LinkType::FF | LinkType::SF => succ_finish_hard?,
+    };
+    Some(schedule::unapply_lag(cal, hard, dep.lag, pred_duration))
 }
 
 fn hard_start_of(
@@ -767,11 +786,8 @@ fn earliest_successor_cap(
                 LinkType::FF | LinkType::SF => own_finish_cap(succ, succ.duration.max(0), cal, include_soft),
             };
             let Some(hard) = hard else { continue };
-            let at = match dep.lag {
-                Lag::None | Lag::Working(0) => hard,
-                Lag::Working(m) => cal.sub(hard, m),
-                _ => hard,
-            };
+            let pred_dur = p.task(pred).map(|t| t.duration.max(0)).unwrap_or(0);
+            let at = schedule::unapply_lag(cal, hard, dep.lag, pred_dur);
             cap = Some(cap.map_or(at, |c| c.min(at)));
         }
     }
@@ -791,6 +807,7 @@ fn hard_start_for_link(cal: &crate::calendar::WorkCal<'_>, t: &Task, include_sof
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::duration::Lag;
     use crate::schedule::recalculate;
 
     fn day(p: &Project, n: i64) -> DateTime {
@@ -1621,5 +1638,331 @@ mod tests {
         let window = project_calendar(&p).between(start, finish);
         assert!((span(&p, a) - window).abs() <= 1, "On/On span {} vs window {window}", span(&p, a));
         assert_eq!(p.task(a).unwrap().duration, 480, "stored duration stays the fallback");
+    }
+
+    fn fill_before_mfo(lag: Lag) -> (Project, crate::ids::TaskId) {
+        let mut p = Project::new("LagCap", crate::dates::ymd(2026, 1, 5).unwrap()); // Monday
+        p.settings.rules = ScheduleRules::on();
+        let g = p.add_task("Group", None);
+        let fill = p.add_task("Fill", None);
+        let gate = p.add_task("Gate", None);
+        let g_start = p.start;
+        let g_end = day(&p, 10);
+        let mfo = day(&p, 5);
+        {
+            let t = p.task_mut(g).unwrap();
+            t.bounds.start_earliest = Some(g_start);
+            t.bounds.finish_latest = Some(g_end);
+            t.bounds.finish_latest_fixed = true;
+        }
+        for id in [fill, gate] {
+            p.task_mut(id).unwrap().outline_level = 2;
+        }
+        {
+            let t = p.task_mut(fill).unwrap();
+            t.duration = 480;
+            t.estimated = false;
+            t.duration_mode = DurationMode::Auto;
+        }
+        {
+            let t = p.task_mut(gate).unwrap();
+            t.kind = TaskKind::Milestone;
+            t.duration = 0;
+            t.constraint = Constraint { kind: ConstraintKind::Mfo, date: Some(mfo) };
+        }
+        p.link(fill.into(), gate, LinkType::FS, lag).unwrap();
+        recalculate(&mut p);
+        (p, fill)
+    }
+
+    #[test]
+    fn successor_cap_elapsed_lag_shortens_like_cpm() {
+        let (none, fill_n) = fill_before_mfo(Lag::None);
+        let (elapsed, fill_e) = fill_before_mfo(Lag::Elapsed(3 * 24 * 60)); // 3ed
+        let (working, fill_w) = fill_before_mfo(Lag::Working(3 * 480)); // 3 working days
+        let d_none = none.task(fill_n).unwrap().sched.duration;
+        let d_elapsed = elapsed.task(fill_e).unwrap().sched.duration;
+        let d_working = working.task(fill_w).unwrap().sched.duration;
+        assert!(
+            d_elapsed < d_none,
+            "elapsed lag must pull the Auto cap earlier than none: elapsed={d_elapsed} none={d_none}"
+        );
+        assert!(
+            d_working < d_none,
+            "working lag should shorten more than none: working={d_working} none={d_none}"
+        );
+    }
+
+    #[test]
+    fn successor_cap_percent_lag_shortens_like_cpm() {
+        let (none, fill_n) = fill_before_mfo(Lag::None);
+        let (pct, fill_p) = fill_before_mfo(Lag::Percent(50));
+        let d_none = none.task(fill_n).unwrap().sched.duration;
+        let d_pct = pct.task(fill_p).unwrap().sched.duration;
+        assert!(
+            d_pct < d_none,
+            "percent lag must pull the Auto cap earlier than none: pct={d_pct} none={d_none}"
+        );
+    }
+
+    /// Re-cap must grow back when a later pass opens the window (predecessor Auto shortened and
+    /// the start moved earlier). Otherwise a mid-pass shrink sticks and the bar ends early.
+    #[test]
+    fn auto_recap_grows_back_when_start_moves_earlier() {
+        let mut p = Project::new("GrowBack", crate::dates::ymd(2027, 8, 30).unwrap()); // Monday
+        p.settings.rules = ScheduleRules::on();
+        let g = p.add_task("Group", None);
+        let write = p.add_task("Write", None); // Auto — soft-capped by gate On
+        let gate = p.add_task("Gate", None); // soft Finish On
+        let fix = p.add_task("Fix", None); // Auto — soft-capped by board On via milestone
+        let send = p.add_task("Send", None);
+        let board = p.add_task("Board", None);
+        let g_start = p.start;
+        let g_end = day(&p, 40);
+        {
+            let t = p.task_mut(g).unwrap();
+            t.bounds.start_earliest = Some(g_start);
+            t.bounds.finish_latest = Some(g_end);
+            t.bounds.finish_latest_fixed = true;
+        }
+        for id in [write, gate, fix, send, board] {
+            p.task_mut(id).unwrap().outline_level = 2;
+        }
+        for id in [write, fix] {
+            let t = p.task_mut(id).unwrap();
+            t.duration = 480;
+            t.estimated = false;
+            t.duration_mode = DurationMode::Auto;
+        }
+        {
+            let t = p.task_mut(gate).unwrap();
+            t.kind = TaskKind::Milestone;
+            t.duration = 0;
+        }
+        {
+            let t = p.task_mut(send).unwrap();
+            t.kind = TaskKind::Milestone;
+            t.duration = 0;
+        }
+        {
+            let t = p.task_mut(board).unwrap();
+            t.duration = 480;
+            t.estimated = false;
+            t.constraint = Constraint { kind: ConstraintKind::Alap, date: None };
+        }
+        // Soft On gate ~1 week; soft On board ~2 weeks — same shape as cyclus #100 / #129.
+        let gate_on = day(&p, 5);
+        let board_start = day(&p, 10);
+        let board_finish = project_calendar(&p).add(board_start, 480);
+        p.set_date_mode(gate, true, crate::model::DateMode::On).unwrap();
+        p.set_date_window(gate, true, Some(gate_on), Some(gate_on)).unwrap();
+        p.set_date_mode(board, false, crate::model::DateMode::On).unwrap();
+        p.set_date_window(board, false, Some(board_start), Some(board_start)).unwrap();
+        p.set_date_mode(board, true, crate::model::DateMode::On).unwrap();
+        p.set_date_window(board, true, Some(board_finish), Some(board_finish)).unwrap();
+        p.link(write.into(), gate, LinkType::FS, Lag::None).unwrap();
+        p.link(gate.into(), fix, LinkType::FS, Lag::None).unwrap();
+        p.link(fix.into(), send, LinkType::FS, Lag::None).unwrap();
+        p.link_drive(send.into(), board, LinkType::SS, Lag::None, Some(crate::model::LinkDrive::FromSuccessor))
+            .unwrap();
+        recalculate(&mut p);
+        let fix_t = p.task(fix).unwrap();
+        let board_s = p.task(board).unwrap().sched.start.unwrap();
+        let send_s = p.task(send).unwrap().sched.start.unwrap();
+        assert_eq!(send_s, board_s, "Opv SS aligns send to board");
+        // Fix should use the full Tue→cap window (end of last workday before/at the Monday pin),
+        // not a mid-pass 2.4d leftover from when write still pushed the start later.
+        let start = fix_t.sched.start.unwrap();
+        let finish = fix_t.sched.finish.unwrap();
+        let room = project_calendar(&p).between(start, board_s);
+        assert!(
+            (fix_t.sched.duration - room).abs() <= 1,
+            "Fix must refill opened window: dur={} room={} start={} finish={} board={}",
+            fix_t.sched.duration,
+            room,
+            start,
+            finish,
+            board_s
+        );
+    }
+
+    /// Soft On successor via SS FromSuccessor (Opv): Auto before the milestone must re-cap after
+    /// the early probe so the milestone can sit on the successor's start (cyclus #101 → #102 SS< #129).
+    #[test]
+    fn auto_recap_lets_opv_ss_milestone_meet_soft_on_successor() {
+        let mut p = Project::new("OpvSS", crate::dates::ymd(2027, 8, 30).unwrap()); // Monday
+        p.settings.rules = ScheduleRules::on();
+        let g = p.add_task("Group", None);
+        let write = p.add_task("Write", None); // Auto — equal fill would be huge
+        let send = p.add_task("Send milestone", None);
+        let board = p.add_task("Board docs", None); // soft On + ALAP, SS< from send
+        let g_start = p.start;
+        let g_end = day(&p, 40);
+        let board_start_pin = day(&p, 10);
+        let board_finish_pin = project_calendar(&p).add(board_start_pin, 480);
+        {
+            let t = p.task_mut(g).unwrap();
+            t.bounds.start_earliest = Some(g_start);
+            t.bounds.finish_latest = Some(g_end);
+            t.bounds.finish_latest_fixed = true;
+        }
+        for id in [write, send, board] {
+            p.task_mut(id).unwrap().outline_level = 2;
+        }
+        {
+            let t = p.task_mut(write).unwrap();
+            t.duration = 480;
+            t.estimated = false;
+            t.duration_mode = DurationMode::Auto;
+        }
+        {
+            let t = p.task_mut(send).unwrap();
+            t.kind = TaskKind::Milestone;
+            t.duration = 0;
+        }
+        {
+            let t = p.task_mut(board).unwrap();
+            t.duration = 480;
+            t.estimated = false;
+            t.constraint = Constraint { kind: ConstraintKind::Alap, date: None };
+        }
+        // Soft On (not fixed) — same shape as cyclus 6.6.4.
+        p.set_date_mode(board, false, crate::model::DateMode::On).unwrap();
+        p.set_date_window(board, false, Some(board_start_pin), Some(board_start_pin)).unwrap();
+        p.set_date_mode(board, true, crate::model::DateMode::On).unwrap();
+        p.set_date_window(board, true, Some(board_finish_pin), Some(board_finish_pin)).unwrap();
+        p.link(write.into(), send, LinkType::FS, Lag::None).unwrap();
+        p.link_drive(send.into(), board, LinkType::SS, Lag::None, Some(crate::model::LinkDrive::FromSuccessor))
+            .unwrap();
+        recalculate(&mut p);
+        let board_start = p.task(board).unwrap().sched.start.unwrap();
+        let send_start = p.task(send).unwrap().sched.start.unwrap();
+        assert_eq!(
+            send_start, board_start,
+            "Opv SS must pull the milestone onto the soft-On successor start; send={send_start} board={board_start}"
+        );
+        let write_t = p.task(write).unwrap();
+        assert!(
+            write_t.sched.finish.unwrap() <= board_start,
+            "Auto must finish by the Opv successor start after re-cap; finish={} board={}",
+            write_t.sched.finish.unwrap(),
+            board_start
+        );
+    }
+
+    /// Inflated Auto fill must not use its own late probe start for capping (cyclus #101: 19d
+    /// fill slipped a soft Finish-On pred and made the hard successor look like "no room").
+    #[test]
+    fn successor_cap_uses_early_start_not_inflated_fill_start() {
+        let mut p = Project::new("EarlyCap", crate::dates::ymd(2027, 8, 2).unwrap()); // Monday
+        p.settings.rules = ScheduleRules::on();
+        let g = p.add_task("Group", None);
+        let write = p.add_task("Write", None);
+        let gate = p.add_task("Gate", None); // soft Finish On
+        let fix = p.add_task("Fix", None); // Auto after gate
+        let board = p.add_task("Board", None); // hard MFO
+        let g_start = p.start;
+        let g_end = day(&p, 60);
+        let on = day(&p, 20);
+        let soft_fl = day(&p, 24);
+        let mfo = day(&p, 35);
+        {
+            let t = p.task_mut(g).unwrap();
+            t.bounds.start_earliest = Some(g_start);
+            t.bounds.finish_latest = Some(g_end);
+            t.bounds.finish_latest_fixed = true;
+        }
+        for id in [write, gate, fix, board] {
+            p.task_mut(id).unwrap().outline_level = 2;
+        }
+        {
+            let t = p.task_mut(write).unwrap();
+            t.duration = 480;
+            t.estimated = false;
+            t.duration_mode = DurationMode::Auto;
+        }
+        {
+            let t = p.task_mut(gate).unwrap();
+            t.kind = TaskKind::Milestone;
+            t.duration = 0;
+            t.bounds.finish_earliest = Some(on);
+            t.bounds.finish_latest = Some(on); // On, but not fixed — can slip under pressure
+        }
+        {
+            let t = p.task_mut(fix).unwrap();
+            t.duration = 480;
+            t.estimated = false;
+            t.duration_mode = DurationMode::Auto;
+            t.bounds.finish_latest = Some(soft_fl);
+            t.bounds.finish_latest_fixed = false;
+        }
+        {
+            let t = p.task_mut(board).unwrap();
+            t.kind = TaskKind::Milestone;
+            t.duration = 0;
+            t.constraint = Constraint { kind: ConstraintKind::Mfo, date: Some(mfo) };
+        }
+        p.link(write.into(), gate, LinkType::FS, Lag::None).unwrap();
+        p.link(gate.into(), fix, LinkType::FS, Lag::None).unwrap();
+        p.link(fix.into(), board, LinkType::FS, Lag::None).unwrap();
+        recalculate(&mut p);
+        let t = p.task(fix).unwrap();
+        assert!(
+            !t.sched.warnings.iter().any(|w| w.contains("no room left") && w.contains("keeping")),
+            "must not keep stored from a bogus late fill start: {:?}",
+            t.sched.warnings
+        );
+        assert!(
+            t.sched.duration > t.duration,
+            "Auto should fill toward soft FNLT/hard MFO, got sched={} stored={}",
+            t.sched.duration,
+            t.duration
+        );
+    }
+
+    /// Zero working window (lunch gap): probe may snap onto the pin; either way keep stored.
+    #[test]
+    fn zero_working_window_keeps_stored_duration() {
+        let mut p = Project::new("LunchCap", crate::dates::ymd(2026, 1, 5).unwrap()); // Monday
+        p.settings.rules = ScheduleRules::on();
+        let g = p.add_task("Group", None);
+        let fill = p.add_task("Fill", None);
+        let gate = p.add_task("Gate", None);
+        let g_start = p.start;
+        let g_end = day(&p, 20);
+        let morning_end = crate::dates::ymd_hm(2026, 1, 5, 12, 0).unwrap();
+        let afternoon = crate::dates::ymd_hm(2026, 1, 5, 13, 0).unwrap();
+        assert_eq!(project_calendar(&p).between(morning_end, afternoon), 0);
+        {
+            let t = p.task_mut(g).unwrap();
+            t.bounds.start_earliest = Some(g_start);
+            t.bounds.finish_latest = Some(g_end);
+            t.bounds.finish_latest_fixed = true;
+        }
+        for id in [fill, gate] {
+            p.task_mut(id).unwrap().outline_level = 2;
+        }
+        {
+            let t = p.task_mut(fill).unwrap();
+            t.duration = 5 * 480;
+            t.estimated = false;
+            t.duration_mode = DurationMode::Auto;
+            t.bounds.start_earliest = Some(morning_end);
+        }
+        {
+            let t = p.task_mut(gate).unwrap();
+            t.kind = TaskKind::Milestone;
+            t.duration = 0;
+            t.constraint = Constraint { kind: ConstraintKind::Mfo, date: Some(afternoon) };
+        }
+        p.link(fill.into(), gate, LinkType::FS, Lag::None).unwrap();
+        recalculate(&mut p);
+        let t = p.task(fill).unwrap();
+        assert_eq!(t.sched.duration, 5 * 480, "impossible window keeps stored, never collapses to 0");
+        assert!(
+            t.sched.warnings.iter().any(|w| w.contains("no room left") && w.contains("keeping")),
+            "expect keep-stored note: {:?}",
+            t.sched.warnings
+        );
     }
 }

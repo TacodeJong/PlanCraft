@@ -22,7 +22,7 @@ plancraft-ui-egui (L6) ──► plancraft-mcp (L6) ──► plancraft-engine (
 | L2–L3 | Reserved empty until `plancraft-core` is split |
 | L1 | `plancraft-core` (domain monolith for now) |
 
-**Commands.** Prefer `plancraft_engine::Session::execute` when a registry command exists (`file.*`, `edit.*`, `task.*`, `resource.*`, `project.*`, plus queries). Desktop maps UI `Command` values via `plancraft_ui_egui::engine_bridge` onto those ids. MCP tools use Session where an engine command exists (`list_commands` / `run_command` expose the full registry, matching `plancraft-cli`); otherwise they call `Document::try_edit` with `ChangeSource::Agent`. Both paths end in `try_edit` (undo journal, recalculation, events).
+**Commands.** Prefer `plancraft_engine::Session::execute` when a registry command exists (`file.*`, `edit.*`, `task.*`, `resource.*`, `project.*`, plus queries). Desktop maps UI `Command` values via `plancraft_ui_egui::engine_bridge` onto those ids. MCP tools use Session where an engine command exists (`list_commands` / `run_command` expose the full registry, matching `plancraft-cli`); otherwise they call `Document::try_edit` with `ChangeSource::Agent`. Both paths end in `Document::try_edit` (document undo stack, recalculation, `ChangeSource`). **Session** journal and events accumulate only on a long-lived `Session` (e.g. CLI). UI/MCP shared-workspace calls use `execute_mut` / `edit_doc_mut`, which build a temporary Session and write back only the workspace — those journal/event buffers are discarded.
 
 **UI-only** (stay local — no engine id): dialog *open/close* and chrome (find/goto, print/export surfaces, import, AI/server panels), cut/copy staging, view/zoom/filter/table/column layout, theme/lang/settings, pane toggles, Gantt/network display flags, window chrome, file pickers / save dialogs (path choice only), recovery, and split-task click mode. Clipboard paste and several dialog *applies* (project info, assign, resource delete, quick entry, distill) go through `engine_bridge::edit_doc` / Session; remaining multi-field dialog drafts (task/resource info, baselines, working time, find/replace, …) still use `Document::try_edit` via `EditExt` (same undo stack) because they do not map cleanly onto discrete CommandSpec ids.
 
@@ -98,13 +98,13 @@ is in play (`shares::resolve`).
 5. **Forward pass:**
    - Applies all four link types with lags.
    - Applies constraints: SNET/FNET push the task later; MSO/MFO pin it; SNLT/FNLT are honored and flagged when violated. A Start No Earlier Than date on a summary drives all of its subtasks.
-   - Adds leveling delays.
+   - Adds leveling delays: a leaf’s delay is its own `leveling_delay` plus every ancestor summary’s `leveling_delay`.
    - Uses actual start and finish when they are set.
    - A task with an elapsed duration (`33ed`) runs around the clock: it starts as soon as it may, even outside working time, and finishes the elapsed time later; its work is spread over every hour of that time.
    - Manual tasks keep their entered dates. A manually scheduled summary keeps its own dates too: links into it (and into the summaries around it) stop at it, its auto-scheduled subtasks start no earlier than its start, and its successors follow its own dates.
 6. **Backward pass.** It computes late dates, limited by the project finish, deadlines (a task's own and its summaries') and constraints. Inactive successors are skipped. A link from a summary's start binds only the subtask that sets that start.
 7. **ALAP pass.** As-late-as-possible tasks are pinned to their late start, and the passes run again so successors stay consistent.
-8. **Slack.** Total and free slack are computed per leaf. A task is critical when total slack ≤ the threshold.
+8. **Slack.** Total and free slack are computed per leaf. A task is critical when it is **active**, **not complete**, **auto-scheduled** (`ScheduleMode::Auto`), and total slack ≤ the critical-slack threshold.
 9. **Roll up summaries and the project:**
    - Dates, work and cost. A summary's own fixed cost and assignments are added on top of its subtasks'. A manually scheduled summary keeps its own dates; its subtasks' span goes to `rollup_start`/`rollup_finish`.
    - % complete, weighted by the durations of all subtasks below. Nested summaries and the project agree.
@@ -146,9 +146,9 @@ A `Document` opened from a server (`Document::shared`, `Workspace::add_shared`) 
 
 ### Robustness
 
-- **No panics in shipped code.** Workspace clippy lints deny `unwrap`, `expect`, `panic!` and indexing; code returns `Result`/`Option` and uses `get()` and checked or saturating arithmetic. Date arithmetic saturates (`calendar::shift`) and never walks past a horizon (1800–2500), so hostile durations can't hang the scheduler. That horizon is an **arithmetic guard**; user-facing **input limits** are tighter (`limits`: dates 1900–2300, durations up to 5 years).
+- **No panics in shipped code.** Workspace clippy lints deny `unwrap`, `expect`, `panic!` and indexing; code returns `Result`/`Option` and uses `get()` and checked or saturating arithmetic. Date arithmetic saturates (`calendar::shift`) and never walks past a horizon (1800–2500), so hostile durations can't hang the scheduler. That horizon is an **arithmetic guard**; user-facing **input limits** are tighter (`limits`: dates 1900–2300; durations clamped to `MAX_MINUTES` = `5 × 366 × 24 × 60` = 2,635,200 minutes — five years of wall-clock time, about 5,490 working days / ~21 work-years at the default 8 h/day).
 - **Guards as a last resort.** `guard::catch` turns a panic into an error. Edits roll back, `recalculate` leaves a warning, the MCP server answers with a tool error, and the app keeps running and writes recovery copies.
-- **Hostile input.** `limits` caps counts (50,000 tasks, …), durations (5 years), dates (1900–2300), numbers and text. Loading clamps values and reports what it changed (`io::load_with_notes`); oversized files, too many items or duplicate ids are refused.
+- **Hostile input.** `limits` caps counts (50,000 tasks, …), durations (`MAX_MINUTES` as above), dates (1900–2300), numbers and text. Loading clamps values and reports what it changed (`io::load_with_notes`); oversized files, too many items or duplicate ids are refused.
 - **Atomic, private files.** `io::write_atomic` writes a temporary file in the same directory, fsyncs it, renames it over the target and fsyncs the directory. Per-user files are owner-only (0600/0700 on Unix).
 
 ## plancraft-mcp
@@ -160,7 +160,7 @@ The MCP server is a hand-rolled JSON-RPC 2.0 server. It has no async runtime, wh
   - Each request locks the shared workspace briefly.
   - The change callback runs after the lock is released.
 - **`tools/*`:** 92 tools grouped by domain.
-  - Mutations use `Session::execute` / `execute_mut` when an engine command exists; otherwise `Document::try_edit(…, ChangeSource::Agent, …)`. Both end in `try_edit` (same undo journal and recalculation).
+  - Mutations use `Session::execute` / `execute_mut` when an engine command exists; otherwise `Document::try_edit(…, ChangeSource::Agent, …)`. Both end in `try_edit` (document undo + recalculation). Session journal/events are not retained across `execute_mut` (see Commands above).
   - Unknown arguments are rejected so agents find their typos.
 - **Transports:**
   - `run_stdio`: newline-delimited JSON.
