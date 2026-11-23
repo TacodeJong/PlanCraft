@@ -164,7 +164,7 @@ impl Field {
                     }
                     CustomFieldKind::Text => def,
                     CustomFieldKind::Number | CustomFieldKind::Cost | CustomFieldKind::Duration => def.right(),
-                    CustomFieldKind::Date => def,
+                    CustomFieldKind::Date => def.date(p.settings.time.default_start_time, true),
                     CustomFieldKind::Flag => def.center().choice(&["Yes", "No"]),
                 }
             }

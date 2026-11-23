@@ -73,18 +73,19 @@ pub fn map_doc_command(
     cmd: &Command,
     task_ids: &[TaskId],
     resource_ids: &[ResourceId],
-    first_sel_index: Option<usize>,
+    // Outline index for Insert Task/Milestone (beneath the selection).
+    insert_at: Option<usize>,
 ) -> Option<(&'static str, Value)> {
     match cmd {
         Command::Undo => Some(("edit.undo", json!({}))),
         Command::Redo => Some(("edit.redo", json!({}))),
         Command::InsertTask => Some((
             "task.insert",
-            json!({ "name": "<New Task>", "at": first_sel_index }),
+            json!({ "name": "<New Task>", "at": insert_at }),
         )),
         Command::InsertMilestone => Some((
             "task.insertMilestone",
-            json!({ "name": "<New Milestone>", "at": first_sel_index }),
+            json!({ "name": "<New Milestone>", "at": insert_at }),
         )),
         Command::InsertSummary => {
             if task_ids.is_empty() {

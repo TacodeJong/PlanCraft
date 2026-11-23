@@ -16,6 +16,8 @@ pub enum Editor {
     None,
     Text,
     Choice(Vec<String>),
+    /// Calendar popup; picked day is committed as `YYYY-MM-DD` at `minute` from midnight.
+    Date { minute: u32, clearable: bool },
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +52,11 @@ impl ColumnDef {
     }
     pub fn choice(mut self, options: &[&str]) -> Self {
         self.editor = Editor::Choice(options.iter().map(|s| s.to_string()).collect());
+        self
+    }
+    /// Calendar popup editor (`minute` = plan default start or finish time).
+    pub fn date(mut self, minute: u32, clearable: bool) -> Self {
+        self.editor = Editor::Date { minute, clearable };
         self
     }
 }
@@ -894,6 +901,39 @@ pub fn show(
                 }
                 edit.started = true;
             }
+            Editor::Date { minute, clearable } => {
+                body_painter.rect_filled(r, 0.0, theme::pal().BG);
+                body_painter.rect_stroke(r.shrink(0.5), 0.0, Stroke::new(1.5, theme::pal().ACCENT), StrokeKind::Inside);
+                let current = parse_iso_day(&edit.text).and_then(|d| date_at_minute(d, minute));
+                let label = crate::format::date(current);
+                body_painter.text(
+                    pos2(r.left() + 5.0, r.center().y),
+                    Align2::LEFT_CENTER,
+                    &label,
+                    cell_font.clone(),
+                    theme::pal().TEXT,
+                );
+                let area = egui::Area::new(cfg.id.with("date"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(pos2(r.left(), r.bottom()))
+                    .show(ui.ctx(), |ui| {
+                        craft::menu_frame().show(ui, |ui| {
+                            crate::widgets::date_picker::calendar(ui, "grid_date", current, clearable, minute)
+                        })
+                    });
+                if let Some(next) = area.inner.inner {
+                    edit.text = crate::format::iso_date(next);
+                    finished = Some((true, None));
+                } else if ui.input(|i| i.key_pressed(Key::Escape))
+                    || (edit.started
+                        && ui.input(|i| i.pointer.any_pressed())
+                        && !area.response.contains_pointer()
+                        && !ui.rect_contains_pointer(r))
+                {
+                    finished = Some((false, None));
+                }
+                edit.started = true;
+            }
             _ => {
                 // One editor at a time: its id doesn't change when its row moves, so it keeps the focus.
                 let id = cfg.id.with("edit");
@@ -1097,6 +1137,28 @@ pub fn show(
     GridOutput { events }
 }
 
+/// `YYYY-MM-DD` from the sheet date editor (or empty).
+fn parse_iso_day(text: &str) -> Option<plancraft_core::dates::Date> {
+    let t = text.trim();
+    if t.is_empty() || t.eq_ignore_ascii_case("na") {
+        return None;
+    }
+    let (y, rest) = t.split_once('-')?;
+    let (m, d) = rest.split_once('-')?;
+    let d = d.split([' ', 'T']).next().unwrap_or(d);
+    plancraft_core::dates::ymd(y.parse().ok()?, m.parse().ok()?, d.parse().ok()?)
+}
+
+fn date_at_minute(day: plancraft_core::dates::Date, minute: u32) -> Option<plancraft_core::dates::DateTime> {
+    plancraft_core::dates::ymd_hm(
+        i32::from(day.year()),
+        u32::try_from(day.month()).ok()?,
+        u32::try_from(day.day()).ok()?,
+        minute / 60,
+        minute % 60,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1294,5 +1356,41 @@ mod tests {
         h.key_press(Key::F2);
         h.run_steps(2);
         assert_eq!(h.state().grid.editing.as_ref().map(|e| (e.row, e.col)), Some((1, 1)));
+    }
+
+    /// Date columns open a calendar editor (not a TextEdit); Escape cancels without a commit.
+    #[test]
+    fn date_column_f2_opens_calendar_escape_cancels() {
+        let cols = vec![
+            ColumnDef::new("Name", 120.0),
+            ColumnDef::new("Start", 96.0).date(8 * 60, false),
+        ];
+        let mut h = harness(cols, 3, None);
+        focus(&mut h, (1, 1));
+        h.key_press(Key::F2);
+        h.run_steps(3);
+        assert_eq!(h.state().grid.editing.as_ref().map(|e| (e.row, e.col)), Some((1, 1)));
+        assert!(
+            matches!(h.state().columns[1].editor, Editor::Date { clearable: false, .. }),
+            "column stays a Date editor"
+        );
+        // Typing must not start a TextEdit path on a Date column.
+        h.key_press(Key::Escape);
+        h.run_steps(2);
+        assert!(h.state().grid.editing.is_none());
+        assert!(
+            !h.state().events.iter().any(|e| matches!(e, GridEvent::Commit { .. })),
+            "Escape must not commit: {:?}",
+            h.state().events
+        );
+    }
+
+    #[test]
+    fn parse_iso_day_reads_yyyy_mm_dd() {
+        let d = parse_iso_day("2026-01-26").expect("date");
+        assert_eq!((i32::from(d.year()), d.month(), d.day()), (2026, 1, 26));
+        assert!(parse_iso_day("").is_none());
+        assert!(parse_iso_day("NA").is_none());
+        assert_eq!(crate::format::iso_date(date_at_minute(d, 8 * 60)), "2026-01-26");
     }
 }

@@ -1484,6 +1484,9 @@ impl PlanCraftApp {
             let Some(doc) = ws.active_doc() else { return };
             sel.first().and_then(|id| doc.project.task_index(*id))
         };
+        // Insert Task/Milestone land on the next row (beneath the selection). A selected
+        // summary makes the new task its first child via add_task's level rules.
+        let insert_at = first_sel_index.map(|idx| idx + 1);
         let resource_ids: Vec<ResourceId> = {
             let Some(doc) = ws.active_doc() else { return };
             self.st.sel.resources.iter().copied().filter(|id| doc.project.resource(*id).is_some()).collect()
@@ -1516,7 +1519,7 @@ impl PlanCraftApp {
             }
         }
 
-        if let Some((id, params)) = crate::engine_bridge::map_doc_command(&cmd, &sel, &resource_ids, first_sel_index) {
+        if let Some((id, params)) = crate::engine_bridge::map_doc_command(&cmd, &sel, &resource_ids, insert_at) {
             match crate::engine_bridge::execute(ws, id, &params) {
                 Ok(result) => self.after_engine_doc(ctx, ws, &cmd, &result, &sel),
                 Err(plancraft_engine::CommandError::Failed(msg))
@@ -5041,6 +5044,44 @@ mod ui_tests {
         h.state_mut().exec(&ctx, Command::InsertTask);
         h.run_steps(2);
         assert_eq!(h.state().st.task_grid.editing.as_ref().map(|e| e.col), Some(at - 1));
+    }
+
+    /// Insert Task lands beneath the selection (next row), not above it.
+    #[test]
+    fn insert_task_lands_beneath_the_selection() {
+        let mut p = plancraft_core::sample::demo_project(plancraft_core::dates::ymd(2026, 10, 19).unwrap());
+        let leaf_idx = p
+            .tasks
+            .iter()
+            .enumerate()
+            .find(|(i, t)| !p.has_children(*i) && !t.is_milestone())
+            .map(|(i, _)| i)
+            .expect("demo has a leaf");
+        let leaf_id = p.tasks[leaf_idx].id;
+        let summary_idx = p.tasks.iter().enumerate().find(|(i, _)| p.has_children(*i)).map(|(i, _)| i).expect("demo has a summary");
+        let summary_id = p.tasks[summary_idx].id;
+        let summary_level = p.tasks[summary_idx].outline_level;
+
+        // Same index the UI passes: one past the selection.
+        let (id, params) = crate::engine_bridge::map_doc_command(
+            &Command::InsertTask,
+            &[leaf_id],
+            &[],
+            Some(leaf_idx + 1),
+        )
+        .expect("insert maps");
+        assert_eq!(id, "task.insert");
+        assert_eq!(params.get("at").and_then(|v| v.as_u64()), Some((leaf_idx + 1) as u64));
+
+        p.add_task("<New Task>", Some(leaf_idx + 1));
+        assert_eq!(p.tasks[leaf_idx].id, leaf_id, "selected leaf stays put");
+        assert_eq!(p.tasks[leaf_idx + 1].name, "<New Task>", "new task is the next row");
+
+        let summary_idx = p.task_index(summary_id).unwrap();
+        p.add_task("<New Task>", Some(summary_idx + 1));
+        let new = &p.tasks[summary_idx + 1];
+        assert_eq!(new.name, "<New Task>");
+        assert_eq!(new.outline_level, summary_level.saturating_add(1), "beneath a summary becomes its first child");
     }
 
     /// Regression: in a sorted view the grid cursor stayed on its row number when an edit

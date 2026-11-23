@@ -51,7 +51,8 @@ const GAP: f32 = 2.0;
 /// The grid's full width: seven cells and the six gaps between them.
 const GRID_W: f32 = 7.0 * CELL + 6.0 * GAP;
 
-fn calendar(ui: &mut Ui, salt: &str, current: Option<DateTime>, clearable: bool, minute: u32) -> Option<Option<DateTime>> {
+/// Month grid used by [`button`] and by the task-sheet date cell editor.
+pub(crate) fn calendar(ui: &mut Ui, salt: &str, current: Option<DateTime>, clearable: bool, minute: u32) -> Option<Option<DateTime>> {
     let id = Id::unique(("date_month", salt));
     let today = plancraft_core::dates::today();
     let (mut year, mut month) = ui

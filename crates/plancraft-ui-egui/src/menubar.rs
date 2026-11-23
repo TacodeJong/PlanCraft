@@ -616,7 +616,7 @@ fn task_entries(st: &UiState, info: &MenuInfo) -> Vec<Entry> {
         cmd(
             "plus",
             Some(crate::lang::text("tb.task")),
-            tip(Command::InsertTask, "Insert a task above the selection"),
+            tip(Command::InsertTask, "Insert a task beneath the selection"),
             doc,
             true,
             Command::InsertTask,

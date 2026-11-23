@@ -171,7 +171,7 @@ impl TaskTable {
     pub fn columns(self) -> Vec<TaskCol> {
         use TaskCol::*;
         match self {
-            TaskTable::Entry => vec![Indicators, Mode, Name, Duration, LevelingDelay, Start, Finish, Predecessors, Resources],
+            TaskTable::Entry => vec![Indicators, Mode, Name, Duration, LevelingDelay, Start, Finish, Predecessors, Resources, Notes],
             TaskTable::Schedule => vec![
                 Indicators,
                 Name,
@@ -243,7 +243,8 @@ impl TaskTable {
 impl TaskCol {
     pub fn def(self, p: &Project) -> ColumnDef {
         use TaskCol::*;
-        let _ = p;
+        let start_m = p.settings.time.default_start_time;
+        let finish_m = p.settings.time.default_finish_time;
         match self {
             // Icon-only: Inter has no info-symbol glyph; cells paint Lucide icons.
             Indicators => ColumnDef::new("", 34.0).read_only().center(),
@@ -256,8 +257,8 @@ impl TaskCol {
                     .right()
                     .read_only()
             }
-            Start => ColumnDef::new(ct("col.start"), 96.0),
-            Finish => ColumnDef::new(ct("col.finish"), 96.0),
+            Start => ColumnDef::new(ct("col.start"), 96.0).date(start_m, false),
+            Finish => ColumnDef::new(ct("col.finish"), 96.0).date(finish_m, false),
             Predecessors => ColumnDef::new(ct("col.predecessors"), 96.0),
             Successors => ColumnDef::new(ct("col.successors"), 96.0).read_only(),
             Resources => ColumnDef::new(ct("col.resources"), 160.0),
@@ -290,12 +291,12 @@ impl TaskCol {
             FinishVariance => ColumnDef::new(ct("col.finish_var"), 76.0).right().read_only(),
             WorkVariance => ColumnDef::new(ct("col.work_var"), 72.0).right().read_only(),
             CostVariance => ColumnDef::new(ct("col.cost_var"), 86.0).right().read_only(),
-            ActualStart => ColumnDef::new(ct("col.actual_start"), 100.0),
-            ActualFinish => ColumnDef::new(ct("col.actual_finish"), 100.0),
+            ActualStart => ColumnDef::new(ct("col.actual_start"), 100.0).date(start_m, true),
+            ActualFinish => ColumnDef::new(ct("col.actual_finish"), 100.0).date(finish_m, true),
             ActualDuration => ColumnDef::new(ct("col.actual_duration"), 76.0).right(),
             RemainingDuration => ColumnDef::new(ct("col.remaining_duration"), 76.0).right(),
             Stop => ColumnDef::new(ct("col.stop"), 100.0).read_only(),
-            Resume => ColumnDef::new(ct("col.resume"), 100.0),
+            Resume => ColumnDef::new(ct("col.resume"), 100.0).date(start_m, true),
             EarlyStart => ColumnDef::new(ct("col.early_start"), 100.0).read_only(),
             EarlyFinish => ColumnDef::new(ct("col.early_finish"), 100.0).read_only(),
             LateStart => ColumnDef::new(ct("col.late_start"), 100.0).read_only(),
@@ -303,8 +304,8 @@ impl TaskCol {
             FreeSlack => ColumnDef::new(ct("col.free_slack"), 76.0).right().read_only(),
             TotalSlack => ColumnDef::new(ct("col.total_slack"), 76.0).right().read_only(),
             ConstraintType => ColumnDef::new(ct("col.constraint"), 150.0).choice(&ConstraintKind::ALL.map(|c| c.label())),
-            ConstraintDate => ColumnDef::new(ct("col.constraint_date"), 104.0),
-            Deadline => ColumnDef::new(ct("col.deadline"), 100.0),
+            ConstraintDate => ColumnDef::new(ct("col.constraint_date"), 104.0).date(start_m, true),
+            Deadline => ColumnDef::new(ct("col.deadline"), 100.0).date(finish_m, true),
             Priority => ColumnDef::new(ct("col.priority"), 60.0).right(),
             TaskType => ColumnDef::new(ct("col.type"), 100.0).choice(&["Fixed Units", "Fixed Duration", "Fixed Work"]),
             EstimateMethod => ColumnDef::new(ct("col.estimate"), 96.0).choice(&["None", "Complexity", "Three-point", "Work"]),
@@ -1041,5 +1042,18 @@ mod tests {
         p.task_mut(id).unwrap().leveling_delay = 0;
         assert_eq!(cell(TaskCol::LevelingDelay, &p, idx, &ctx).text, p.format_duration(0, false), "zero should stay explicit");
         assert!(commit(TaskCol::LevelingDelay, &mut p, id, "3d").is_err(), "column is read-only in this scope");
+    }
+
+    /// Begin/Einde (and clearable actuals) use the sheet calendar editor.
+    #[test]
+    fn start_and_finish_columns_use_date_editor() {
+        use crate::widgets::grid::Editor;
+        let p = Project::new("Dates", plancraft_core::dates::ymd(2026, 10, 19).unwrap());
+        let start_m = p.settings.time.default_start_time;
+        let finish_m = p.settings.time.default_finish_time;
+        assert_eq!(TaskCol::Start.def(&p).editor, Editor::Date { minute: start_m, clearable: false });
+        assert_eq!(TaskCol::Finish.def(&p).editor, Editor::Date { minute: finish_m, clearable: false });
+        assert_eq!(TaskCol::ActualStart.def(&p).editor, Editor::Date { minute: start_m, clearable: true });
+        assert_eq!(TaskCol::Deadline.def(&p).editor, Editor::Date { minute: finish_m, clearable: true });
     }
 }

@@ -334,6 +334,10 @@ fn clear_field(doc: &mut Document, st: &mut UiState, rows: &[Row], row: usize, f
             st.toast(ToastKind::Info, format!("{} can't be left empty; pick another value instead. {hint}", def.title));
             return;
         }
+        grid::Editor::Date { clearable: false, .. } => {
+            st.toast(ToastKind::Info, format!("{} can't be left empty; pick another date instead. {hint}", def.title));
+            return;
+        }
         _ => {}
     }
     let ids: Vec<TaskId> = if st.sel.tasks.contains(&at) { super::selected_in_order(&doc.project, &st.sel) } else { vec![at] };
