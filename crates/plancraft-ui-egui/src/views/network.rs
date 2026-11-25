@@ -311,14 +311,15 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: 
         && let Some(t) = d.nodes.get(k).and_then(|n| p.tasks.get(n.task))
     {
         let tip = format!("{}\n{} – {}", t.name, format::date(t.sched.start), format::date(t.sched.finish));
-        egui::Area::new(ui.scope_id().with("net_tip")).order(egui::Order::Tooltip).fixed_pos(pos + vec2(14.0, 14.0)).interactable(false).show(
-            ui.ctx(),
-            |ui| {
+        egui::Area::new(ui.scope_id().with("net_tip"))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(pos + vec2(14.0, 14.0))
+            .interactable(false)
+            .show(ui.ctx(), |ui| {
                 craft::menu_frame().show(ui, |ui| {
                     ui.label(egui::RichText::new(tip).size(12.0));
                 });
-            },
-        );
+            });
     }
 
     // Dragging: from a box draws a link, from the background moves the view.

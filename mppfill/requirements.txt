@@ -1,0 +1,2 @@
+pymppwriter==0.4.3
+msal>=1.28

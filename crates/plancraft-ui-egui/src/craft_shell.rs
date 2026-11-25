@@ -159,17 +159,7 @@ fn shell_theme() -> Option<Arc<ThemeDef>> {
 
 /// PhotoCraft-style title bar: brand/leading, centred document [`Title`], trailing.
 /// Requires [`install_runtime`] on this context.
-pub fn show_title_bar(
-    ui: &mut Ui,
-    doc_title: &str,
-    mut leading: impl FnMut(&mut Ui),
-    mut trailing: impl FnMut(&mut Ui),
-) -> TitleBarOutput {
+pub fn show_title_bar(ui: &mut Ui, doc_title: &str, mut leading: impl FnMut(&mut Ui), mut trailing: impl FnMut(&mut Ui)) -> TitleBarOutput {
     let title = if doc_title.is_empty() { Title::new("PlanCraft") } else { Title::new(doc_title) };
-    TitleBar::new().title_when_native().show_titled(
-        ui,
-        title,
-        |ui, _| leading(ui),
-        |ui, _| trailing(ui),
-    )
+    TitleBar::new().title_when_native().show_titled(ui, title, |ui, _| leading(ui), |ui, _| trailing(ui))
 }

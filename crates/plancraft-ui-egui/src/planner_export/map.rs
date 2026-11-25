@@ -59,7 +59,11 @@ pub struct ExportTask {
     pub finish: Option<DateTime>,
     pub percent_complete: u8,
     pub effort_hours: f64,
+    /// Scheduled duration in days. Zero for a milestone, so Planner keeps it as a diamond.
+    pub duration_days: f64,
     pub milestone: bool,
+    /// Summary tasks are not assigned; Planner puts people on the leaf tasks.
+    pub summary: bool,
     pub notes: String,
     pub assignees: Vec<ResourceId>,
 }
@@ -111,7 +115,17 @@ pub fn build_export(project: &Project, target: ExportTarget) -> ExportPlan {
             let minutes = if task.sched.work > 0 { task.sched.work } else { task.duration.max(0) };
             (minutes as f64) / 60.0
         };
-        let assignees: Vec<ResourceId> = project.assignments_for_task(task.id).map(|a| a.resource).collect();
+        let day = project.settings.time.minutes_per_day.max(1) as f64;
+        let duration_days = if milestone { 0.0 } else { (task.sched.duration.max(0) as f64) / day };
+        let assignees: Vec<ResourceId> = if task.sched.is_summary {
+            Vec::new()
+        } else {
+            project
+                .assignments_for_task(task.id)
+                .filter(|a| project.resource(a.resource).is_some_and(|r| r.kind == ResourceType::Work))
+                .map(|a| a.resource)
+                .collect()
+        };
         let bucket_key = bucket_for_row.get(i).cloned().unwrap_or_else(|| default_bucket.clone());
         tasks.push(ExportTask {
             task_id: task.id,
@@ -123,8 +137,10 @@ pub fn build_export(project: &Project, target: ExportTarget) -> ExportPlan {
             start,
             finish,
             percent_complete: task.percent_complete.min(100),
-            effort_hours,
+            effort_hours: if milestone { 0.0 } else { effort_hours },
+            duration_days,
             milestone,
+            summary: task.sched.is_summary,
             notes: task.notes.clone(),
             assignees,
         });
@@ -149,6 +165,9 @@ pub fn build_export(project: &Project, target: ExportTarget) -> ExportPlan {
 
     if tasks.iter().any(|t| t.start.is_none() || t.finish.is_none()) {
         notes.push(crate::lang::text("planner.note.undated").into());
+    }
+    if project.assignments.iter().any(|a| project.resource(a.resource).is_some_and(|r| r.kind != ResourceType::Work)) {
+        notes.push(crate::lang::text("planner.note.work_only").into());
     }
 
     ExportPlan { title, target, buckets, tasks, dependencies, people, notes }

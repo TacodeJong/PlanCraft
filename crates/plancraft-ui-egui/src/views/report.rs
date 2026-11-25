@@ -131,7 +131,8 @@ pub fn toggle_column(choice: &mut ColumnChoice, key: &str) {
 
 fn visible_cols(choice: Option<&ColumnChoice>) -> Vec<ReportCol> {
     let hidden = choice.map(|c| c.hidden.as_slice()).unwrap_or(&[]);
-    let list: Vec<ReportCol> = ReportCol::ALL.into_iter().filter(|c| *c == ReportCol::Name || !hidden.iter().any(|k| k == c.key())).collect();
+    let list: Vec<ReportCol> =
+        ReportCol::ALL.into_iter().filter(|c| *c == ReportCol::Name || !hidden.iter().any(|k| k == c.key())).collect();
     if list.is_empty() { ReportCol::ALL.to_vec() } else { list }
 }
 
@@ -155,7 +156,11 @@ fn cell_text(p: &Project, idx: usize, t: &Task, col: ReportCol) -> String {
         }
         ReportCol::Name => t.name.clone(),
         ReportCol::Milestone => {
-            if t.is_milestone() { crate::lang::text("common.yes").into() } else { String::new() }
+            if t.is_milestone() {
+                crate::lang::text("common.yes").into()
+            } else {
+                String::new()
+            }
         }
         ReportCol::Start => day(t.sched.start.or(t.manual_start)),
         ReportCol::Finish => day(t.sched.finish.or(t.manual_finish)),
@@ -187,12 +192,8 @@ pub fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, _out:
                         ui.horizontal(|ui| {
                             if let Some(mark) = line.mark {
                                 let tip = {
-                                    let note = line
-                                        .cells
-                                        .iter()
-                                        .find(|(c, _)| *c == ReportCol::MarkNote)
-                                        .map(|(_, n)| n.trim())
-                                        .unwrap_or("");
+                                    let note =
+                                        line.cells.iter().find(|(c, _)| *c == ReportCol::MarkNote).map(|(_, n)| n.trim()).unwrap_or("");
                                     if note.is_empty() {
                                         crate::lang::mark_name(mark).into()
                                     } else {
@@ -249,10 +250,7 @@ pub fn workbook(p: &Project, st: &UiState) -> Result<Vec<u8>, String> {
 /// The same rows, laid out for the print preview. Column widths sum to a landscape page.
 pub fn sheet(p: &Project, st: &UiState) -> Sheet {
     let cols = visible_cols(st.columns.get(REPORT_COLUMNS_KEY));
-    let columns = cols
-        .iter()
-        .map(|c| PrintColumn { title: c.title(st).into(), width: c.width(), align: Align::Left })
-        .collect();
+    let columns = cols.iter().map(|c| PrintColumn { title: c.title(st).into(), width: c.width(), align: Align::Left }).collect();
     let rows = lines(p, st, &cols)
         .into_iter()
         .map(|line| PrintRow {

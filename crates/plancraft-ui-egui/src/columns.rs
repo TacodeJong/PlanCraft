@@ -529,12 +529,7 @@ pub fn cell(col: TaskCol, p: &Project, idx: usize, ctx: &CellCtx) -> Cell {
             if t.row_mark.is_none() && t.mark_note.trim().is_empty() {
                 Cell::default()
             } else {
-                Cell {
-                    text: t.mark_note.clone(),
-                    bg: t.row_mark.map(theme::row_mark_wash),
-                    wrap: true,
-                    ..Default::default()
-                }
+                Cell { text: t.mark_note.clone(), bg: t.row_mark.map(theme::row_mark_wash), wrap: true, ..Default::default() }
             }
         }
         Work => Cell::text(format_work(s.work)),
@@ -624,10 +619,10 @@ pub fn cell(col: TaskCol, p: &Project, idx: usize, ctx: &CellCtx) -> Cell {
         },
         ExpectedWork => t.estimate.map(|e| Cell::text(format_work(e.expected_work(&p.settings)))).unwrap_or_default(),
         Deliverable => Cell::text(t.deliverable.clone()).wrapped(),
-        Milestones => Cell::weak(
-            p.milestones_of(t.id).iter().filter_map(|m| p.task(*m)).map(|m| m.name.clone()).collect::<Vec<_>>().join(", "),
-        )
-        .wrapped(),
+        Milestones => {
+            Cell::weak(p.milestones_of(t.id).iter().filter_map(|m| p.task(*m)).map(|m| m.name.clone()).collect::<Vec<_>>().join(", "))
+                .wrapped()
+        }
         Notes => {
             let text = t.notes.replace("\r\n", "\n");
             Cell { text, wrap: true, ..Default::default() }
@@ -958,10 +953,7 @@ mod tests {
             "On pin shows pin, not rotate-cw"
         );
         p.set_schedule_mode(&[id], ScheduleMode::Manual).unwrap();
-        assert!(
-            matches!(cell(TaskCol::Mode, &p, idx, &ctx).icons.first(), Some((Glyph::Icon("pin"), _, _))),
-            "Manual mode keeps the pin"
-        );
+        assert!(matches!(cell(TaskCol::Mode, &p, idx, &ctx).icons.first(), Some((Glyph::Icon("pin"), _, _))), "Manual mode keeps the pin");
     }
 
     /// The Status and Row Mark columns (for the column chooser) show and edit their fields.

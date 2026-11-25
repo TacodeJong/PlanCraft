@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mppfill"
+version = "0.1.0"
+description = "Fill a Microsoft Project template with a plan imported from MSPDI XML"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+dependencies = ["pymppwriter==0.4.3", "msal>=1.28"]
+
+[project.scripts]
+mppfill = "mppfill.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

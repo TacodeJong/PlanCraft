@@ -22,8 +22,7 @@ enum Job {
     Export(Receiver<Result<ExportOutcome, String>>),
 }
 
-const DELEGATED_PERMISSIONS: &str =
-    "Microsoft Graph (delegated): Tasks.ReadWrite, Group.ReadWrite.All, User.Read\nDataverse / Dynamics CRM (delegated): user_impersonation";
+const DELEGATED_PERMISSIONS: &str = "Microsoft Graph (delegated): Tasks.ReadWrite, Group.ReadWrite.All, User.Read\nDataverse / Dynamics CRM (delegated): user_impersonation";
 
 pub struct PlannerExport {
     target: ExportTarget,
@@ -187,92 +186,86 @@ impl PlannerExport {
                 )));
 
                 ui.add_space(8.0);
-                egui::CollapsingHeader::new(t("planner.advanced"))
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        ui.label(RichText::new(t("planner.advanced.intro")).small().color(theme::pal().TEXT_WEAK));
-                        ui.add_space(4.0);
-                        ui.horizontal(|ui| {
-                            ui.label(t("planner.tenant"));
-                            if ui
-                                .add(
-                                    egui::TextEdit::singleline(&mut settings.planner.tenant_id)
-                                        .hint_text(planner_export::DEFAULT_TENANT_ID)
-                                        .desired_width(280.0),
-                                )
-                                .changed()
-                            {
-                                settings.save();
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label(t("planner.client"));
-                            if ui
-                                .add(
-                                    egui::TextEdit::singleline(&mut settings.planner.client_id)
-                                        .hint_text(if has_shipped_client {
-                                            t("planner.client_hint_default")
-                                        } else {
-                                            t("planner.client_hint")
-                                        })
-                                        .desired_width(280.0),
-                                )
-                                .changed()
-                            {
-                                settings.save();
-                            }
-                        });
-                        if has_shipped_client {
-                            ui.label(
-                                RichText::new(format!("{}: {}", t("planner.using_default_client"), planner_export::DEFAULT_CLIENT_ID))
-                                    .small()
-                                    .color(theme::pal().TEXT_WEAK),
-                            );
+                egui::CollapsingHeader::new(t("planner.advanced")).default_open(false).show(ui, |ui| {
+                    ui.label(RichText::new(t("planner.advanced.intro")).small().color(theme::pal().TEXT_WEAK));
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(t("planner.tenant"));
+                        if ui
+                            .add(
+                                egui::TextEdit::singleline(&mut settings.planner.tenant_id)
+                                    .hint_text(planner_export::DEFAULT_TENANT_ID)
+                                    .desired_width(280.0),
+                            )
+                            .changed()
+                        {
+                            settings.save();
                         }
-                        ui.add_space(4.0);
-                        ui.horizontal(|ui| {
-                            ui.label(t("planner.secret"));
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.secret_paste)
-                                    .password(true)
-                                    .hint_text(t("planner.secret_hint"))
-                                    .desired_width(200.0),
-                            );
-                            if ui.button(t("distill.save")).clicked() && !self.secret_paste.trim().is_empty() {
-                                match planner_export::store_client_secret(&self.secret_paste) {
-                                    Ok(()) => {
-                                        self.secret_paste.clear();
-                                        self.status = Some(t("planner.secret_saved").into());
-                                        self.error = None;
-                                    }
-                                    Err(e) => self.error = Some(e),
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(t("planner.client"));
+                        if ui
+                            .add(
+                                egui::TextEdit::singleline(&mut settings.planner.client_id)
+                                    .hint_text(if has_shipped_client { t("planner.client_hint_default") } else { t("planner.client_hint") })
+                                    .desired_width(280.0),
+                            )
+                            .changed()
+                        {
+                            settings.save();
+                        }
+                    });
+                    if has_shipped_client {
+                        ui.label(
+                            RichText::new(format!("{}: {}", t("planner.using_default_client"), planner_export::DEFAULT_CLIENT_ID))
+                                .small()
+                                .color(theme::pal().TEXT_WEAK),
+                        );
+                    }
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(t("planner.secret"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.secret_paste)
+                                .password(true)
+                                .hint_text(t("planner.secret_hint"))
+                                .desired_width(200.0),
+                        );
+                        if ui.button(t("distill.save")).clicked() && !self.secret_paste.trim().is_empty() {
+                            match planner_export::store_client_secret(&self.secret_paste) {
+                                Ok(()) => {
+                                    self.secret_paste.clear();
+                                    self.status = Some(t("planner.secret_saved").into());
+                                    self.error = None;
                                 }
+                                Err(e) => self.error = Some(e),
                             }
-                            if ui.button(t("distill.remove")).clicked() {
-                                let _ = planner_export::delete_client_secret();
-                                self.secret_paste.clear();
-                            }
-                        });
-                        ui.label(RichText::new(t("planner.key_where")).small().color(theme::pal().TEXT_WEAK));
+                        }
+                        if ui.button(t("distill.remove")).clicked() {
+                            let _ = planner_export::delete_client_secret();
+                            self.secret_paste.clear();
+                        }
+                    });
+                    ui.label(RichText::new(t("planner.key_where")).small().color(theme::pal().TEXT_WEAK));
 
-                        ui.add_space(6.0);
-                        egui::CollapsingHeader::new(t("planner.setup")).default_open(!has_shipped_client).show(ui, |ui| {
-                            ui.label(t("planner.setup.intro"));
-                            ui.add_space(4.0);
-                            ui.label(RichText::new(t("planner.setup.steps")).small());
-                            ui.add_space(4.0);
-                            ui.label(RichText::new(t("planner.setup.blocked")).small().color(theme::pal().WARN));
-                            ui.horizontal(|ui| {
-                                if ui.button(t("planner.setup.copy_perms")).clicked() {
-                                    ui.ctx().copy_text(DELEGATED_PERMISSIONS.to_string());
-                                    self.copied_hint = Some(t("planner.setup.copied"));
-                                }
-                                if let Some(hint) = self.copied_hint {
-                                    ui.label(RichText::new(hint).small().color(theme::pal().OK));
-                                }
-                            });
+                    ui.add_space(6.0);
+                    egui::CollapsingHeader::new(t("planner.setup")).default_open(!has_shipped_client).show(ui, |ui| {
+                        ui.label(t("planner.setup.intro"));
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(t("planner.setup.steps")).small());
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(t("planner.setup.blocked")).small().color(theme::pal().WARN));
+                        ui.horizontal(|ui| {
+                            if ui.button(t("planner.setup.copy_perms")).clicked() {
+                                ui.ctx().copy_text(DELEGATED_PERMISSIONS.to_string());
+                                self.copied_hint = Some(t("planner.setup.copied"));
+                            }
+                            if let Some(hint) = self.copied_hint {
+                                ui.label(RichText::new(hint).small().color(theme::pal().OK));
+                            }
                         });
                     });
+                });
 
                 if let Some(err) = &self.error {
                     ui.label(RichText::new(err).color(theme::pal().ERROR));

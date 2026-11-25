@@ -93,6 +93,13 @@ pub fn to_xml(p: &Project) -> (String, Vec<String>) {
     write::export(p)
 }
 
+/// Writes a plan as MSPDI text that Planner Premium's project import can keep: automatically
+/// scheduled tasks (so a finish constraint does not stretch the duration back to the plan start),
+/// milestones at zero duration, and assignments of work resources on leaf tasks.
+pub fn to_xml_for_planner(p: &Project) -> (String, Vec<String>) {
+    write::export_with(p, write::Profile::PlannerPremium)
+}
+
 /// Decodes a file's bytes: UTF-8 (with or without a byte order mark) or UTF-16 with a byte
 /// order mark.
 fn decode(bytes: &[u8]) -> Option<String> {
@@ -141,8 +148,13 @@ pub fn load(path: impl AsRef<Path>) -> FileResult<(Project, Vec<String>)> {
 
 /// Exports a plan to a Microsoft Project XML file (atomically). Returns notes on what was left out.
 pub fn save(p: &Project, path: impl AsRef<Path>) -> FileResult<Vec<String>> {
+    save_with(p, path, false)
+}
+
+/// Exports a plan as Microsoft Project XML. `planner` uses [`to_xml_for_planner`].
+pub fn save_with(p: &Project, path: impl AsRef<Path>, planner: bool) -> FileResult<Vec<String>> {
     let path = path.as_ref();
-    let (xml, notes) = to_xml(p);
+    let (xml, notes) = if planner { to_xml_for_planner(p) } else { to_xml(p) };
     write_atomic(path, xml.as_bytes(), Privacy::KeepExisting).map_err(|source| FileError::Io { path: path.into(), source })?;
     Ok(notes)
 }

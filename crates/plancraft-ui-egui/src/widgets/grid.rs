@@ -17,7 +17,10 @@ pub enum Editor {
     Text,
     Choice(Vec<String>),
     /// Calendar popup; picked day is committed as `YYYY-MM-DD` at `minute` from midnight.
-    Date { minute: u32, clearable: bool },
+    Date {
+        minute: u32,
+        clearable: bool,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -390,9 +393,7 @@ fn measure_heights(cfg: &GridConfig, widths: &[f32], cell: &mut dyn FnMut(usize,
                 continue;
             }
             let avail = (widths.get(c).copied().unwrap_or(60.0) - content.indent - 10.0).max(1.0);
-            let n = plancraft_core::print::font::wrap(&content.text, 13.0, content.bold, avail)
-                .len()
-                .clamp(1, MAX_WRAP_LINES);
+            let n = plancraft_core::print::font::wrap(&content.text, 13.0, content.bold, avail).len().clamp(1, MAX_WRAP_LINES);
             heights[r] = heights[r].max((line_h * n as f32).min(max_h).max(cfg.row_height));
         }
     }
@@ -1000,21 +1001,14 @@ pub fn show(
                 body_painter.rect_stroke(r.shrink(0.5), 0.0, Stroke::new(1.5, theme::pal().ACCENT), StrokeKind::Inside);
                 let current = parse_iso_day(&edit.text).and_then(|d| date_at_minute(d, minute));
                 let label = crate::format::date(current);
-                body_painter.text(
-                    pos2(r.left() + 5.0, r.center().y),
-                    Align2::LEFT_CENTER,
-                    &label,
-                    cell_font.clone(),
-                    theme::pal().TEXT,
+                body_painter.text(pos2(r.left() + 5.0, r.center().y), Align2::LEFT_CENTER, &label, cell_font.clone(), theme::pal().TEXT);
+                let area = egui::Area::new(cfg.id.with("date")).order(egui::Order::Foreground).fixed_pos(pos2(r.left(), r.bottom())).show(
+                    ui.ctx(),
+                    |ui| {
+                        craft::menu_frame()
+                            .show(ui, |ui| crate::widgets::date_picker::calendar(ui, "grid_date", current, clearable, minute))
+                    },
                 );
-                let area = egui::Area::new(cfg.id.with("date"))
-                    .order(egui::Order::Foreground)
-                    .fixed_pos(pos2(r.left(), r.bottom()))
-                    .show(ui.ctx(), |ui| {
-                        craft::menu_frame().show(ui, |ui| {
-                            crate::widgets::date_picker::calendar(ui, "grid_date", current, clearable, minute)
-                        })
-                    });
                 if let Some(next) = area.inner.inner {
                     edit.text = crate::format::iso_date(next);
                     finished = Some((true, None));
@@ -1456,28 +1450,18 @@ mod tests {
     /// Date columns open a calendar editor (not a TextEdit); Escape cancels without a commit.
     #[test]
     fn date_column_f2_opens_calendar_escape_cancels() {
-        let cols = vec![
-            ColumnDef::new("Name", 120.0),
-            ColumnDef::new("Start", 96.0).date(8 * 60, false),
-        ];
+        let cols = vec![ColumnDef::new("Name", 120.0), ColumnDef::new("Start", 96.0).date(8 * 60, false)];
         let mut h = harness(cols, 3, None);
         focus(&mut h, (1, 1));
         h.key_press(Key::F2);
         h.run_steps(3);
         assert_eq!(h.state().grid.editing.as_ref().map(|e| (e.row, e.col)), Some((1, 1)));
-        assert!(
-            matches!(h.state().columns[1].editor, Editor::Date { clearable: false, .. }),
-            "column stays a Date editor"
-        );
+        assert!(matches!(h.state().columns[1].editor, Editor::Date { clearable: false, .. }), "column stays a Date editor");
         // Typing must not start a TextEdit path on a Date column.
         h.key_press(Key::Escape);
         h.run_steps(2);
         assert!(h.state().grid.editing.is_none());
-        assert!(
-            !h.state().events.iter().any(|e| matches!(e, GridEvent::Commit { .. })),
-            "Escape must not commit: {:?}",
-            h.state().events
-        );
+        assert!(!h.state().events.iter().any(|e| matches!(e, GridEvent::Commit { .. })), "Escape must not commit: {:?}", h.state().events);
     }
 
     #[test]

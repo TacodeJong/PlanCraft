@@ -251,12 +251,7 @@ pub fn print_sheet(p: &Project, pal: &plancraft_core::print::layout::Palette, wo
             let mut cells = vec![PrintCell::text((i + 1).to_string())];
             cells.extend(cols.iter().map(|(c, _)| {
                 let cell = cell(p, r, *c, &over, &work);
-                PrintCell {
-                    text: cell.text,
-                    color: cell.color.map(|_| pal.error),
-                    wrap: cell.wrap && word_wrap,
-                    ..Default::default()
-                }
+                PrintCell { text: cell.text, color: cell.color.map(|_| pal.error), wrap: cell.wrap && word_wrap, ..Default::default() }
             }));
             PrintRow { kind: RowKind::Other, cells }
         })

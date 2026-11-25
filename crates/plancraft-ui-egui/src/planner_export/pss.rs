@@ -18,6 +18,7 @@ pub struct PssExportResult {
     pub project_id: String,
     pub tasks_created: usize,
     pub dependencies_created: usize,
+    pub assignments_created: usize,
     pub warnings: Vec<String>,
 }
 
@@ -98,11 +99,25 @@ pub fn export_premium_with_tokens(
         dependencies_created = dependencies_created.saturating_add(1);
     }
 
+    // Tasks have to exist before an assignment can bind to them. A single set that mixes both
+    // is rejected, and the people never land on the tasks.
+    flush_operation_sets(http, tokens, &api, &project_id, &ops, &mut warnings)?;
+
+    let mut assignments = Vec::new();
     for task in &plan.tasks {
+        if task.summary {
+            if !task.assignees.is_empty() {
+                warnings.push(format!("{}: people are assigned on its tasks, not on the summary", task.title));
+            }
+            continue;
+        }
         for rid in &task.assignees {
-            let Some(member) = team.get(rid) else { continue };
+            let Some(member) = team.get(rid) else {
+                warnings.push(format!("{}: no team member for an assigned resource", task.title));
+                continue;
+            };
             let Some(task_guid) = task_guids.get(&task.task_id) else { continue };
-            ops.push(json!({
+            assignments.push(json!({
                 "@odata.type": "Microsoft.Dynamics.CRM.msdyn_resourceassignment",
                 "msdyn_resourceassignmentid": Uuid::new_v4().to_string(),
                 "msdyn_name": format!("{} / {}", task.title, member.name),
@@ -112,10 +127,12 @@ pub fn export_premium_with_tokens(
             }));
         }
     }
+    let assignments_created = assignments.len();
+    if !assignments.is_empty() {
+        flush_operation_sets(http, tokens, &api, &project_id, &assignments, &mut warnings)?;
+    }
 
-    flush_operation_sets(http, tokens, &api, &project_id, &ops, &mut warnings)?;
-
-    Ok(PssExportResult { project_id, tasks_created: plan.tasks.len(), dependencies_created, warnings })
+    Ok(PssExportResult { project_id, tasks_created: plan.tasks.len(), dependencies_created, assignments_created, warnings })
 }
 
 struct TeamMember {
@@ -129,11 +146,42 @@ struct LinkTypeMeta {
     options: Vec<(i32, String)>,
 }
 
+/// The bookable resource for a user's email, when Dataverse has one.
+fn bookable_resource(http: &mut dyn Transport, tokens: &TokenSet, api: &str, email: &str) -> Option<String> {
+    let email = email.trim();
+    if email.is_empty() {
+        return None;
+    }
+    let escaped = email.replace('\'', "''");
+    let users =
+        dataverse_get(http, tokens, &format!("{api}/systemusers?$select=systemuserid&$filter=internalemailaddress eq '{escaped}'&$top=1"))
+            .ok()?;
+    let user = users.pointer("/value/0/systemuserid")?.as_str()?;
+    let resources =
+        dataverse_get(http, tokens, &format!("{api}/bookableresources?$select=bookableresourceid&$filter=_userid_value eq {user}&$top=1"))
+            .ok()?;
+    resources.pointer("/value/0/bookableresourceid")?.as_str().map(str::to_string)
+}
+
+/// Fixed duration. Matches the schedule mode Project for the web keeps on an MPP import ("Vaste duur").
+const SCHEDULE_FIXED_DURATION: i32 = 192350001;
+
 fn create_project(http: &mut dyn Transport, tokens: &TokenSet, api: &str, title: &str) -> Result<String, String> {
-    let body = json!({ "MSDyn_Subject": title });
+    // msdyn_CreateProjectV1 takes one parameter, `Project` (an msdyn_project). A flat
+    // MSDyn_Subject field is rejected as an unknown action parameter.
+    let body = json!({
+        "Project": {
+            "msdyn_subject": title,
+            "msdyn_schedulemode": SCHEDULE_FIXED_DURATION
+        }
+    });
     let resp = dataverse_post(http, tokens, &format!("{api}/msdyn_CreateProjectV1"), &body)?;
-    if let Some(id) =
-        resp.get("MSDyn_ProjectId").or_else(|| resp.get("msdyn_projectid")).or_else(|| resp.get("ProjectId")).and_then(|v| v.as_str())
+    if let Some(id) = resp
+        .get("ProjectId")
+        .or_else(|| resp.get("projectid"))
+        .or_else(|| resp.get("msdyn_projectid"))
+        .or_else(|| resp.get("MSDyn_ProjectId"))
+        .and_then(|v| v.as_str())
     {
         return Ok(id.to_string());
     }
@@ -158,14 +206,24 @@ fn create_team_members(
     let mut map = HashMap::new();
     for person in &plan.people {
         let team_id = Uuid::new_v4();
-        let body = json!({
-            "TeamMember": {
-                "@odata.type": "Microsoft.Dynamics.CRM.msdyn_projectteam",
-                "msdyn_projectteamid": team_id.to_string(),
-                "msdyn_name": person.name,
-                "msdyn_project@odata.bind": format!("/msdyn_projects({project_id})")
-            }
+        let mut member = json!({
+            "@odata.type": "Microsoft.Dynamics.CRM.msdyn_projectteam",
+            "msdyn_projectteamid": team_id.to_string(),
+            "msdyn_name": person.name,
+            "msdyn_project@odata.bind": format!("/msdyn_projects({project_id})")
         });
+        // An assignment needs a project team member. Linking the bookable resource makes Planner
+        // show that Microsoft 365 user; without a match the person is still assigned by name.
+        if let Some(resource_id) = bookable_resource(http, tokens, api, &person.email) {
+            if let Some(obj) = member.as_object_mut() {
+                obj.insert("msdyn_bookableresourceid@odata.bind".into(), json!(format!("/bookableresources({resource_id})")));
+            }
+        } else if person.email.is_empty() {
+            warnings.push(format!("{} has no email, so Planner cannot match a Microsoft 365 user", person.name));
+        } else {
+            warnings.push(format!("{} ({}) is not a bookable resource in this environment; assigned by name", person.name, person.email));
+        }
+        let body = json!({ "TeamMember": member });
         match dataverse_post(http, tokens, &format!("{api}/msdyn_CreateTeamMemberV1"), &body) {
             Ok(resp) => {
                 let id = resp
@@ -195,7 +253,9 @@ fn task_entity(
         "msdyn_projecttaskid": task.guid.to_string(),
         "msdyn_subject": task.title,
         "msdyn_outlinelevel": task.outline_level,
-        "msdyn_effort": task.effort_hours,
+        "msdyn_effort": if task.milestone { 0.0 } else { task.effort_hours },
+        "msdyn_duration": task.duration_days,
+        "msdyn_ismilestone": task.milestone,
         "msdyn_project@odata.bind": format!("/msdyn_projects({project_id})"),
         "msdyn_projectbucket@odata.bind": format!("/msdyn_projectbuckets({bucket})")
     });
@@ -204,8 +264,13 @@ fn task_entity(
             let s = utc_datetime(start);
             obj.insert("msdyn_start".into(), json!(s));
             obj.insert("msdyn_scheduledstart".into(), json!(s));
+            if task.milestone {
+                obj.insert("msdyn_scheduledend".into(), json!(s));
+            }
         }
-        if let Some(finish) = task.finish {
+        if !task.milestone
+            && let Some(finish) = task.finish
+        {
             obj.insert("msdyn_scheduledend".into(), json!(utc_datetime(finish)));
         }
         if let Some(parent) = task.parent_task_id.and_then(|id| guids.get(&id)) {
@@ -251,8 +316,10 @@ fn flush_operation_sets(
 }
 
 fn create_operation_set(http: &mut dyn Transport, tokens: &TokenSet, api: &str, project_id: &str) -> Result<String, String> {
+    // Parameter names are ProjectId and Description. A navigation property is rejected.
     let body = json!({
-        "MSDyn_Project": format!("/msdyn_projects({project_id})")
+        "ProjectId": project_id,
+        "Description": "PlanCraft export"
     });
     let resp = dataverse_post(http, tokens, &format!("{api}/msdyn_CreateOperationSetV1"), &body)?;
     resp.get("OperationSetId")
@@ -373,7 +440,9 @@ mod tests {
                     finish: None,
                     percent_complete: 0,
                     effort_hours: 8.0,
+                    duration_days: 1.0,
                     milestone: false,
+                    summary: false,
                     notes: String::new(),
                     assignees: vec![],
                 },
@@ -388,7 +457,9 @@ mod tests {
                     finish: None,
                     percent_complete: 0,
                     effort_hours: 8.0,
+                    duration_days: 1.0,
                     milestone: false,
+                    summary: false,
                     notes: String::new(),
                     assignees: vec![],
                 },
@@ -403,5 +474,14 @@ mod tests {
         assert_eq!(result.dependencies_created, 1);
         assert!(http.calls.iter().any(|c| c.1.contains("msdyn_PssCreateV2") || c.1.contains("msdyn_PssCreateV1")));
         assert!(http.calls.iter().any(|c| c.1.contains("msdyn_ExecuteOperationSetV1")));
+        let create = http.calls.iter().find(|c| c.1.contains("msdyn_CreateProjectV1")).expect("create project");
+        let payload = create.2.as_deref().unwrap_or("");
+        assert!(payload.contains("\"Project\""), "{payload}");
+        assert!(payload.contains("msdyn_subject"), "{payload}");
+        assert!(!payload.contains("MSDyn_Subject"), "{payload}");
+        let opset = http.calls.iter().find(|c| c.1.contains("msdyn_CreateOperationSetV1")).expect("operation set");
+        let payload = opset.2.as_deref().unwrap_or("");
+        assert!(payload.contains("ProjectId"), "{payload}");
+        assert!(!payload.contains("MSDyn_Project"), "{payload}");
     }
 }

@@ -245,11 +245,7 @@ fn resource_group_entries(p: &Project, task: TaskId, empty: &str) -> Vec<(String
             entries.push((label, key));
         }
     }
-    if entries.is_empty() {
-        vec![(empty.to_string(), SortKey::Missing)]
-    } else {
-        entries
-    }
+    if entries.is_empty() { vec![(empty.to_string(), SortKey::Missing)] } else { entries }
 }
 
 /// Orders task indices by the sort field (ties keep outline order; empty values stay last in
@@ -578,10 +574,8 @@ mod tests {
 
         // Page-group Resources uses the same split, with "Unassigned" for empty.
         let st = UiState { page_group: PageGroup::Resources, ..UiState::default() };
-        let page_labels: Vec<String> = visible_rows(&p, &st)
-            .iter()
-            .filter_map(|r| if let Row::Group(g) = r { Some(g.label.clone()) } else { None })
-            .collect();
+        let page_labels: Vec<String> =
+            visible_rows(&p, &st).iter().filter_map(|r| if let Row::Group(g) = r { Some(g.label.clone()) } else { None }).collect();
         assert!(!page_labels.iter().any(|l| l.contains(", ")));
         assert!(page_labels.iter().any(|l| l == "Unassigned"));
         assert!(!page_labels.iter().any(|l| l == "No value"));

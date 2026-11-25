@@ -9,6 +9,7 @@ pub mod import;
 pub mod mcp_panel;
 pub mod misc;
 pub mod planner_export;
+pub mod planner_send;
 pub mod print;
 pub mod project_info;
 pub mod quick_entry;
@@ -39,12 +40,7 @@ impl<T> Bound<T> {
 
 /// Session-routed undoable edit for a bound dialog's document (prefer over [`crate::edit::EditExt`]
 /// when the caller already holds the workspace).
-pub fn edit_bound<R>(
-    ws: &mut Workspace,
-    handle: u64,
-    label: &str,
-    f: impl FnOnce(&mut Project) -> Result<R, String>,
-) -> Result<R, String> {
+pub fn edit_bound<R>(ws: &mut Workspace, handle: u64, label: &str, f: impl FnOnce(&mut Project) -> Result<R, String>) -> Result<R, String> {
     crate::engine_bridge::edit_doc(ws, handle, label, f)
 }
 
@@ -64,11 +60,7 @@ pub fn show_bound<T>(slot: &mut Option<Bound<T>>, ws: &mut Workspace, show: impl
 }
 
 /// Like [`show_bound`], but passes the workspace so apply can use [`edit_bound`] / engine commands.
-pub fn show_bound_ws<T>(
-    slot: &mut Option<Bound<T>>,
-    ws: &mut Workspace,
-    show: impl FnOnce(&mut T, &mut Workspace, u64) -> bool,
-) {
+pub fn show_bound_ws<T>(slot: &mut Option<Bound<T>>, ws: &mut Workspace, show: impl FnOnce(&mut T, &mut Workspace, u64) -> bool) {
     let Some(b) = slot else { return };
     let handle = b.doc;
     if ws.index_of(handle).is_none() {
@@ -108,6 +100,7 @@ pub struct Dialogs {
     pub mcp: bool,
     pub distill: Option<Bound<distill::Distill>>,
     pub planner_export: Option<Bound<planner_export::PlannerExport>>,
+    pub planner_send: Option<Bound<planner_send::PlannerSend>>,
     pub quick: Option<Bound<quick_entry::QuickEntry>>,
     pub ai_open: bool,
     pub ai: ai::AiState,

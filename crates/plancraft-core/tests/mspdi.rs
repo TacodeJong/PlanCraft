@@ -883,3 +883,61 @@ fn cyclus_export_matches_the_swift_file_and_reimports_stable() {
         assert_eq!((a.sched.start, a.sched.finish, a.sched.duration), (b.sched.start, b.sched.finish, b.sched.duration), "{}", a.name);
     }
 }
+
+/// Planner Premium's importer drops manual scheduling, constraints and deadlines, and then
+/// stretches a task from the plan start to the old finish. The Planner profile keeps the
+/// scheduled duration instead, writes a milestone as zero duration, and assigns only work
+/// resources on leaf tasks.
+#[test]
+fn planner_profile_keeps_duration_milestones_and_work_assignments() {
+    let mut p = Project::new("Cycle", d(2026, 10, 15));
+    let task = p.add_task("Opstellen concept", None);
+    p.set_duration(task, 8 * p.settings.time.minutes_per_day, false).unwrap();
+    p.set_schedule_mode(&[task], ScheduleMode::Manual).unwrap();
+    {
+        let t = p.task_mut(task).unwrap();
+        t.constraint = Constraint { kind: ConstraintKind::Mfo, date: Some(dt(2027, 1, 27, 17)) };
+        t.deadline = Some(dt(2027, 1, 27, 17));
+    }
+    let gate = p.add_milestone("Gate", None);
+    let ana = p.add_resource("Ana");
+    p.resource_mut(ana).unwrap().email = "ana@example.com".into();
+    let truck = p.add_resource("Truck");
+    p.resource_mut(truck).unwrap().kind = ResourceType::Material;
+    p.assign(task, ana, Some(1.0), None).unwrap();
+    p.assign(task, truck, Some(2.0), None).unwrap();
+    recalculate(&mut p);
+
+    let (xml, notes) = mspdi::to_xml_for_planner(&p);
+    assert!(!xml.contains("<Manual>"), "manual scheduling is what makes Planner stretch the bar");
+    assert!(!xml.contains("<Deadline>"));
+    assert!(!xml.contains("<ConstraintType>3</ConstraintType>"), "a finish constraint is what stretches the bar");
+    assert!(!xml.contains("Truck"));
+    assert!(xml.contains("ana@example.com"));
+    assert_eq!(xml.matches("<Assignment>").count(), 1, "only the work resource is assigned");
+    let gate_at = xml.find("Gate").unwrap();
+    let gate_end = xml[gate_at..].find("</Task>").unwrap() + gate_at;
+    let gate_xml = &xml[gate_at..gate_end];
+    assert!(gate_xml.contains("<Milestone>1</Milestone>"));
+    assert!(gate_xml.contains("<Duration>PT0H0M0S</Duration>"));
+    let task_at = xml.find("Opstellen concept").unwrap();
+    let task_end = xml[task_at..].find("</Task>").unwrap() + task_at;
+    let task_xml = &xml[task_at..task_end];
+    assert!(task_xml.contains("<ConstraintType>4</ConstraintType>"));
+    let start = p.task(task).unwrap().sched.start.unwrap();
+    let stamp = plancraft_core::mspdi::codes::datetime_text(start);
+    assert!(task_xml.contains(&format!("<Start>{stamp}</Start>")), "the calculated start is the Start field");
+    assert!(task_xml.contains(&format!("<ConstraintDate>{stamp}</ConstraintDate>")), "the same instant pins the task");
+    assert!(xml.contains("<FieldName>Text1</FieldName>"), "the names need a task text column");
+    assert!(xml.contains("<Alias>Resources</Alias>"));
+    assert!(task_xml.contains("<Value>Ana</Value>"), "the assigned person is a task attribute");
+    assert!(!task_xml.contains("Truck"));
+    let duration = p.task(task).unwrap().sched.duration;
+    assert!(task_xml.contains(&format!("<Duration>{}</Duration>", plancraft_core::mspdi::codes::duration_text(duration))));
+    let notes = notes.join("\n");
+    assert!(notes.contains("manually scheduled"));
+    assert!(notes.contains("constraints were left out"));
+    assert!(notes.contains("deadlines were left out"));
+    assert!(notes.contains("material and cost"));
+    assert!(notes.contains("Resources column"));
+}

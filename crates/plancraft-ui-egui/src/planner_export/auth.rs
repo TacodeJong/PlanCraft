@@ -128,9 +128,13 @@ pub fn poll_device_code(http: &mut dyn Transport, cfg: &AuthConfig, pending: &De
     }
 }
 
-/// Uses Azure CLI when that was the sign-in path; otherwise a stored refresh token.
+fn uses_azure_cli(cfg: &AuthConfig) -> bool {
+    super::az_cli::using_az() || cfg.client_id == super::az_cli::PLACEHOLDER_CLIENT_ID
+}
+
+/// Uses Azure CLI when that was the sign-in path or no client id is configured; otherwise a stored refresh token.
 pub fn graph_token(http: &mut dyn Transport, cfg: &AuthConfig) -> Result<TokenSet, String> {
-    if super::az_cli::using_az() {
+    if uses_azure_cli(cfg) {
         return super::az_cli::graph_token();
     }
     refresh_for_scope(http, cfg, GRAPH_SCOPE)
@@ -141,7 +145,7 @@ pub fn dataverse_token(http: &mut dyn Transport, cfg: &AuthConfig, org_url: &str
     if org.is_empty() || !org.starts_with("https://") {
         return Err(crate::lang::text("planner.need_org").into());
     }
-    if super::az_cli::using_az() {
+    if uses_azure_cli(cfg) {
         return super::az_cli::dataverse_token(org);
     }
     let scope = format!("{org}/.default offline_access");

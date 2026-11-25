@@ -6,6 +6,7 @@
 
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -17,16 +18,27 @@ use super::keys;
 
 const AUTH_MODE_AZ: &str = "az";
 
-/// True when the last successful Planner sign-in used Azure CLI.
+/// Client id placeholder when tokens come from Azure CLI. Not sent to Microsoft.
+pub const PLACEHOLDER_CLIENT_ID: &str = "az-cli";
+
+/// Set for this process as soon as sign-in succeeds. The keyring copy can lag, and without
+/// the `windows-native` feature it does not persist at all.
+static SESSION_AZ: AtomicBool = AtomicBool::new(false);
+
+/// True when this process signed in with Azure CLI, or a previous run stored that mode.
 pub fn using_az() -> bool {
-    keys::load_auth_mode().ok().flatten().as_deref() == Some(AUTH_MODE_AZ)
+    SESSION_AZ.load(Ordering::Relaxed) || keys::load_auth_mode().ok().flatten().as_deref() == Some(AUTH_MODE_AZ)
 }
 
 pub fn mark_az_signed_in() -> Result<(), String> {
-    keys::store_auth_mode(AUTH_MODE_AZ)
+    SESSION_AZ.store(true, Ordering::Relaxed);
+    // A keyring failure must not bounce the user back to the client-id field.
+    let _ = keys::store_auth_mode(AUTH_MODE_AZ);
+    Ok(())
 }
 
 pub fn clear_az() -> Result<(), String> {
+    SESSION_AZ.store(false, Ordering::Relaxed);
     keys::delete_auth_mode()
 }
 
@@ -106,9 +118,7 @@ pub fn begin_device_login() -> Result<(DeviceCode, mpsc::Receiver<Result<(), Str
                 Ok(line) => {
                     combined.push_str(&line);
                     combined.push('\n');
-                    if !sent_code
-                        && let Some(pending) = parse_az_device_code(&combined)
-                    {
+                    if !sent_code && let Some(pending) = parse_az_device_code(&combined) {
                         let _ = code_tx.send(Ok(pending));
                         sent_code = true;
                     }
@@ -122,11 +132,8 @@ pub fn begin_device_login() -> Result<(DeviceCode, mpsc::Receiver<Result<(), Str
                                 combined.chars().take(200).collect::<String>()
                             )));
                         }
-                        let _ = done_tx.send(if status.success() {
-                            Ok(())
-                        } else {
-                            Err(crate::lang::text("planner.az_login_failed").into())
-                        });
+                        let _ =
+                            done_tx.send(if status.success() { Ok(()) } else { Err(crate::lang::text("planner.az_login_failed").into()) });
                         return;
                     }
                 }

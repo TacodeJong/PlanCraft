@@ -449,11 +449,7 @@ impl PlanCraftApp {
             ..UiState::default()
         };
         crate::lang::set_current(settings.lang);
-        let panes = crate::panes::PaneHost {
-            properties: settings.properties_open,
-            timeline: st.timeline_visible,
-            history: false,
-        };
+        let panes = crate::panes::PaneHost { properties: settings.properties_open, timeline: st.timeline_visible, history: false };
         let mut app = Self {
             ws,
             st,
@@ -788,9 +784,12 @@ impl PlanCraftApp {
     }
 
     /// Saves the plan as a Microsoft Project XML file, saying what the format left out.
-    fn export_mspdi(&mut self) {
+    /// `planner` is the app default: calculated starts stay pinned, milestones stay
+    /// zero-duration, and assigned people are written in the Resources column.
+    fn export_mspdi(&mut self, planner: bool) {
         let Some((name, xml, notes)) = self.with_doc(|doc, _| {
-            let (xml, notes) = plancraft_core::mspdi::to_xml(&doc.project);
+            let (xml, notes) =
+                if planner { plancraft_core::mspdi::to_xml_for_planner(&doc.project) } else { plancraft_core::mspdi::to_xml(&doc.project) };
             (doc.project.name.clone(), xml, notes)
         }) else {
             return;
@@ -1121,7 +1120,10 @@ impl PlanCraftApp {
                 }
             }
             Command::ExportPdf => self.export_pdf(),
-            Command::ExportMspdi => self.export_mspdi(),
+            // The toolbar and the first File command write the Planner Premium file
+            // (calculated starts pinned). The second command keeps the full Project XML.
+            Command::ExportMspdi => self.export_mspdi(true),
+            Command::ExportMspdiPlanner => self.export_mspdi(false),
             Command::ExportReport => self.export_report(),
             Command::ExportGantt => self.export_gantt(),
             Command::ExportUsage => self.export_usage(),
@@ -1133,6 +1135,20 @@ impl PlanCraftApp {
                 match opened {
                     Some(dialog) if self.dialogs.planner_export.is_none() => {
                         self.dialogs.planner_export = Some(dialog);
+                        self.st.start_page = false;
+                    }
+                    Some(_) => self.st.start_page = false,
+                    None => self.st.toast(ToastKind::Info, crate::lang::text("planner.need_doc")),
+                }
+            }
+            Command::SendPlanner => {
+                let opened = {
+                    let ws = lock(&self.ws);
+                    ws.active_doc().map(|doc| Bound::new(doc, dialogs::planner_send::PlannerSend::default()))
+                };
+                match opened {
+                    Some(dialog) if self.dialogs.planner_send.is_none() => {
+                        self.dialogs.planner_send = Some(dialog);
                         self.st.start_page = false;
                     }
                     Some(_) => self.st.start_page = false,
@@ -1394,14 +1410,7 @@ impl PlanCraftApp {
     }
 
     /// UI side-effects after a successful engine document command.
-    fn after_engine_doc(
-        &mut self,
-        _ctx: &egui::Context,
-        ws: &mut Workspace,
-        cmd: &Command,
-        result: &serde_json::Value,
-        sel: &[TaskId],
-    ) {
+    fn after_engine_doc(&mut self, _ctx: &egui::Context, ws: &mut Workspace, cmd: &Command, result: &serde_json::Value, sel: &[TaskId]) {
         let Some(doc) = ws.active_doc() else { return };
         match cmd {
             Command::Undo => {
@@ -1418,10 +1427,11 @@ impl PlanCraftApp {
                 } else if let Some(r) = doc.project.task_index(id) {
                     let rows = views::visible_rows(&doc.project, &self.st);
                     if let Some(row) = views::row_of_task(&rows, r) {
-                        let name_col = crate::fields::visible_fields(&doc.project, self.st.table, self.st.columns.get(self.st.table.label()))
-                            .iter()
-                            .position(|f| *f == crate::fields::Field::Builtin(crate::columns::TaskCol::Name))
-                            .unwrap_or(0);
+                        let name_col =
+                            crate::fields::visible_fields(&doc.project, self.st.table, self.st.columns.get(self.st.table.label()))
+                                .iter()
+                                .position(|f| *f == crate::fields::Field::Builtin(crate::columns::TaskCol::Name))
+                                .unwrap_or(0);
                         self.st.task_grid.begin_edit(row, name_col, String::new());
                         self.st.task_grid.scroll_to = Some(row);
                     }
@@ -1528,8 +1538,7 @@ impl PlanCraftApp {
         if let Some((id, params)) = crate::engine_bridge::map_doc_command(&cmd, &sel, &resource_ids, insert_at) {
             match crate::engine_bridge::execute(ws, id, &params) {
                 Ok(result) => self.after_engine_doc(ctx, ws, &cmd, &result, &sel),
-                Err(plancraft_engine::CommandError::Failed(msg))
-                    if msg == "nothing to undo" || msg == "nothing to redo" => {}
+                Err(plancraft_engine::CommandError::Failed(msg)) if msg == "nothing to undo" || msg == "nothing to redo" => {}
                 Err(e) => self.st.toast(ToastKind::Warning, e.to_string()),
             }
             return;
@@ -2830,11 +2839,7 @@ impl PlanCraftApp {
                     ui.label(RichText::new(message).color(theme::pal().TEXT));
                     for (action, label, hover) in buttons {
                         let primary = matches!(action, DiskAction::Save | DiskAction::Reload);
-                        let resp = if primary {
-                            craft::primary_button(ui, label)
-                        } else {
-                            craft::secondary_button(ui, label)
-                        };
+                        let resp = if primary { craft::primary_button(ui, label) } else { craft::secondary_button(ui, label) };
                         if resp.on_hover_text(*hover).clicked() {
                             clicked = Some(*action);
                         }
@@ -2888,10 +2893,7 @@ impl PlanCraftApp {
                 ui.horizontal_wrapped(|ui| {
                     ui.add(crate::icons::image("triangle-alert", 15.0, theme::pal().WARN));
                     ui.label(RichText::new(message).color(theme::pal().TEXT));
-                    if craft::secondary_button(ui, "Save As…")
-                        .on_hover_text("Work on a copy of the plan under another name")
-                        .clicked()
-                    {
+                    if craft::secondary_button(ui, "Save As…").on_hover_text("Work on a copy of the plan under another name").clicked() {
                         clicked = Some(DiskAction::SaveAs);
                     }
                     if craft::secondary_button(ui, "Dismiss").on_hover_text("Hide this message").clicked() {
@@ -3293,9 +3295,7 @@ impl PlanCraftApp {
             let sel = &self.st.sel;
             dialogs::show_bound_ws(&mut self.dialogs.assign, &mut ws, |d, ws, handle| d.show(&ctx, ws, handle, sel, &mut toasts));
             let sel = &mut self.st.sel;
-            dialogs::show_bound_ws(&mut self.dialogs.resource_delete, &mut ws, |d, ws, handle| {
-                d.show(&ctx, ws, handle, sel, &mut toasts)
-            });
+            dialogs::show_bound_ws(&mut self.dialogs.resource_delete, &mut ws, |d, ws, handle| d.show(&ctx, ws, handle, sel, &mut toasts));
             for (k, t) in toasts {
                 self.st.toast(k, t);
             }
@@ -3338,6 +3338,8 @@ impl PlanCraftApp {
             d.show(&ctx, ws, handle, &ai, &mut open_ai, &mut distill_notes)
         });
         dialogs::show_bound(&mut self.dialogs.planner_export, &mut ws, |d, doc| d.show(&ctx, doc, &mut self.settings, &mut planner_notes));
+        let org = self.settings.planner.dataverse_org_url.clone();
+        dialogs::show_bound(&mut self.dialogs.planner_send, &mut ws, |d, doc| d.show(&ctx, doc, &org, &mut planner_notes));
         drop(ws);
         for note in distill_notes {
             self.st.toast(ToastKind::Error, note);
@@ -4928,13 +4930,7 @@ mod ui_tests {
     }
 
     fn focus_task_grid(h: &mut Harness<'static, PlanCraftApp>) {
-        let id = h
-            .state()
-            .st
-            .task_grid
-            .id
-            .unwrap_or_else(|| egui::Id::unique(("task_grid", "Entry")))
-            .with("body");
+        let id = h.state().st.task_grid.id.unwrap_or_else(|| egui::Id::unique(("task_grid", "Entry"))).with("body");
         h.ctx.memory_mut(|m| m.request_focus(id));
         h.run_steps(2);
     }
@@ -5070,26 +5066,16 @@ mod ui_tests {
     #[test]
     fn insert_task_lands_beneath_the_selection() {
         let mut p = plancraft_core::sample::demo_project(plancraft_core::dates::ymd(2026, 10, 19).unwrap());
-        let leaf_idx = p
-            .tasks
-            .iter()
-            .enumerate()
-            .find(|(i, t)| !p.has_children(*i) && !t.is_milestone())
-            .map(|(i, _)| i)
-            .expect("demo has a leaf");
+        let leaf_idx =
+            p.tasks.iter().enumerate().find(|(i, t)| !p.has_children(*i) && !t.is_milestone()).map(|(i, _)| i).expect("demo has a leaf");
         let leaf_id = p.tasks[leaf_idx].id;
         let summary_idx = p.tasks.iter().enumerate().find(|(i, _)| p.has_children(*i)).map(|(i, _)| i).expect("demo has a summary");
         let summary_id = p.tasks[summary_idx].id;
         let summary_level = p.tasks[summary_idx].outline_level;
 
         // Same index the UI passes: one past the selection.
-        let (id, params) = crate::engine_bridge::map_doc_command(
-            &Command::InsertTask,
-            &[leaf_id],
-            &[],
-            Some(leaf_idx + 1),
-        )
-        .expect("insert maps");
+        let (id, params) =
+            crate::engine_bridge::map_doc_command(&Command::InsertTask, &[leaf_id], &[], Some(leaf_idx + 1)).expect("insert maps");
         assert_eq!(id, "task.insert");
         assert_eq!(params.get("at").and_then(|v| v.as_u64()), Some((leaf_idx + 1) as u64));
 
@@ -5389,10 +5375,7 @@ mod ui_tests {
         h.key_press_modifiers(Modifiers::COMMAND, egui::Key::P);
         h.run_steps(3);
         assert!(h.state().dialogs.print.is_some(), "Ctrl+P opens the Print window");
-        assert!(
-            h.query_all_by_label(crate::lang::text("print.from_empty")).count() > 0,
-            "print dialog From uses a datepicker button"
-        );
+        assert!(h.query_all_by_label(crate::lang::text("print.from_empty")).count() > 0, "print dialog From uses a datepicker button");
         h.get_by_label("Portrait").click();
         h.run_steps(2);
         // Document tab chrome and the print dialog both expose dlg.close.

@@ -308,10 +308,7 @@ impl PrintDialog {
             } else {
                 "Open these pages in your PDF viewer to print them"
             };
-            if crate::widgets::craft::primary_button_enabled(ui, label, !busy && !pages.pages.is_empty())
-                .on_hover_text(hint)
-                .clicked()
-            {
+            if crate::widgets::craft::primary_button_enabled(ui, label, !busy && !pages.pages.is_empty()).on_hover_text(hint).clicked() {
                 *print_now = true;
             }
             if crate::widgets::craft::secondary_button_enabled(ui, "Save as PDF…", !pages.pages.is_empty()).clicked() {

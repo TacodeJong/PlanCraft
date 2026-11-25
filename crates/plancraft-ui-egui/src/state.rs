@@ -859,15 +859,8 @@ pub enum MarkFilter {
 }
 
 impl MarkFilter {
-    pub const ALL: [MarkFilter; 7] = [
-        MarkFilter::All,
-        MarkFilter::Any,
-        MarkFilter::None,
-        MarkFilter::Amber,
-        MarkFilter::Blue,
-        MarkFilter::Pink,
-        MarkFilter::Green,
-    ];
+    pub const ALL: [MarkFilter; 7] =
+        [MarkFilter::All, MarkFilter::Any, MarkFilter::None, MarkFilter::Amber, MarkFilter::Blue, MarkFilter::Pink, MarkFilter::Green];
 
     pub fn label(self) -> &'static str {
         crate::lang::text(match self {

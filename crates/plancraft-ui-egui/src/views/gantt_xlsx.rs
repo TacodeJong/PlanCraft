@@ -96,22 +96,12 @@ fn group_identity(p: &Project, g: &GroupRow, fields: &[Field]) -> Vec<XlsxCell> 
 fn task_bar(p: &Project, idx: usize, task: &Task, summary: bool) -> Option<GanttBar> {
     let start = task.sched.start?.date();
     let finish = task.sched.finish.map(|d| d.date()).unwrap_or(start);
-    Some(GanttBar {
-        start,
-        finish,
-        fill: bar_color(p, idx),
-        milestone: task.is_milestone(),
-        summary,
-    })
+    Some(GanttBar { start, finish, fill: bar_color(p, idx), milestone: task.is_milestone(), summary })
 }
 
 fn xlsx_from_cell(field: &Field, screen: &Cell, wash: Option<[u8; 3]>, summary: bool, name_col: bool) -> XlsxCell {
     let text = cell_text(field, screen);
-    let indent = if name_col {
-        u8::try_from((screen.indent / 16.0).round() as i32).unwrap_or(0).min(8)
-    } else {
-        0
-    };
+    let indent = if name_col { u8::try_from((screen.indent / 16.0).round() as i32).unwrap_or(0).min(8) } else { 0 };
     let bold = screen.bold || (summary && matches!(field, Field::Builtin(TaskCol::Name)));
     let fill = screen.bg.map(|c| [c.r(), c.g(), c.b()]).or(wash);
     match fill {
@@ -197,12 +187,7 @@ mod tests {
         assert!(text.contains(crate::lang::mark_name(RowMark::Pink)));
         let pink_name = p.task(pink).unwrap().name.clone();
         assert!(text.contains(&pink_name));
-        let other = p
-            .tasks
-            .iter()
-            .find(|t| !t.sched.is_summary && t.id != pink && t.row_mark.is_none())
-            .map(|t| t.name.clone())
-            .unwrap();
+        let other = p.tasks.iter().find(|t| !t.sched.is_summary && t.id != pink && t.row_mark.is_none()).map(|t| t.name.clone()).unwrap();
         assert!(!text.contains(&other), "unmarked tasks stay out of a pink mark filter: {other}");
     }
 
@@ -218,9 +203,6 @@ mod tests {
         let text = String::from_utf8_lossy(&bytes);
         // Group headers look like "Not started  (N)" from group_cell.
         let has_group = crate::lang::status_name(TaskStatus::NotStarted);
-        assert!(
-            text.contains(has_group) && text.contains(" ("),
-            "grouped export must show group header labels"
-        );
+        assert!(text.contains(has_group) && text.contains(" ("), "grouped export must show group header labels");
     }
 }

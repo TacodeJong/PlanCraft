@@ -331,7 +331,7 @@ fn view_selector(ui: &mut Ui, rect: Rect, st: &UiState, enabled: bool, push: &dy
                     button = button.fill(theme::pal().INVERT_BG);
                 }
                 if ui.add(button).clicked() {
-                push(Command::SetView(v));
+                    push(Command::SetView(v));
                 }
             }
         }
@@ -682,7 +682,7 @@ fn task_entries(st: &UiState, info: &MenuInfo) -> Vec<Entry> {
             "Set progress to where the schedule says it should be at the status date (today if none is set)".into(),
             sel,
             false,
-                Command::MarkOnTrack,
+            Command::MarkOnTrack,
         ),
         Entry::Sep,
         icon_cmd(
@@ -915,7 +915,7 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
                     "Define your own task fields: text with a pick-list, number, cost, date, duration, flag".into(),
                     doc,
                     false,
-                Command::CustomFields,
+                    Command::CustomFields,
                 ),
                 Entry::Sep,
                 cmd(
@@ -924,7 +924,7 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
                     "Update progress through a date, or reschedule work not done yet to start after it".into(),
                     doc,
                     false,
-                Command::UpdateProject,
+                    Command::UpdateProject,
                 ),
                 Entry::Sep,
                 cmd(
@@ -933,7 +933,7 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
                     "Save the schedule as Baseline or Baseline1–10, or set an interim plan".into(),
                     doc,
                     false,
-                Command::SetBaseline,
+                    Command::SetBaseline,
                 ),
                 icon_cmd("x", "tb.clear_baseline", "Clear a baseline or an interim plan".into(), doc, false, Command::ClearBaseline),
                 Entry::Sep,
@@ -989,7 +989,7 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
                     "Compare Baseline, Baseline1 and Baseline2 bars".into(),
                     doc,
                     false,
-                Command::SetView(ViewKind::MultipleBaselines),
+                    Command::SetView(ViewKind::MultipleBaselines),
                 ),
                 Entry::Sep,
                 cmd(
@@ -1014,12 +1014,12 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
                     "Export the task list as CSV".into(),
                     doc,
                     false,
-                Command::ExportCsv(plancraft_core::tabular::CsvTable::Tasks),
+                    Command::ExportCsv(plancraft_core::tabular::CsvTable::Tasks),
                 ),
                 cmd(
                     "file-down",
                     Some(crate::lang::text("tb.export_xml")),
-                    "Save the plan as a Microsoft Project XML file".into(),
+                    "Save the plan for Planner Premium, with each task's calculated start pinned".into(),
                     doc,
                     false,
                     Command::ExportMspdi,
@@ -1042,11 +1042,11 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
                 ),
                 cmd(
                     "kanban",
-                    Some(crate::lang::text("tb.export_planner")),
-                    "Push this plan to Microsoft Planner".into(),
+                    Some(crate::lang::text("tb.send_planner")),
+                    crate::lang::text("send.explain").into(),
                     doc,
                     false,
-                    Command::ExportPlanner,
+                    Command::SendPlanner,
                 ),
             ];
             paint_entries(ui, &entries, push);
@@ -1218,33 +1218,33 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
 
             let paint_sort = |ui: &mut Ui, st: &UiState, info: &MenuInfo, push: &dyn Fn(Command), sort_text: &str| {
                 combo_label(ui, crate::lang::text("tb.sort"));
-            egui::ComboBox::from_id_salt("tb_sort").width(120.0).selected_text(sort_text).show_ui(ui, |ui| {
+                egui::ComboBox::from_id_salt("tb_sort").width(120.0).selected_text(sort_text).show_ui(ui, |ui| {
                     if ui.selectable_label(st.sort.is_none(), st.t("tb.no_sort")).clicked() {
-                    push(Command::SortBy(None));
-                }
-                for (key, title) in &info.fields {
-                    let current = st.sort.as_ref().filter(|(k, _)| k == key).map(|(_, d)| *d);
+                        push(Command::SortBy(None));
+                    }
+                    for (key, title) in &info.fields {
+                        let current = st.sort.as_ref().filter(|(k, _)| k == key).map(|(_, d)| *d);
                         if ui.selectable_label(current == Some(false), format!("{title}, {}", st.t("tb.asc"))).clicked() {
-                        push(Command::SortBy(Some((key.clone(), false))));
-                    }
+                            push(Command::SortBy(Some((key.clone(), false))));
+                        }
                         if ui.selectable_label(current == Some(true), format!("{title}, {}", st.t("tb.desc"))).clicked() {
-                        push(Command::SortBy(Some((key.clone(), true))));
+                            push(Command::SortBy(Some((key.clone(), true))));
+                        }
                     }
-                }
-            });
+                });
             };
             let paint_group = |ui: &mut Ui, st: &UiState, info: &MenuInfo, push: &dyn Fn(Command), group_text: &str| {
                 combo_label(ui, crate::lang::text("tb.group"));
                 egui::ComboBox::from_id_salt("tb_group").width(110.0).selected_text(group_text).show_ui(ui, |ui| {
                     if ui.selectable_label(st.group.is_none(), st.t("tb.no_group")).clicked() {
-                    push(Command::GroupBy(None));
-                }
-                for (key, title) in &info.fields {
-                    if ui.selectable_label(st.group.as_ref() == Some(key), title).clicked() {
-                        push(Command::GroupBy(Some(key.clone())));
+                        push(Command::GroupBy(None));
                     }
-                }
-            });
+                    for (key, title) in &info.fields {
+                        if ui.selectable_label(st.group.as_ref() == Some(key), title).clicked() {
+                            push(Command::GroupBy(Some(key.clone())));
+                        }
+                    }
+                });
             };
 
             for &i in &visible {
@@ -1419,7 +1419,7 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
                                 push(Command::ToggleMultiBaseline(n));
                             }
                         }
-                });
+                    });
                 sep(ui);
                 toggle(
                     ui,

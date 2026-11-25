@@ -8,3 +8,4 @@
 /.claude/worktrees/
 .*.plancraft.lock
 /vendor/
+/.venv/

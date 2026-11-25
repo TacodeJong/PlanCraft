@@ -180,9 +180,7 @@ impl Distill {
         let Some(draft) = self.draft.clone() else {
             return Err(t("distill.none").into());
         };
-        super::edit_bound(ws, handle, t("distill.undo"), |p| {
-            distill::apply_draft(p, &draft, self.replace, self.chain).map(|_| ())
-        })?;
+        super::edit_bound(ws, handle, t("distill.undo"), |p| distill::apply_draft(p, &draft, self.replace, self.chain).map(|_| ()))?;
         Ok(())
     }
 

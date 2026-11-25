@@ -15,14 +15,7 @@ pub struct QuickEntry {
 }
 
 impl QuickEntry {
-    pub fn show(
-        &mut self,
-        ctx: &Context,
-        ws: &mut Workspace,
-        handle: u64,
-        at: Option<usize>,
-        selected: &mut Option<TaskId>,
-    ) -> bool {
+    pub fn show(&mut self, ctx: &Context, ws: &mut Workspace, handle: u64, at: Option<usize>, selected: &mut Option<TaskId>) -> bool {
         let mut open = true;
         let mut close = false;
         let mut insert: Option<Sheet> = None;
@@ -41,10 +34,7 @@ impl QuickEntry {
                     open = crate::widgets::craft::dialog_header(ui, t("qe.title"));
                     ui.label(t("qe.hint"));
                     ui.add(
-                        egui::TextEdit::multiline(&mut self.text)
-                            .desired_rows(8)
-                            .desired_width(f32::INFINITY)
-                            .hint_text(t("qe.sample")),
+                        egui::TextEdit::multiline(&mut self.text).desired_rows(8).desired_width(f32::INFINITY).hint_text(t("qe.sample")),
                     );
                     let sheet = quick_entry::parse(&self.text, &time);
                     ui.add_space(4.0);

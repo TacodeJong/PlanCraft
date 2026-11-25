@@ -159,107 +159,110 @@ impl ProjectInfo {
             };
             let title = format!("{} '{}'", crate::lang::text("dlg.project_info"), doc.project.name);
             egui::Window::new(&title)
-            .id(egui::Id::unique("project_info"))
-            .pivot(egui::Align2::CENTER_TOP)
-            .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 120.0))
-            .title_bar(false)
-            .default_width(600.0)
-            .show(ctx, |ui| {
-                open = crate::widgets::craft::dialog_header(ui, &title);
-                egui::Grid::new("pi").num_columns(4).spacing([12.0, 8.0]).show(ui, |ui| {
-                    ui.label("Project name:");
-                    ui.add(crate::widgets::craft::text_edit(&mut self.name));
-                    ui.label("Calendar:");
-                    let cal_name = doc.project.calendar(self.calendar).map(|c| c.name.clone()).unwrap_or_default();
-                    egui::ComboBox::from_id_salt("pi_cal").selected_text(cal_name).show_ui(ui, |ui| {
-                        for c in &doc.project.calendars {
-                            ui.selectable_value(&mut self.calendar, c.id, &c.name);
-                        }
+                .id(egui::Id::unique("project_info"))
+                .pivot(egui::Align2::CENTER_TOP)
+                .default_pos(ctx.content_rect().center_top() + egui::vec2(0.0, 120.0))
+                .title_bar(false)
+                .default_width(600.0)
+                .show(ctx, |ui| {
+                    open = crate::widgets::craft::dialog_header(ui, &title);
+                    egui::Grid::new("pi").num_columns(4).spacing([12.0, 8.0]).show(ui, |ui| {
+                        ui.label("Project name:");
+                        ui.add(crate::widgets::craft::text_edit(&mut self.name));
+                        ui.label("Calendar:");
+                        let cal_name = doc.project.calendar(self.calendar).map(|c| c.name.clone()).unwrap_or_default();
+                        egui::ComboBox::from_id_salt("pi_cal").selected_text(cal_name).show_ui(ui, |ui| {
+                            for c in &doc.project.calendars {
+                                ui.selectable_value(&mut self.calendar, c.id, &c.name);
+                            }
+                        });
+                        ui.end_row();
+                        ui.label("Start date:");
+                        ui.add(crate::widgets::craft::text_edit(&mut self.start));
+                        ui.label("Status date:");
+                        ui.add(crate::widgets::craft::text_edit(&mut self.status_date).hint_text("NA (today)"));
+                        ui.end_row();
+                        ui.label("Finish date:");
+                        ui.label(RichText::new(format::date_long(doc.project.sched.finish)).color(theme::pal().TEXT_WEAK));
+                        ui.label("Manager:");
+                        ui.add(crate::widgets::craft::text_edit(&mut self.manager));
+                        ui.end_row();
+                        ui.label("Company:");
+                        ui.add(crate::widgets::craft::text_edit(&mut self.company));
+                        ui.label("Author:");
+                        ui.add(crate::widgets::craft::text_edit(&mut self.author));
+                        ui.end_row();
                     });
-                    ui.end_row();
-                    ui.label("Start date:");
-                    ui.add(crate::widgets::craft::text_edit(&mut self.start));
-                    ui.label("Status date:");
-                    ui.add(crate::widgets::craft::text_edit(&mut self.status_date).hint_text("NA (today)"));
-                    ui.end_row();
-                    ui.label("Finish date:");
-                    ui.label(RichText::new(format::date_long(doc.project.sched.finish)).color(theme::pal().TEXT_WEAK));
-                    ui.label("Manager:");
-                    ui.add(crate::widgets::craft::text_edit(&mut self.manager));
-                    ui.end_row();
-                    ui.label("Company:");
-                    ui.add(crate::widgets::craft::text_edit(&mut self.company));
-                    ui.label("Author:");
-                    ui.add(crate::widgets::craft::text_edit(&mut self.author));
-                    ui.end_row();
-                });
-                ui.label("Notes:");
-                ui.add(crate::widgets::craft::text_edit_multiline(&mut self.notes).desired_rows(3).desired_width(f32::INFINITY));
-                ui.add_space(6.0);
-                egui::CollapsingHeader::new(RichText::new("Options: schedule, calendar & estimates").strong()).default_open(true).show(
-                    ui,
-                    |ui| {
-                        egui::Grid::new("pi_opts").num_columns(4).spacing([12.0, 8.0]).show(ui, |ui| {
-                            ui.label("Hours per day:");
-                            ui.add(crate::widgets::craft::text_edit(&mut self.hours_per_day).desired_width(60.0));
-                            ui.label("Hours per week:");
-                            ui.add(crate::widgets::craft::text_edit(&mut self.hours_per_week).desired_width(60.0));
-                            ui.end_row();
-                            ui.label("Days per month:");
-                            ui.add(crate::widgets::craft::text_edit(&mut self.days_per_month).desired_width(60.0));
-                            ui.label("Hours per complexity point:");
-                            ui.add(crate::widgets::craft::text_edit(&mut self.hours_per_point).desired_width(60.0));
-                            ui.end_row();
-                            ui.label("Duration shown in:");
-                            egui::ComboBox::from_id_salt("pi_unit").selected_text(format!("{:?}", self.unit)).show_ui(ui, |ui| {
-                                for u in [
-                                    DurationUnit::Minutes,
-                                    DurationUnit::Hours,
-                                    DurationUnit::Days,
-                                    DurationUnit::Weeks,
-                                    DurationUnit::Months,
-                                ] {
-                                    ui.selectable_value(&mut self.unit, u, format!("{u:?}"));
-                                }
-                            });
-                            ui.label("Currency symbol:");
-                            ui.add(crate::widgets::craft::text_edit(&mut self.currency).desired_width(40.0));
-                            ui.end_row();
-                            ui.label("Critical if slack ≤");
-                            ui.add(crate::widgets::craft::text_edit(&mut self.critical_slack).desired_width(60.0));
-                            ui.label("Earned value uses:");
-                            egui::ComboBox::from_id_salt("pi_ev_baseline")
-                                .selected_text(PlanSlot::Baseline(self.ev_baseline).name())
-                                .show_ui(ui, |ui| {
-                                    for n in 0..=plancraft_core::baseline::MAX_BASELINE {
-                                        ui.selectable_value(&mut self.ev_baseline, n, PlanSlot::Baseline(n).name());
+                    ui.label("Notes:");
+                    ui.add(crate::widgets::craft::text_edit_multiline(&mut self.notes).desired_rows(3).desired_width(f32::INFINITY));
+                    ui.add_space(6.0);
+                    egui::CollapsingHeader::new(RichText::new("Options: schedule, calendar & estimates").strong()).default_open(true).show(
+                        ui,
+                        |ui| {
+                            egui::Grid::new("pi_opts").num_columns(4).spacing([12.0, 8.0]).show(ui, |ui| {
+                                ui.label("Hours per day:");
+                                ui.add(crate::widgets::craft::text_edit(&mut self.hours_per_day).desired_width(60.0));
+                                ui.label("Hours per week:");
+                                ui.add(crate::widgets::craft::text_edit(&mut self.hours_per_week).desired_width(60.0));
+                                ui.end_row();
+                                ui.label("Days per month:");
+                                ui.add(crate::widgets::craft::text_edit(&mut self.days_per_month).desired_width(60.0));
+                                ui.label("Hours per complexity point:");
+                                ui.add(crate::widgets::craft::text_edit(&mut self.hours_per_point).desired_width(60.0));
+                                ui.end_row();
+                                ui.label("Duration shown in:");
+                                egui::ComboBox::from_id_salt("pi_unit").selected_text(format!("{:?}", self.unit)).show_ui(ui, |ui| {
+                                    for u in [
+                                        DurationUnit::Minutes,
+                                        DurationUnit::Hours,
+                                        DurationUnit::Days,
+                                        DurationUnit::Weeks,
+                                        DurationUnit::Months,
+                                    ] {
+                                        ui.selectable_value(&mut self.unit, u, format!("{u:?}"));
                                     }
                                 });
-                            ui.end_row();
-                        });
-                        ui.checkbox(&mut self.new_auto, "New tasks are auto scheduled");
-                        ui.checkbox(&mut self.use_res_cal, "Schedule assigned tasks on their resources' calendars (time off delays work)");
-                        ui.checkbox(&mut self.progress_from_time, "Derive % complete from tracked time");
-                        ui.checkbox(&mut self.rules_on, "Stretch and percent-of-group (scheduling ruleset)");
-                    },
-                );
-                if let Some(e) = &self.error {
-                    ui.colored_label(theme::pal().ERROR, e);
-                }
-                ui.add_space(6.0);
-                let y = ui.cursor().top();
-                ui.painter().hline(ui.max_rect().x_range(), y, theme::hairline());
-                ui.add_space(10.0);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.x = crate::widgets::craft::ITEM_GAP + 2.0;
-                    if crate::widgets::craft::secondary_button(ui, crate::lang::text("common.cancel")).clicked() {
-                        close = true;
+                                ui.label("Currency symbol:");
+                                ui.add(crate::widgets::craft::text_edit(&mut self.currency).desired_width(40.0));
+                                ui.end_row();
+                                ui.label("Critical if slack ≤");
+                                ui.add(crate::widgets::craft::text_edit(&mut self.critical_slack).desired_width(60.0));
+                                ui.label("Earned value uses:");
+                                egui::ComboBox::from_id_salt("pi_ev_baseline")
+                                    .selected_text(PlanSlot::Baseline(self.ev_baseline).name())
+                                    .show_ui(ui, |ui| {
+                                        for n in 0..=plancraft_core::baseline::MAX_BASELINE {
+                                            ui.selectable_value(&mut self.ev_baseline, n, PlanSlot::Baseline(n).name());
+                                        }
+                                    });
+                                ui.end_row();
+                            });
+                            ui.checkbox(&mut self.new_auto, "New tasks are auto scheduled");
+                            ui.checkbox(
+                                &mut self.use_res_cal,
+                                "Schedule assigned tasks on their resources' calendars (time off delays work)",
+                            );
+                            ui.checkbox(&mut self.progress_from_time, "Derive % complete from tracked time");
+                            ui.checkbox(&mut self.rules_on, "Stretch and percent-of-group (scheduling ruleset)");
+                        },
+                    );
+                    if let Some(e) = &self.error {
+                        ui.colored_label(theme::pal().ERROR, e);
                     }
-                    if crate::widgets::craft::primary_button(ui, crate::lang::text("common.ok")).clicked() {
-                        apply = true;
-                    }
+                    ui.add_space(6.0);
+                    let y = ui.cursor().top();
+                    ui.painter().hline(ui.max_rect().x_range(), y, theme::hairline());
+                    ui.add_space(10.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = crate::widgets::craft::ITEM_GAP + 2.0;
+                        if crate::widgets::craft::secondary_button(ui, crate::lang::text("common.cancel")).clicked() {
+                            close = true;
+                        }
+                        if crate::widgets::craft::primary_button(ui, crate::lang::text("common.ok")).clicked() {
+                            apply = true;
+                        }
+                    });
                 });
-            });
         }
         if apply {
             match super::edit_bound(ws, handle, "Project Information", |p| self.apply(p)) {

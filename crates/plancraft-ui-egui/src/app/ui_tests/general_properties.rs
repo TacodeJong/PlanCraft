@@ -66,10 +66,7 @@ fn paste_into_notes_field_inserts_text() {
         "pasted text missing from focused notes field; accesskit values={values:?}"
     );
     // Blur so the draft is written to the task.
-    h.query_all_by_label(crate::lang::text("prop.tab.general"))
-        .next()
-        .expect("General tab")
-        .click_accesskit();
+    h.query_all_by_label(crate::lang::text("prop.tab.general")).next().expect("General tab").click_accesskit();
     h.run_steps(2);
     {
         let ws = lock(&h.state().ws);
@@ -209,12 +206,10 @@ fn general_date_labels_distinguish_scheduled_result_and_limit_in_en_nl() {
         let start_limit = crate::lang::tr(lang, "prop.start_limit");
         let finish_limit = crate::lang::tr(lang, "prop.finish_limit");
         let deadline = crate::lang::tr(lang, "prop.deadline");
-        let hand_deadline = crate::widgets::date_picker::format_dutch(
-            plancraft_core::dates::ymd(2026, 11, 20).unwrap().and_hms_opt(17, 0, 0).unwrap(),
-        );
-        let nlt = crate::widgets::date_picker::format_dutch(
-            plancraft_core::dates::ymd(2026, 11, 11).unwrap().and_hms_opt(17, 0, 0).unwrap(),
-        );
+        let hand_deadline =
+            crate::widgets::date_picker::format_dutch(plancraft_core::dates::ymd(2026, 11, 20).unwrap().and_hms_opt(17, 0, 0).unwrap());
+        let nlt =
+            crate::widgets::date_picker::format_dutch(plancraft_core::dates::ymd(2026, 11, 11).unwrap().and_hms_opt(17, 0, 0).unwrap());
 
         h.state_mut().st.sel.select_task(free);
         h.run_steps(3);
@@ -251,7 +246,10 @@ fn general_date_labels_distinguish_scheduled_result_and_limit_in_en_nl() {
         assert!(!h.get_by_label(&hand_deadline).accesskit_node().is_disabled(), "{lang:?}: hand deadline must stay editable");
         h.state_mut().st.properties_tab = crate::state::PropTab::General;
         h.run_steps(2);
-        assert!(h.query_all_by_label(finish_limit).next().is_none(), "{lang:?}: hand deadline must not invent a Finish limit row on General");
+        assert!(
+            h.query_all_by_label(finish_limit).next().is_none(),
+            "{lang:?}: hand deadline must not invent a Finish limit row on General"
+        );
     }
 }
 

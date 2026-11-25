@@ -176,12 +176,7 @@ impl TaskInfo {
             preds: t
                 .predecessors
                 .iter()
-                .map(|d| PredRow {
-                    pred: d.predecessor,
-                    kind: d.kind,
-                    lag: d.lag.format(&p.settings.time),
-                    drive: d.drive,
-                })
+                .map(|d| PredRow { pred: d.predecessor, kind: d.kind, lag: d.lag.format(&p.settings.time), drive: d.drive })
                 .collect(),
             resources: p
                 .assignments_for_task(id)
@@ -842,9 +837,12 @@ impl TaskInfo {
                     } else {
                         !self.milestone && !self.summary && self.duration_mode == DurationMode::Fixed
                     };
-                    ui.add_enabled(duration_editable, crate::widgets::craft::text_edit(&mut self.duration).desired_width(80.0)).on_hover_text(
-                        if self.duration_mode == DurationMode::Auto { crate::lang::text("prop.duration_auto_hint") } else { "" },
-                    );
+                    ui.add_enabled(duration_editable, crate::widgets::craft::text_edit(&mut self.duration).desired_width(80.0))
+                        .on_hover_text(if self.duration_mode == DurationMode::Auto {
+                            crate::lang::text("prop.duration_auto_hint")
+                        } else {
+                            ""
+                        });
                     ui.add_enabled(duration_editable, egui::Checkbox::new(&mut self.estimated, crate::lang::text("prop.estimated")));
                 });
                 ui.add_space(4.0);
@@ -860,7 +858,10 @@ impl TaskInfo {
                             (Tab::Resources, crate::lang::text("ti.tab.resources")),
                         ]);
                     }
-                    tabs.extend([(Tab::Advanced, crate::lang::text("ti.tab.advanced")), (Tab::Estimate, crate::lang::text("ti.tab.estimate"))]);
+                    tabs.extend([
+                        (Tab::Advanced, crate::lang::text("ti.tab.advanced")),
+                        (Tab::Estimate, crate::lang::text("ti.tab.estimate")),
+                    ]);
                     if self.milestone && !self.is_multi() {
                         tabs.push((Tab::Milestone, crate::lang::text("ti.tab.milestone")));
                     }
@@ -934,11 +935,7 @@ impl TaskInfo {
         let unrestricted = DateMode::of(self.side_window(p, false).0, self.side_window(p, false).1) == DateMode::Unrestricted
             && DateMode::of(self.side_window(p, true).0, self.side_window(p, true).1) == DateMode::Unrestricted;
         let wants_fill = self.duration_mode == DurationMode::Auto || self.fills_group;
-        if wants_fill && unrestricted && self.group_percent.trim().is_empty() {
-            SizeChoice::Fill
-        } else {
-            SizeChoice::Own
-        }
+        if wants_fill && unrestricted && self.group_percent.trim().is_empty() { SizeChoice::Fill } else { SizeChoice::Own }
     }
 
     fn set_size_choice(&mut self, p: &Project, choice: SizeChoice) {
@@ -957,11 +954,7 @@ impl TaskInfo {
                         .map(|g| g.sched.duration)
                         .unwrap_or(0);
                     let span = p.task(self.id).map(|t| t.sched.duration).unwrap_or(0);
-                    let value = if base > 0 {
-                        ((span as f64 / base as f64) * 100.0).min(1000.0)
-                    } else {
-                        100.0
-                    };
+                    let value = if base > 0 { ((span as f64 / base as f64) * 100.0).min(1000.0) } else { 100.0 };
                     self.group_percent = format!("{}", (value * 100.0).round() / 100.0);
                 }
                 self.fills_group = false;
@@ -1346,11 +1339,7 @@ impl TaskInfo {
         if share {
             ui.add_space(6.0);
             let current = self.size_choice(p);
-            let own_label = if self.summary {
-                crate::lang::text("prop.size_spans")
-            } else {
-                crate::lang::text("prop.size_own")
-            };
+            let own_label = if self.summary { crate::lang::text("prop.size_spans") } else { crate::lang::text("prop.size_own") };
             let shown = match current {
                 SizeChoice::Own => own_label,
                 SizeChoice::Percent => crate::lang::text("prop.size_percent"),
@@ -1373,11 +1362,7 @@ impl TaskInfo {
             if self.summary {
                 ui.horizontal(|ui| {
                     ui.label(crate::lang::text("prop.placement"));
-                    let placement = if self.constraint == ConstraintKind::Alap {
-                        ConstraintKind::Alap
-                    } else {
-                        ConstraintKind::Asap
-                    };
+                    let placement = if self.constraint == ConstraintKind::Alap { ConstraintKind::Alap } else { ConstraintKind::Asap };
                     let shown = if placement == ConstraintKind::Alap {
                         crate::lang::text("prop.placement_alap")
                     } else {
@@ -1412,11 +1397,7 @@ impl TaskInfo {
             }
         }
         if self.mode == ScheduleMode::Auto {
-            let hint = if self.is_multi() {
-                crate::lang::text("ti.auto_hint_multi")
-            } else {
-                crate::lang::text("ti.auto_hint")
-            };
+            let hint = if self.is_multi() { crate::lang::text("ti.auto_hint_multi") } else { crate::lang::text("ti.auto_hint") };
             ui.label(RichText::new(hint).small().color(theme::pal().TEXT_WEAK));
         }
         if let Some(t) = p.task(self.id) {
@@ -1432,7 +1413,13 @@ impl TaskInfo {
                 ui.end_row();
                 if !self.milestone {
                     ui.label(RichText::new(crate::lang::text("ti.work")).color(theme::pal().TEXT_WEAK));
-                    ui.label(format!("{} {}, {} {}", format_work(t.sched.work), crate::lang::text("ti.planned"), format_work(t.sched.actual_work), crate::lang::text("ti.actual")));
+                    ui.label(format!(
+                        "{} {}, {} {}",
+                        format_work(t.sched.work),
+                        crate::lang::text("ti.planned"),
+                        format_work(t.sched.actual_work),
+                        crate::lang::text("ti.actual")
+                    ));
                     ui.end_row();
                 }
                 ui.label(RichText::new(crate::lang::text("ti.slack")).color(theme::pal().TEXT_WEAK));
@@ -1521,16 +1508,13 @@ impl TaskInfo {
                 .enumerate()
                 .filter_map(|(i, t)| {
                     let linked = self.preds.iter().any(|r| r.pred == TaskRef::Local(t.id));
-                    let outline_ok = p.task_index(succ).is_some_and(|si| {
-                        !p.descendants_range(i).contains(&si) && !p.descendants_range(si).contains(&i)
-                    });
+                    let outline_ok =
+                        p.task_index(succ).is_some_and(|si| !p.descendants_range(i).contains(&si) && !p.descendants_range(si).contains(&i));
                     let enabled = t.id != succ && !linked && outline_ok;
                     crate::widgets::task_picker::TaskChoice::from_project(p, i, enabled)
                 })
                 .collect();
-            if let Some(pred) =
-                crate::widgets::task_picker::show(ui, "ti_pred_add", crate::lang::text("ti.choose_task"), 320.0, &choices)
-            {
+            if let Some(pred) = crate::widgets::task_picker::show(ui, "ti_pred_add", crate::lang::text("ti.choose_task"), 320.0, &choices) {
                 if !self.preds.iter().any(|r| r.pred == TaskRef::Local(pred)) {
                     self.preds.push(PredRow {
                         pred: TaskRef::Local(pred),
@@ -1572,8 +1556,8 @@ impl TaskInfo {
         ui.horizontal(|ui| {
             let id = ui.scope_id().with("pred_typed");
             let mut typed = ui.ctx().data(|d| d.get_temp::<String>(id)).unwrap_or_default();
-            let resp =
-                ui.add(crate::widgets::craft::text_edit(&mut typed).desired_width(200.0).hint_text(crate::lang::text("ti.pred_hint")).id(id));
+            let resp = ui
+                .add(crate::widgets::craft::text_edit(&mut typed).desired_width(200.0).hint_text(crate::lang::text("ti.pred_hint")).id(id));
             let add = ui.button("+").on_hover_text(crate::lang::text("ti.pred_hint")).clicked();
             if (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) || add) && !typed.trim().is_empty() {
                 match p.parse_predecessors(&typed) {
@@ -1596,11 +1580,7 @@ impl TaskInfo {
             }
             ui.ctx().data_mut(|d| d.insert_temp(id, typed));
         });
-        ui.label(
-            RichText::new(crate::lang::text("ti.pred_lag_hint"))
-            .small()
-            .color(theme::pal().TEXT_WEAK),
-        );
+        ui.label(RichText::new(crate::lang::text("ti.pred_lag_hint")).small().color(theme::pal().TEXT_WEAK));
     }
 
     fn resources_tab(&mut self, ui: &mut Ui, p: &Project) {
@@ -1657,11 +1637,7 @@ impl TaskInfo {
                 });
             });
         });
-        ui.label(
-            RichText::new(crate::lang::text("ti.work_empty_hint"))
-                .small()
-                .color(theme::pal().TEXT_WEAK),
-        );
+        ui.label(RichText::new(crate::lang::text("ti.work_empty_hint")).small().color(theme::pal().TEXT_WEAK));
     }
 
     fn advanced(&mut self, ui: &mut Ui, p: &Project) {
@@ -1706,7 +1682,11 @@ impl TaskInfo {
             ui.checkbox(&mut self.effort_driven, crate::lang::text("prop.effort_driven"));
             ui.end_row();
             ui.label(format!("{}:", crate::lang::text("prop.calendar")));
-            let cal_name = self.calendar.and_then(|c| p.calendar(c)).map(|c| c.name.clone()).unwrap_or_else(|| crate::lang::text("common.none").to_string());
+            let cal_name = self
+                .calendar
+                .and_then(|c| p.calendar(c))
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| crate::lang::text("common.none").to_string());
             egui::ComboBox::from_id_salt("ti_cal").selected_text(cal_name).show_ui(ui, |ui| {
                 ui.selectable_value(&mut self.calendar, None, crate::lang::text("common.none"));
                 for c in &p.calendars {

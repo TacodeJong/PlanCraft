@@ -4,6 +4,7 @@
 //! plancraft-cli commands
 //! plancraft-cli run <id> [--params JSON] [FILE...]
 //! plancraft-cli inspect [FILE...]
+//! plancraft-cli export-xml [--planner] <plan> [output.xml]
 //! plancraft-cli mcp [FILE...] [--http ADDR]
 //! ```
 
@@ -69,6 +70,10 @@ fn run() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&out)?);
             Ok(())
         }
+        "export-xml" => {
+            args.remove(0);
+            export_xml(&args)
+        }
         "mcp" => {
             args.remove(0);
             let code = plancraft_mcp::cli::run(args);
@@ -80,6 +85,34 @@ fn run() -> Result<()> {
         }
         other => bail!("unknown subcommand '{other}' (try help)"),
     }
+}
+
+fn export_xml(args: &[String]) -> Result<()> {
+    let mut planner = false;
+    let mut files = Vec::new();
+    for arg in args {
+        if arg == "--planner" {
+            planner = true;
+        } else {
+            files.push(arg.clone());
+        }
+    }
+    let input = files.first().context("usage: plancraft-cli export-xml [--planner] <plan> [output.xml]")?;
+    let output = match files.get(1) {
+        Some(path) => path.clone(),
+        None => {
+            let mut path = std::path::PathBuf::from(input);
+            path.set_extension("xml");
+            path.to_string_lossy().into_owned()
+        }
+    };
+    let project = plancraft_core::io::load(input).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let notes = plancraft_core::mspdi::save_with(&project, &output, planner).map_err(|e| anyhow::anyhow!("{e}"))?;
+    for note in notes {
+        eprintln!("{note}");
+    }
+    println!("{output}");
+    Ok(())
 }
 
 fn session_with_files(files: &[String]) -> Result<Session> {
@@ -99,6 +132,7 @@ USAGE:
     plancraft-cli commands
     plancraft-cli run <id> [--params JSON] [FILE...]
     plancraft-cli inspect [FILE...]
+    plancraft-cli export-xml [--planner] <plan> [output.xml]
     plancraft-cli mcp [FILE...] [--http ADDR]
 "
     );

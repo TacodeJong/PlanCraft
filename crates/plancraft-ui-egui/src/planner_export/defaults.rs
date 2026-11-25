@@ -27,19 +27,11 @@ pub fn has_default_client() -> bool {
 /// Tenant used for auth: saved setting, else the multi-tenant default.
 pub fn effective_tenant(stored: &str) -> String {
     let t = stored.trim();
-    if t.is_empty() {
-        DEFAULT_TENANT_ID.to_string()
-    } else {
-        t.to_string()
-    }
+    if t.is_empty() { DEFAULT_TENANT_ID.to_string() } else { t.to_string() }
 }
 
 /// Client id used for auth: saved setting, else the shipped public client.
 pub fn effective_client(stored: &str) -> String {
     let c = stored.trim();
-    if c.is_empty() {
-        DEFAULT_CLIENT_ID.trim().to_string()
-    } else {
-        c.to_string()
-    }
+    if c.is_empty() { DEFAULT_CLIENT_ID.trim().to_string() } else { c.to_string() }
 }

@@ -18,25 +18,13 @@ pub fn execute(ws: &mut Workspace, id: &str, params: &Value) -> Result<Value, Co
 }
 
 /// Undoable labeled edit on a document (dialog OK / paste), via [`Session`].
-pub fn edit_doc<R>(
-    ws: &mut Workspace,
-    handle: u64,
-    label: &str,
-    f: impl FnOnce(&mut Project) -> Result<R, String>,
-) -> Result<R, String> {
+pub fn edit_doc<R>(ws: &mut Workspace, handle: u64, label: &str, f: impl FnOnce(&mut Project) -> Result<R, String>) -> Result<R, String> {
     Session::edit_doc_mut(ws, ChangeSource::User, handle, label, f)
 }
 
 /// Undoable labeled edit on the active document.
-pub fn edit_active<R>(
-    ws: &mut Workspace,
-    label: &str,
-    f: impl FnOnce(&mut Project) -> Result<R, String>,
-) -> Result<R, String> {
-    let handle = ws
-        .active_doc()
-        .map(|d| d.handle)
-        .ok_or_else(|| "no open document".to_string())?;
+pub fn edit_active<R>(ws: &mut Workspace, label: &str, f: impl FnOnce(&mut Project) -> Result<R, String>) -> Result<R, String> {
+    let handle = ws.active_doc().map(|d| d.handle).ok_or_else(|| "no open document".to_string())?;
     edit_doc(ws, handle, label, f)
 }
 
@@ -79,14 +67,8 @@ pub fn map_doc_command(
     match cmd {
         Command::Undo => Some(("edit.undo", json!({}))),
         Command::Redo => Some(("edit.redo", json!({}))),
-        Command::InsertTask => Some((
-            "task.insert",
-            json!({ "name": "<New Task>", "at": insert_at }),
-        )),
-        Command::InsertMilestone => Some((
-            "task.insertMilestone",
-            json!({ "name": "<New Milestone>", "at": insert_at }),
-        )),
+        Command::InsertTask => Some(("task.insert", json!({ "name": "<New Task>", "at": insert_at }))),
+        Command::InsertMilestone => Some(("task.insertMilestone", json!({ "name": "<New Milestone>", "at": insert_at }))),
         Command::InsertSummary => {
             if task_ids.is_empty() {
                 Some(("task.insertSummary", json!({ "name": "<New Summary Task>" })))
@@ -109,10 +91,9 @@ pub fn map_doc_command(
         }
         Command::MarkOnTrack => Some(("task.markOnTrack", task_params(task_ids))),
         Command::ToggleActive if !task_ids.is_empty() => Some(("task.toggleActive", task_params(task_ids))),
-        Command::SetMode(mode) if !task_ids.is_empty() => Some((
-            "task.setMode",
-            json!({ "tasks": task_ids.iter().map(|id| id.0).collect::<Vec<_>>(), "mode": mode_str(*mode) }),
-        )),
+        Command::SetMode(mode) if !task_ids.is_empty() => {
+            Some(("task.setMode", json!({ "tasks": task_ids.iter().map(|id| id.0).collect::<Vec<_>>(), "mode": mode_str(*mode) })))
+        }
         Command::ClearDates if !task_ids.is_empty() => Some(("task.clearDates", task_params(task_ids))),
         Command::ToggleTimeline if !task_ids.is_empty() => Some(("task.toggleTimeline", task_params(task_ids))),
         Command::RejoinTasks if !task_ids.is_empty() => Some(("task.rejoinSplits", task_params(task_ids))),

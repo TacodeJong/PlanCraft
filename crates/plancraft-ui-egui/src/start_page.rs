@@ -29,10 +29,7 @@ pub struct StartInfo<'a> {
 const MAX_WIDTH: f32 = 1000.0;
 
 fn card_frame(hovered: bool) -> egui::Frame {
-    craft::panel_frame().stroke(Stroke::new(
-        1.0,
-        if hovered { theme::pal().LINE_STRONG } else { theme::pal().LINE },
-    ))
+    craft::panel_frame().stroke(Stroke::new(1.0, if hovered { theme::pal().LINE_STRONG } else { theme::pal().LINE }))
 }
 
 /// An action row: CONTROLS badge, title and description. Returns true when clicked.
@@ -49,13 +46,7 @@ fn action(ui: &mut Ui, id: &str, icon: &str, title: &str, subtitle: &str) -> boo
                     egui::CornerRadius::same(theme::CONTROL_RADIUS),
                     if hovered { theme::pal().WASH_HOVER } else { theme::pal().CONTROLS },
                 );
-                crate::icons::paint(
-                    ui,
-                    badge,
-                    icon,
-                    18.0,
-                    if hovered { theme::pal().TEXT } else { theme::pal().TEXT_WEAK },
-                );
+                crate::icons::paint(ui, badge, icon, 18.0, if hovered { theme::pal().TEXT } else { theme::pal().TEXT_WEAK });
                 ui.add_space(6.0);
                 ui.vertical(|ui| {
                     ui.add_space(1.0);
@@ -157,11 +148,7 @@ fn recovered_work(ui: &mut Ui, items: &[RecoveredItem], out: &mut Vec<Command>) 
         .response;
     // Status edge: work that still needs a decision.
     let r = resp.rect;
-    ui.painter().rect_filled(
-        Rect::from_min_max(r.min, pos2(r.left() + 3.0, r.bottom())),
-        egui::CornerRadius::ZERO,
-        theme::pal().WARN,
-    );
+    ui.painter().rect_filled(Rect::from_min_max(r.min, pos2(r.left() + 3.0, r.bottom())), egui::CornerRadius::ZERO, theme::pal().WARN);
 }
 
 fn recent_list(ui: &mut Ui, settings: &AppSettings, out: &mut Vec<Command>) {

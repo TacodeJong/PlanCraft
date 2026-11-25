@@ -1,0 +1,10 @@
+"""Bounds for untrusted XML and MPP input."""
+
+MAX_FILE_BYTES = 64 * 1024 * 1024
+MAX_TASKS = 100_000
+MAX_LINKS = 200_000
+MAX_RESOURCES = 20_000
+MAX_EXCEPTIONS = 400
+MAX_EXCEPTION_SPAN_DAYS = 3660
+
+OLE_MAGIC = bytes.fromhex("d0cf11e0a1b11ae1")

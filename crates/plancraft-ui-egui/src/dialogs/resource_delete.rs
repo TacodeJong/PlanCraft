@@ -100,13 +100,8 @@ impl ResourceDelete {
             [one] => format!("'{one}' is assigned to {n} activities."),
             _ => format!("{} resources are assigned to {n} activities.", names.len()),
         };
-        let choices: Vec<(ResourceId, String)> = doc
-            .project
-            .resources
-            .iter()
-            .filter(|r| !self.ids.contains(&r.id))
-            .map(|r| (r.id, r.name.clone()))
-            .collect();
+        let choices: Vec<(ResourceId, String)> =
+            doc.project.resources.iter().filter(|r| !self.ids.contains(&r.id)).map(|r| (r.id, r.name.clone())).collect();
         let can_replace = self.target(&doc.project).is_ok();
         let pick_label = self
             .replacement

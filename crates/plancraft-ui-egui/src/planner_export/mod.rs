@@ -27,29 +27,21 @@ use crate::settings::PlannerSettings;
 
 use http::UreqTransport;
 
+/// Azure CLI supplies the token when that was the sign-in, or when no app (client) id is configured.
+fn prefer_azure_cli(az_mode: bool, client_id: &str) -> bool {
+    az_mode || client_id.trim().is_empty()
+}
+
 fn auth_config(settings: &PlannerSettings) -> Result<AuthConfig, String> {
-    if az_cli::using_az() {
-        // Client/tenant unused when tokens come from `az`; placeholders satisfy callers.
+    let client = effective_client(&settings.client_id);
+    if prefer_azure_cli(az_cli::using_az(), &client) {
+        // Client/tenant unused when tokens come from `az`; a placeholder satisfies callers.
         return Ok(AuthConfig {
             tenant_id: effective_tenant(&settings.tenant_id),
-            client_id: effective_client(&settings.client_id).if_empty_placeholder(),
+            client_id: if client.is_empty() { az_cli::PLACEHOLDER_CLIENT_ID.to_string() } else { client },
         });
     }
-    AuthConfig::from_settings(&effective_tenant(&settings.tenant_id), &effective_client(&settings.client_id))
-}
-
-trait IfEmptyPlaceholder {
-    fn if_empty_placeholder(self) -> String;
-}
-
-impl IfEmptyPlaceholder for String {
-    fn if_empty_placeholder(self) -> String {
-        if self.trim().is_empty() {
-            "az-cli".into()
-        } else {
-            self
-        }
-    }
+    AuthConfig::from_settings(&effective_tenant(&settings.tenant_id), &client)
 }
 
 #[derive(Clone, Debug)]
@@ -65,10 +57,11 @@ impl ExportOutcome {
                 format!("{} · {} tasks · plan {} · {}", crate::lang::text("planner.done.basic"), r.tasks_created, r.plan_id, r.plan_url)
             }
             ExportOutcome::Premium(r) => format!(
-                "{} · {} tasks · {} deps · project {}",
+                "{} · {} tasks · {} deps · {} assignments · project {}",
                 crate::lang::text("planner.done.premium"),
                 r.tasks_created,
                 r.dependencies_created,
+                r.assignments_created,
                 r.project_id
             ),
         }
@@ -126,8 +119,7 @@ pub fn sign_in(settings: &PlannerSettings) -> Result<SignInStart, String> {
             if !effective_client(&settings.client_id).is_empty() {
                 let cfg = AuthConfig::from_settings(&effective_tenant(&settings.tenant_id), &effective_client(&settings.client_id))?;
                 let mut http = UreqTransport::default();
-                let pending =
-                    begin_device_code(&mut http, &cfg, "https://graph.microsoft.com/.default offline_access openid profile")?;
+                let pending = begin_device_code(&mut http, &cfg, "https://graph.microsoft.com/.default offline_access openid profile")?;
                 return Ok(SignInStart::DeviceCode { pending, az_wait: None });
             }
             Err(az_err)
@@ -169,10 +161,22 @@ pub fn sign_out() -> Result<(), String> {
     keys::delete_refresh_token()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::prefer_azure_cli;
+
+    #[test]
+    fn empty_client_id_uses_azure_cli() {
+        assert!(prefer_azure_cli(false, ""));
+        assert!(prefer_azure_cli(false, "   "));
+        assert!(prefer_azure_cli(true, "00000000-0000-0000-0000-000000000000"));
+        assert!(!prefer_azure_cli(false, "00000000-0000-0000-0000-000000000000"));
+    }
+}
+
 pub fn load_groups(settings: &PlannerSettings) -> Result<Vec<(String, String)>, String> {
     let cfg = auth_config(settings)?;
     let mut http = UreqTransport::default();
     let tokens = graph_token(&mut http, &cfg)?;
     list_member_groups(&mut http, &tokens)
 }
-

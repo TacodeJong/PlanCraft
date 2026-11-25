@@ -622,10 +622,7 @@ pub fn show(ui: &mut Ui, rect: Rect, g: &mut GanttState, scroll_y: &mut f32, inp
             } else {
                 // Swift-style edge ticks: a pinned start/finish (not Unrestricted) gets a pin mark.
                 let pin = |x: f32| {
-                    bp.line_segment(
-                        [pos2(x, bar_rect.top() - 3.0), pos2(x, bar_rect.bottom() + 3.0)],
-                        Stroke::new(1.5, edge),
-                    );
+                    bp.line_segment([pos2(x, bar_rect.top() - 3.0), pos2(x, bar_rect.bottom() + 3.0)], Stroke::new(1.5, edge));
                 };
                 if t.start_mode() != DateMode::Unrestricted {
                     pin(bar_rect.left());
@@ -1071,14 +1068,15 @@ fn dashed_vline(p: &Painter, x: f32, y0: f32, y1: f32, color: Color32) {
 }
 
 fn tooltip_at(ui: &Ui, pos: Pos2, text: &str) {
-    egui::Area::new(ui.scope_id().with("gantt_tip")).order(egui::Order::Tooltip).fixed_pos(pos + vec2(14.0, 14.0)).interactable(false).show(
-        ui.ctx(),
-        |ui| {
+    egui::Area::new(ui.scope_id().with("gantt_tip"))
+        .order(egui::Order::Tooltip)
+        .fixed_pos(pos + vec2(14.0, 14.0))
+        .interactable(false)
+        .show(ui.ctx(), |ui| {
             craft::menu_frame().show(ui, |ui| {
                 ui.label(egui::RichText::new(text).size(12.0));
             });
-        },
-    );
+        });
 }
 
 #[cfg(test)]

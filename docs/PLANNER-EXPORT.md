@@ -4,6 +4,8 @@ Sanitized integration notes for PlanCraft → Microsoft Planner. Derived from a 
 
 Status: MVP implemented in `plancraft-app` (`planner_export` module, File → Export to Microsoft Planner). Auth uses device code + keyring. A **public** multi-tenant client id may ship in `DEFAULT_CLIENT_ID`; **secrets and tokens never** go in git.
 
+Bringing a plan back in through the Power App is a different path: [PLANNER-IMPORT.md](PLANNER-IMPORT.md). **Importeren** only saves the staging form. The import API runs on save, and a form that already says **Opgeslagen** never calls it.
+
 ---
 
 ## Product requirement: Plan 1+ and dependencies

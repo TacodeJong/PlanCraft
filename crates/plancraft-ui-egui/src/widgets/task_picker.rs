@@ -41,15 +41,19 @@ impl TaskChoice {
             return true;
         }
         let q = q.to_ascii_lowercase();
-        self.number.to_string().contains(&q)
-            || self.wbs.to_ascii_lowercase().contains(&q)
-            || self.name.to_ascii_lowercase().contains(&q)
+        self.number.to_string().contains(&q) || self.wbs.to_ascii_lowercase().contains(&q) || self.name.to_ascii_lowercase().contains(&q)
     }
 }
 
 /// Combo that opens a searchable list of tasks. Returns the chosen id when the user picks one
 /// (or presses Enter on the first enabled match).
-pub fn show(ui: &mut Ui, id_salt: impl std::hash::Hash + std::fmt::Debug, button: &str, width: f32, choices: &[TaskChoice]) -> Option<TaskId> {
+pub fn show(
+    ui: &mut Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    button: &str,
+    width: f32,
+    choices: &[TaskChoice],
+) -> Option<TaskId> {
     let filter_id = ui.make_persistent_id(("task_pick_filter", &id_salt));
     let focused_id = ui.make_persistent_id(("task_pick_focused", &id_salt));
     let mut picked = None;
@@ -127,11 +131,7 @@ fn choice_row(ui: &mut Ui, c: &TaskChoice) -> egui::Response {
     let painter = ui.painter();
     let num_galley = painter.layout_no_wrap(c.number.to_string(), mono.clone(), weak);
     let num_w = 28.0_f32;
-    painter.galley(
-        egui::pos2(x + num_w - num_galley.size().x, y - num_galley.size().y / 2.0),
-        num_galley,
-        weak,
-    );
+    painter.galley(egui::pos2(x + num_w - num_galley.size().x, y - num_galley.size().y / 2.0), num_galley, weak);
     x += num_w + 6.0;
     x += f32::from(c.depth) * 12.0;
     let wbs_galley = painter.layout_no_wrap(c.wbs.clone(), mono, weak);
@@ -141,9 +141,5 @@ fn choice_row(ui: &mut Ui, c: &TaskChoice) -> egui::Response {
     let name_color = if c.enabled { text } else { weak };
     let name_galley = painter.layout_no_wrap(c.name.clone(), body, name_color);
     painter.galley(egui::pos2(x, y - name_galley.size().y / 2.0), name_galley, name_color);
-    if !c.enabled {
-        resp.on_hover_text(crate::lang::text("prop.task_search_blocked"))
-    } else {
-        resp.on_hover_text(c.label())
-    }
+    if !c.enabled { resp.on_hover_text(crate::lang::text("prop.task_search_blocked")) } else { resp.on_hover_text(c.label()) }
 }

@@ -38,6 +38,9 @@ pub enum Command {
     ExportPdf,
     /// Save the plan as a Microsoft Project XML (MSPDI) file.
     ExportMspdi,
+    /// MSPDI shaped for Planner Premium's project import: auto-scheduled tasks, zero-duration
+    /// milestones, and work-resource assignments on leaf tasks.
+    ExportMspdiPlanner,
     /// Save the Report view's visible rows as an Excel workbook.
     ExportReport,
     /// Save the Task Usage view (tasks, assignments, time-phased work) as an Excel workbook.
@@ -46,6 +49,8 @@ pub enum Command {
     ExportGantt,
     /// Push the plan to Microsoft Planner (Plan 1+ / basic board).
     ExportPlanner,
+    /// Send the open plan to Planner Premium through the mppfill sidecar.
+    SendPlanner,
     /// The design style, stored on the plan and used for this session.
     SetChartStyle(plancraft_core::model::ChartStyle),
     Quit,

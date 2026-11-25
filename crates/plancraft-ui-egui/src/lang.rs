@@ -99,14 +99,17 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         "menu.save" => ("Save", "Opslaan"),
         "menu.save_as" => ("Save As…", "Opslaan als…"),
         "menu.print" => ("Print…", "Afdrukken…"),
-        "menu.export_pdf" => ("Export PDF…", "Exporteer PDF…"),
+        "menu.export" => ("Export", "Exporteer"),
+        "menu.export_pdf" => ("PDF…", "PDF…"),
         "menu.import" => ("Import Excel or CSV…", "Importeer Excel of CSV…"),
-        "menu.export_csv" => ("Export CSV", "Exporteer CSV"),
-        "menu.export_xml" => ("Export Microsoft Project XML…", "Exporteer Microsoft Project XML…"),
-        "menu.export_report" => ("Export Report to Excel…", "Exporteer rapport naar Excel…"),
-        "menu.export_gantt" => ("Export Gantt to Excel…", "Exporteer Gantt naar Excel…"),
-        "menu.export_usage" => ("Export Task Usage to Excel…", "Exporteer taakgebruik naar Excel…"),
+        "menu.export_csv" => ("CSV", "CSV"),
+        "menu.export_xml" => ("Planner Premium XML…", "Planner Premium XML…"),
+        "menu.export_xml_planner" => ("Microsoft Project XML…", "Microsoft Project XML…"),
+        "menu.export_report" => ("Report to Excel…", "Rapport naar Excel…"),
+        "menu.export_gantt" => ("Gantt to Excel…", "Gantt naar Excel…"),
+        "menu.export_usage" => ("Task usage to Excel…", "Taakgebruik naar Excel…"),
         "menu.export_planner" => ("Export to Microsoft Planner…", "Exporteer naar Microsoft Planner…"),
+        "menu.send_planner" => ("Send to Planner Premium…", "Verstuur naar Planner Premium…"),
         "tb.export_usage" => ("Task Usage", "Taakgebruik"),
         "tb.export_planner" => ("Planner", "Planner"),
         "menu.project_info" => ("Project Information…", "Projectgegevens…"),
@@ -286,7 +289,7 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         "tb.print" => ("Print", "Afdrukken"),
         "tb.export_pdf" => ("Export PDF", "Exporteer PDF"),
         "tb.export_csv" => ("Export CSV", "Exporteer CSV"),
-        "tb.export_xml" => ("Export XML", "Exporteer XML"),
+        "tb.export_xml" => ("Export for Planner", "Exporteer voor Planner"),
         "tb.filter" => ("Filter", "Filter"),
         "tb.table" => ("Table", "Tabel"),
         "tb.sort" => ("Sort", "Sorteren"),
@@ -370,7 +373,9 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         "prop.size_fill" => ("Remaining space in group", "Resterende ruimte in groep"),
         "prop.size_percent_field" => ("Percentage", "Percentage"),
         "prop.size_percent_suffix" => ("% of group", "% van groep"),
-        "prop.size_fill_help" => ("Remaining space sets start and end to Unrestricted", "Resterende ruimte zet begin en einde op Onbeperkt"),
+        "prop.size_fill_help" => {
+            ("Remaining space sets start and end to Unrestricted", "Resterende ruimte zet begin en einde op Onbeperkt")
+        }
         "prop.predecessors" => ("Predecessors", "Voorgangers"),
         "prop.resources" => ("Resources", "Resources"),
         "prop.status" => ("Status", "Status"),
@@ -484,7 +489,7 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         "prop.task_search_empty" => ("No matching activities", "Geen overeenkomende activiteiten"),
         "prop.task_search_blocked" => (
             "Not available: already linked, related by outline, or would create a cycle",
-            "Niet beschikbaar: al gekoppeld, via overzicht verwant, of zou een lus maken"
+            "Niet beschikbaar: al gekoppeld, via overzicht verwant, of zou een lus maken",
         ),
         "prop.add_fs" => (
             "Adds a finish-to-start link on each selected activity.",
@@ -582,10 +587,9 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
             "Lag examples: 2d, -1d (lead), 50%, 3ed (elapsed days). Link to tasks in other files via Project > Links Between Projects.",
             "Voorbeelden van vertraging: 2d, -1d (voorsprong), 50%, 3ed (verstreken dagen). Koppel aan taken in andere bestanden via Project > Koppelingen tussen projecten.",
         ),
-        "ti.group_resources" => (
-            "A group's resources are the resources of its tasks.",
-            "De resources van een groep zijn die van de subtaken.",
-        ),
+        "ti.group_resources" => {
+            ("A group's resources are the resources of its tasks.", "De resources van een groep zijn die van de subtaken.")
+        }
         "ti.add_resource" => ("Add resource:", "Resource toevoegen:"),
         "ti.work_empty_hint" => (
             "Leave Work empty to derive it from the duration (or the estimate for a first assignment).",
@@ -677,7 +681,9 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         "col.status" => ("Status", "Status"),
         "col.row_mark" => ("Row Mark", "Markering"),
         "col.mark_note" => ("Mark note", "Markeringnotitie"),
-        "col.mark_note_needs_mark" => ("Set a row mark before adding a mark note", "Zet eerst een markering voordat je een notitie toevoegt"),
+        "col.mark_note_needs_mark" => {
+            ("Set a row mark before adding a mark note", "Zet eerst een markering voordat je een notitie toevoegt")
+        }
         "tb.columns" => ("Columns", "Kolommen"),
         "tb.columns_hint" => ("Choose the visible table columns", "Kies de zichtbare tabelkolommen"),
         "common.yes" => ("Yes", "Ja"),
@@ -795,6 +801,40 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         "distill.provider.xai" => ("xAI", "xAI"),
         "distill.provider.custom" => ("OpenAI-compatible", "OpenAI-compatibel"),
         "planner.title" => ("Export to Microsoft Planner", "Exporteer naar Microsoft Planner"),
+        "send.title" => ("Send to Planner Premium", "Verstuur naar Planner Premium"),
+        "send.explain" => (
+            "This creates a new plan in Planner Premium. The first time, a browser window opens so you can sign in. When the plan is in, that browser opens the Tasks tab. Leave it open until the tasks are on screen.",
+            "Dit maakt een nieuw plan in Planner Premium. De eerste keer opent een browservenster om aan te melden. Als het plan erin staat, opent die browser het tabblad Taken. Laat dat open tot de taken in beeld zijn.",
+        ),
+        "send.name" => ("Plan name", "Plannaam"),
+        "send.button" => ("Send", "Verstuur"),
+        "send.again" => ("Send again", "Opnieuw versturen"),
+        "send.working" => ("Sending…", "Versturen…"),
+        "send.sign_in" => ("A browser window will open so you can sign in.", "Er opent een browservenster om aan te melden."),
+        "send.file_ready" => ("The plan file is ready.", "Het planbestand is klaar."),
+        "send.created" => ("The plan is created. Waiting for the dates.", "Het plan is aangemaakt. Wachten op de datums."),
+        "send.scheduling" => ("Reading the dates…", "Datums ophalen…"),
+        "send.tasks_open" => (
+            "The Tasks tab is open. Leave it on screen until the tasks appear.",
+            "Het tabblad Taken is open. Laat het in beeld tot de taken verschijnen.",
+        ),
+        "send.done" => ("Sent. The plan is in Planner Premium.", "Verstuurd. Het plan staat in Planner Premium."),
+        "send.open" => ("Open the Tasks tab", "Open het tabblad Taken"),
+        "send.dates" => ("Dates", "Datums"),
+        "send.resources" => (
+            "Resource names stay in the Resources column. Planner does not import resource rows.",
+            "Resourcenamen blijven in de kolom Resources. Planner importeert geen resourceregels.",
+        ),
+        "send.missing_tool" => (
+            "The Planner sender was not found. It belongs in the mppfill folder next to PlanCraft.",
+            "De Planner-verstuurder is niet gevonden. Die hoort in de map mppfill naast PlanCraft.",
+        ),
+        "send.missing_template" => (
+            "The Planner template was not found. Put PLANNER-cyclus.mpp in Downloads, or next to PlanCraft.",
+            "Het Planner-sjabloon is niet gevonden. Zet PLANNER-cyclus.mpp in Downloads, of naast PlanCraft.",
+        ),
+        "send.write" => ("The plan file could not be written.", "Het planbestand kon niet worden geschreven."),
+        "send.start" => ("The Planner sender could not be started.", "De Planner-verstuurder kon niet worden gestart."),
         "planner.explain" => (
             "Click Sign in with Microsoft, finish the device code in your browser, then Export. No tenant or app id to paste. Requires Azure CLI on this computer. Plan 1+ is required for dependencies.",
             "Klik Aanmelden bij Microsoft, rond de device-code in de browser af, daarna Exporteren. Geen tenant- of app-id plakken. Vereist Azure CLI op deze computer. Plan 1+ is nodig voor afhankelijkheden.",
@@ -883,6 +923,10 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         "planner.note.undated" => (
             "Some tasks have no dates; the scheduling engine needs dates for dependencies.",
             "Sommige taken hebben geen data; de planningsengine heeft data nodig voor afhankelijkheden.",
+        ),
+        "planner.note.work_only" => (
+            "Material and cost resources are not assigned. Planner Premium only places work resources on tasks.",
+            "Materiaal- en kostenresources worden niet toegewezen. Planner Premium plaatst alleen werkresources op taken.",
         ),
         "planner.done.basic" => ("Exported to Planner", "Geëxporteerd naar Planner"),
         "planner.done.premium" => ("Exported to Planner Premium", "Geëxporteerd naar Planner Premium"),

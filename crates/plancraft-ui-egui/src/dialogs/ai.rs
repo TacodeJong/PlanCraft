@@ -62,10 +62,7 @@ pub fn show(ctx: &Context, open: &mut bool, state: &mut AiState, settings: &mut 
             if provider == AiProvider::Compatible {
                 ui.horizontal(|ui| {
                     ui.label(crate::lang::text("distill.address"));
-                    if ui
-                        .add(crate::widgets::craft::text_edit(&mut settings.ai.base_url).desired_width(260.0))
-                        .changed()
-                    {
+                    if ui.add(crate::widgets::craft::text_edit(&mut settings.ai.base_url).desired_width(260.0)).changed() {
                         settings.save();
                     }
                 });

@@ -79,6 +79,7 @@ pub fn tools() -> Vec<Tool> {
                 json!({
                     "path": string("File path ending in .xml (added when missing)."),
                     "overwrite": boolean("Replace an existing Microsoft Project XML file at 'path' (default false). Other .xml files are never replaced. Check with the user first."),
+                    "planner": boolean("Write the Planner Premium profile: automatically scheduled tasks, zero-duration milestones, and assignments of work resources on leaf tasks. Manual scheduling, constraints and deadlines are left out so Planner does not stretch durations. Default false."),
                 }),
                 &["path"],
             ),
@@ -337,7 +338,8 @@ fn export_mspdi(ctx: &Ctx, a: &Args) -> ToolResult {
     }
     // Copy the plan, then write without holding the workspace.
     let project = ctx.read(a, |doc| Ok(doc.project.clone()))?;
-    let notes = plancraft_core::mspdi::save(&project, &path)?;
+    let planner = a.bool("planner")?.unwrap_or(false);
+    let notes = plancraft_core::mspdi::save_with(&project, &path, planner)?;
     Ok(json!({ "path": path.display().to_string(), "tasks": project.tasks.len(), "notes": notes }))
 }
 

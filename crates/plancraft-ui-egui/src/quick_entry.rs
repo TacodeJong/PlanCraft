@@ -390,11 +390,8 @@ pub fn apply(p: &mut Project, sheet: &Sheet, at: Option<usize>) -> Result<Vec<Ta
         } else if !ticket.milestone
             && let Some(minutes) = ticket.minutes
         {
-            p.set_typed_duration(
-                *id,
-                TypedDuration { minutes, estimated: ticket.estimated, elapsed: false, unit: ticket.unit },
-            )
-            .map_err(|e| e.to_string())?;
+            p.set_typed_duration(*id, TypedDuration { minutes, estimated: ticket.estimated, elapsed: false, unit: ticket.unit })
+                .map_err(|e| e.to_string())?;
         }
         if !ticket.group && !ticket.resources.is_empty() {
             p.apply_resource_names(*id, &ticket.resources.join(", ")).map_err(|e| e.to_string())?;

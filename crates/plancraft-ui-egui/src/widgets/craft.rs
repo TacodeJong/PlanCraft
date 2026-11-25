@@ -164,15 +164,7 @@ pub fn title_qa_button(ui: &mut Ui, icon: &str, tip: &str, enabled: bool) -> Res
     let size = theme::TITLE_BAND_QA_SIZE;
     let (rect, resp) = ui.allocate_exact_size(vec2(size, size), if enabled { Sense::click() } else { Sense::hover() });
     let p = ui.painter();
-    let chrome = tool_chrome(
-        theme::pal().TITLE_BAR,
-        enabled,
-        false,
-        false,
-        resp.is_pointer_button_down_on(),
-        resp.hovered(),
-        false,
-    );
+    let chrome = tool_chrome(theme::pal().TITLE_BAR, enabled, false, false, resp.is_pointer_button_down_on(), resp.hovered(), false);
     if let Some(fill) = chrome.fill {
         p.rect_filled(rect, CORNER, fill);
     }
@@ -242,11 +234,7 @@ pub fn menu_frame() -> Frame {
 
 /// Square hairline panel for start-page / overview tiles (large surfaces stay square).
 pub fn panel_frame() -> Frame {
-    Frame::new()
-        .fill(theme::pal().BG)
-        .stroke(theme::hairline())
-        .corner_radius(CornerRadius::ZERO)
-        .inner_margin(egui::Margin::same(14))
+    Frame::new().fill(theme::pal().BG).stroke(theme::hairline()).corner_radius(CornerRadius::ZERO).inner_margin(egui::Margin::same(14))
 }
 
 /// Backdrop behind a blocking confirm: darker than egui's default so the square panel reads.
@@ -258,15 +246,8 @@ pub fn modal_backdrop() -> Color32 {
 ///
 /// Uses `egui::Modal` only for modality / backdrop hit-testing; the painted host is always
 /// [`modal_frame`]. Escape / backdrop click set `should_close` on the response.
-pub fn blocking_modal<R>(
-    ctx: &egui::Context,
-    id: egui::Id,
-    add_contents: impl FnOnce(&mut Ui) -> R,
-) -> egui::ModalResponse<R> {
-    egui::Modal::new(id)
-        .backdrop_color(modal_backdrop())
-        .frame(modal_frame())
-        .show(ctx, add_contents)
+pub fn blocking_modal<R>(ctx: &egui::Context, id: egui::Id, add_contents: impl FnOnce(&mut Ui) -> R) -> egui::ModalResponse<R> {
+    egui::Modal::new(id).backdrop_color(modal_backdrop()).frame(modal_frame()).show(ctx, add_contents)
 }
 
 /// Caps mono HUD title for a confirm — ArtCraft chrome, not Archivo/`ui.heading`.
@@ -308,11 +289,7 @@ fn dialog_button_size() -> egui::Vec2 {
 pub fn primary_button(ui: &mut Ui, label: &str) -> Response {
     let p = theme::pal();
     let text = RichText::new(label).color(p.INVERT_FG).font(FontId::new(13.0, theme::medium()));
-    let btn = egui::Button::new(text)
-        .fill(p.INVERT_BG)
-        .stroke(Stroke::NONE)
-        .corner_radius(CORNER)
-        .min_size(dialog_button_size());
+    let btn = egui::Button::new(text).fill(p.INVERT_BG).stroke(Stroke::NONE).corner_radius(CORNER).min_size(dialog_button_size());
     ui.add(btn).on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -325,11 +302,7 @@ pub fn primary_button_enabled(ui: &mut Ui, label: &str, enabled: bool) -> Respon
 pub fn secondary_button(ui: &mut Ui, label: &str) -> Response {
     let p = theme::pal();
     let text = RichText::new(label).color(p.TEXT).font(FontId::new(13.0, theme::medium()));
-    let btn = egui::Button::new(text)
-        .fill(p.WASH)
-        .stroke(Stroke::new(1.0, p.LINE))
-        .corner_radius(CORNER)
-        .min_size(dialog_button_size());
+    let btn = egui::Button::new(text).fill(p.WASH).stroke(Stroke::new(1.0, p.LINE)).corner_radius(CORNER).min_size(dialog_button_size());
     ui.add(btn).on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 

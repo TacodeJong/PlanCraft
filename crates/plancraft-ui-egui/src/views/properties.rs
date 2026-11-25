@@ -44,10 +44,8 @@ fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: &mut
     // Resource inspectors keep a single content body (no PropTabs).
     let show_prop_tabs = !resource_view(st.view) || !st.sel.tasks.is_empty();
     if show_prop_tabs && !st.sel.tasks.is_empty() {
-        let tabs: Vec<_> = PropTab::ALL
-            .iter()
-            .map(|tab| crate::widgets::panel_tabs::PanelTab { id: tab.id(), label: tab.title().to_owned() })
-            .collect();
+        let tabs: Vec<_> =
+            PropTab::ALL.iter().map(|tab| crate::widgets::panel_tabs::PanelTab { id: tab.id(), label: tab.title().to_owned() }).collect();
         if let Some(picked) = crate::widgets::panel_tabs::show(&mut child, &tabs, st.properties_tab.id()).picked
             && let Some(tab) = PropTab::ALL.iter().find(|t| t.id() == picked)
         {
@@ -71,10 +69,7 @@ fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: &mut
         }
     } else {
         // Host label strip when only the properties surface is open (one tab group).
-        let host = [crate::widgets::panel_tabs::PanelTab {
-            id: "properties",
-            label: st.t("tb.properties").to_owned(),
-        }];
+        let host = [crate::widgets::panel_tabs::PanelTab { id: "properties", label: st.t("tb.properties").to_owned() }];
         let _ = crate::widgets::panel_tabs::show(&mut child, &host, "properties");
     }
     let body_top = child.min_rect().bottom();
@@ -480,9 +475,7 @@ fn schedule_fields(
                 // Show the calculated span (sched), not the stale stored input.
                 let mut text = snap.duration.as_deref().unwrap_or("").to_string();
                 let fallback = ids.iter().any(|id| {
-                    doc.project.task(*id).is_some_and(|t| {
-                        t.duration_mode == DurationMode::Auto && t.sched.duration == t.duration.max(0)
-                    })
+                    doc.project.task(*id).is_some_and(|t| t.duration_mode == DurationMode::Auto && t.sched.duration == t.duration.max(0))
                 });
                 let tip = if fallback { st.t("prop.duration_auto_fallback") } else { st.t("prop.duration_auto_hint") };
                 ui.add_enabled(
@@ -653,16 +646,12 @@ fn size_group_targets(p: &Project, ids: &[TaskId]) -> Vec<TaskId> {
 fn size_in_group_row(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], first: TaskId, multi: bool) {
     let targets = size_group_targets(&doc.project, ids);
     let current = {
-        let choices: Vec<GroupSizeChoice> =
-            targets.iter().filter_map(|id| doc.project.task(*id).map(group_size_choice)).collect();
+        let choices: Vec<GroupSizeChoice> = targets.iter().filter_map(|id| doc.project.task(*id).map(group_size_choice)).collect();
         common_eq(choices.into_iter())
     };
     let all_summary = targets.iter().all(|id| doc.project.task_index(*id).is_some_and(|i| doc.project.has_children(i)));
     let percent_group = common(
-        targets
-            .iter()
-            .filter_map(|id| doc.project.task(*id))
-            .map(|t| t.duration_percent.map(|n| n.to_string()).unwrap_or_default()),
+        targets.iter().filter_map(|id| doc.project.task(*id)).map(|t| t.duration_percent.map(|n| n.to_string()).unwrap_or_default()),
     );
     let own_label = if all_summary { st.t("prop.size_spans") } else { st.t("prop.size_own") };
     let shown = match current {
@@ -703,9 +692,7 @@ fn size_in_group_row(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[T
     if current == Some(GroupSizeChoice::Percent) || percent_group.as_deref().is_some_and(|s| !s.is_empty()) {
         label(ui, st.t("prop.size_percent_field"));
         ui.horizontal(|ui| {
-            if let Some(text) =
-                line(ui, ("task_pct_group", first, multi), percent_group.as_deref().unwrap_or(""), st.t("common.none_lc"))
-            {
+            if let Some(text) = line(ui, ("task_pct_group", first, multi), percent_group.as_deref().unwrap_or(""), st.t("common.none_lc")) {
                 let ids = targets.clone();
                 edit(doc, st, "Percent of group", move |p| {
                     let pct = if text.trim().is_empty() {
@@ -880,10 +867,7 @@ fn planning_tab(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId
         });
     }
     // Swift §9: Clear Dates for in-group rows; keep Size-in-group fill/% flags.
-    if share
-        && crate::widgets::craft::secondary_button(ui, st.t("prop.clear_dates"))
-            .on_hover_text(st.t("prop.clear_dates_hint"))
-            .clicked()
+    if share && crate::widgets::craft::secondary_button(ui, st.t("prop.clear_dates")).on_hover_text(st.t("prop.clear_dates_hint")).clicked()
     {
         let ids = ids.to_vec();
         edit(doc, st, "Clear Dates", move |p| p.clear_dates(&ids).map_err(|e| e.to_string()));
@@ -1150,15 +1134,7 @@ fn placement_row(
     });
 }
 
-fn placement_combo(
-    ui: &mut Ui,
-    doc: &mut Document,
-    st: &mut UiState,
-    ids: &[TaskId],
-    first: TaskId,
-    multi: bool,
-    salt: &'static str,
-) {
+fn placement_combo(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], first: TaskId, multi: bool, salt: &'static str) {
     let tasks: Vec<&Task> = ids.iter().filter_map(|id| doc.project.task(*id)).collect();
     let all_manual = tasks.iter().all(|t| t.mode == ScheduleMode::Manual);
     let current = common_eq(tasks.iter().map(|t| placement_kind_for_ui(t.constraint.kind)));
@@ -1171,24 +1147,24 @@ fn placement_combo(
         .unwrap_or_else(|| st.t("common.multiple").to_string());
     let width = ui.available_width().clamp(120.0, 280.0);
     egui::ComboBox::from_id_salt((salt, first, multi)).width(width).selected_text(shown).show_ui(ui, |ui| {
-            for kind in [ConstraintKind::Asap, ConstraintKind::Alap] {
-                let selected = current == Some(kind);
-                let label = match kind {
-                    ConstraintKind::Asap => st.t("prop.placement_asap"),
-                    ConstraintKind::Alap => st.t("prop.placement_alap"),
-                    _ => kind.label(),
-                };
-                let resp = ui.add_enabled(!all_manual, egui::Button::selectable(selected, label));
-                if resp.clicked() && !selected {
-                    let ids = ids.to_vec();
-                    edit(doc, st, "Placement", move |p| {
-                        for id in &ids {
-                            p.set_placement(*id, kind).map_err(|e| e.to_string())?;
-                        }
-                        Ok(())
-                    });
-                }
+        for kind in [ConstraintKind::Asap, ConstraintKind::Alap] {
+            let selected = current == Some(kind);
+            let label = match kind {
+                ConstraintKind::Asap => st.t("prop.placement_asap"),
+                ConstraintKind::Alap => st.t("prop.placement_alap"),
+                _ => kind.label(),
+            };
+            let resp = ui.add_enabled(!all_manual, egui::Button::selectable(selected, label));
+            if resp.clicked() && !selected {
+                let ids = ids.to_vec();
+                edit(doc, st, "Placement", move |p| {
+                    for id in &ids {
+                        p.set_placement(*id, kind).map_err(|e| e.to_string())?;
+                    }
+                    Ok(())
+                });
             }
+        }
     });
     if all_manual {
         ui.label(RichText::new(st.t("prop.placement_hint_manual")).size(11.0).color(theme::pal().TEXT_WEAK));
@@ -1568,8 +1544,7 @@ pub(crate) fn effective_duration_mode_for_ui(p: &Project, id: TaskId, t: &Task) 
     }
     // Size-in-group fill/percent derive a calculated duration without project-wide rules.
     let percent_derived = t.duration_percent.is_some_and(|pct| pct.is_finite() && pct > 0.0);
-    let stretch_derived =
-        t.fills_group && t.start_mode() == DateMode::Unrestricted && t.finish_mode() == DateMode::Unrestricted;
+    let stretch_derived = t.fills_group && t.start_mode() == DateMode::Unrestricted && t.finish_mode() == DateMode::Unrestricted;
     if percent_derived || stretch_derived { (DurationMode::Auto, true) } else { (DurationMode::Fixed, false) }
 }
 
@@ -1859,7 +1834,9 @@ fn predecessors(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId
             crate::widgets::task_picker::TaskChoice::from_project(&doc.project, i, enabled)
         })
         .collect();
-    if let Some(pred) = crate::widgets::task_picker::show(ui, ("pred_add", first), crate::lang::text("prop.add_predecessor"), 280.0, &choices) {
+    if let Some(pred) =
+        crate::widgets::task_picker::show(ui, ("pred_add", first), crate::lang::text("prop.add_predecessor"), 280.0, &choices)
+    {
         let ids = ids.to_vec();
         edit(doc, st, "Add predecessor", move |p| {
             for id in &ids {
@@ -1911,40 +1888,34 @@ fn dependency_row(
             None => name,
         };
         ui.label(RichText::new(title).color(theme::pal().TEXT));
-        egui::ComboBox::from_id_salt(("dep_kind", succ, pred, show_pred_name))
-            .width(52.0)
-            .selected_text(kind.code())
-            .show_ui(ui, |ui| {
-                for next in LinkType::ALL {
-                    if ui.selectable_label(kind == next, next.code()).clicked() {
-                        edit(doc, st, "Dependency type", move |p| {
-                            p.link_drive(pred, succ, next, lag, Some(drive)).map_err(|e| e.to_string())?;
-                            Ok(())
-                        });
-                    }
+        egui::ComboBox::from_id_salt(("dep_kind", succ, pred, show_pred_name)).width(52.0).selected_text(kind.code()).show_ui(ui, |ui| {
+            for next in LinkType::ALL {
+                if ui.selectable_label(kind == next, next.code()).clicked() {
+                    edit(doc, st, "Dependency type", move |p| {
+                        p.link_drive(pred, succ, next, lag, Some(drive)).map_err(|e| e.to_string())?;
+                        Ok(())
+                    });
                 }
-            });
+            }
+        });
         let drive_label = match drive {
             LinkDrive::FromPredecessor => crate::lang::text("prop.drive_pred_short"),
             LinkDrive::FromSuccessor => crate::lang::text("prop.drive_succ_short"),
         };
-        egui::ComboBox::from_id_salt(("dep_drive", succ, pred, show_pred_name))
-            .width(56.0)
-            .selected_text(drive_label)
-            .show_ui(ui, |ui| {
-                for next in LinkDrive::ALL {
-                    let label = match next {
-                        LinkDrive::FromPredecessor => crate::lang::text("prop.drive_pred"),
-                        LinkDrive::FromSuccessor => crate::lang::text("prop.drive_succ"),
-                    };
-                    if ui.selectable_label(drive == next, label).clicked() {
-                        edit(doc, st, "Schedule drive", move |p| {
-                            p.link_drive(pred, succ, kind, lag, Some(next)).map_err(|e| e.to_string())?;
-                            Ok(())
-                        });
-                    }
+        egui::ComboBox::from_id_salt(("dep_drive", succ, pred, show_pred_name)).width(56.0).selected_text(drive_label).show_ui(ui, |ui| {
+            for next in LinkDrive::ALL {
+                let label = match next {
+                    LinkDrive::FromPredecessor => crate::lang::text("prop.drive_pred"),
+                    LinkDrive::FromSuccessor => crate::lang::text("prop.drive_succ"),
+                };
+                if ui.selectable_label(drive == next, label).clicked() {
+                    edit(doc, st, "Schedule drive", move |p| {
+                        p.link_drive(pred, succ, kind, lag, Some(next)).map_err(|e| e.to_string())?;
+                        Ok(())
+                    });
                 }
-            });
+            }
+        });
         let mut days = lag_days(lag, mpd);
         if ui.add(egui::DragValue::new(&mut days).range(-365.0..=365.0).speed(1.0).suffix("d")).changed() {
             let minutes = (days as i64).saturating_mul(mpd);

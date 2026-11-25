@@ -27,6 +27,7 @@ mod menubar;
 mod open_requests;
 mod panes;
 mod planner_export;
+mod planner_send;
 mod printing;
 mod quick_entry;
 mod recovery;
@@ -133,11 +134,7 @@ pub fn run() -> anyhow::Result<()> {
             .with_icon(logo::icon_data()),
         &decision.frame,
     );
-    let options = eframe::NativeOptions {
-        viewport,
-        wgpu_options: wgpu_options(),
-        ..Default::default()
-    };
+    let options = eframe::NativeOptions { viewport, wgpu_options: wgpu_options(), ..Default::default() };
     let started = plancraft_core::guard::catch("opening the window", || {
         eframe::run_native("PlanCraft", options, Box::new(move |cc| Ok(Box::new(app::PlanCraftApp::new(cc, shared)))))
     });

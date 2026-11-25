@@ -72,21 +72,9 @@ fn file_menu(s: &MenuSnapshot) -> Vec<Node> {
         item(s, "file.save", Command::Save, lang::text("menu.save")),
         item(s, "file.saveAs", Command::SaveAs, lang::text("menu.save_as")),
         item(s, "file.print", Command::Print, lang::text("menu.print")),
-        item(s, "file.exportPdf", Command::ExportPdf, lang::text("menu.export_pdf")),
         item(s, "file.import", Command::ImportSpreadsheet, lang::text("menu.import")),
-        Node::Submenu {
-            label: lang::text("menu.export_csv").into(),
-            children: plancraft_core::tabular::CsvTable::ALL
-                .iter()
-                .map(|t| item(s, &format!("file.exportCsv.{}", t.label()), Command::ExportCsv(*t), &format!("{}…", t.label())))
-                .collect(),
-            role: None,
-        },
-        item(s, "file.exportXml", Command::ExportMspdi, lang::text("menu.export_xml")),
-        item(s, "file.exportReport", Command::ExportReport, lang::text("menu.export_report")),
-        item(s, "file.exportGantt", Command::ExportGantt, lang::text("menu.export_gantt")),
-        item(s, "file.exportUsage", Command::ExportUsage, lang::text("menu.export_usage")),
-        item(s, "file.exportPlanner", Command::ExportPlanner, lang::text("menu.export_planner")),
+        item(s, "file.sendPlanner", Command::SendPlanner, lang::text("menu.send_planner")),
+        Node::Submenu { label: lang::text("menu.export").into(), children: export_menu(s), role: None },
         Node::Separator,
         item(s, "file.projectInfo", Command::ProjectInfo, lang::text("menu.project_info")),
         item(s, "file.start", Command::StartPage, lang::text("menu.start")),
@@ -94,9 +82,7 @@ fn file_menu(s: &MenuSnapshot) -> Vec<Node> {
         Node::Separator,
         item(s, "file.quick", Command::QuickEntry, lang::text("menu.quick")),
         item(s, "file.distill", Command::Distill, lang::text("menu.distill")),
-        item(s, "file.ai", Command::AiSettings, lang::text("menu.ai")),
         item(s, "file.settings", Command::Settings, "Settings…"),
-        item(s, "file.mcp", Command::McpPanel, lang::text("menu.mcp")),
         Node::Separator,
         {
             let mut quit = Item::plain("file.quit", Command::Quit, lang::text("menu.exit"));
@@ -110,6 +96,27 @@ fn file_menu(s: &MenuSnapshot) -> Vec<Node> {
     if let Some(Node::Item(it)) = nodes.iter_mut().find(|n| matches!(n, Node::Item(i) if i.id == "file.settings")) {
         it.role = Some(ItemRole::Settings);
     }
+    tidy(nodes)
+}
+
+/// File formats. Planner Premium itself is the Send command on the File menu.
+fn export_menu(s: &MenuSnapshot) -> Vec<Node> {
+    let nodes = vec![
+        item(s, "file.exportPdf", Command::ExportPdf, lang::text("menu.export_pdf")),
+        Node::Submenu {
+            label: lang::text("menu.export_csv").into(),
+            children: plancraft_core::tabular::CsvTable::ALL
+                .iter()
+                .map(|t| item(s, &format!("file.exportCsv.{}", t.label()), Command::ExportCsv(*t), &format!("{}…", t.label())))
+                .collect(),
+            role: None,
+        },
+        item(s, "file.exportXml", Command::ExportMspdi, lang::text("menu.export_xml")),
+        item(s, "file.exportXmlPlanner", Command::ExportMspdiPlanner, lang::text("menu.export_xml_planner")),
+        item(s, "file.exportReport", Command::ExportReport, lang::text("menu.export_report")),
+        item(s, "file.exportGantt", Command::ExportGantt, lang::text("menu.export_gantt")),
+        item(s, "file.exportUsage", Command::ExportUsage, lang::text("menu.export_usage")),
+    ];
     tidy(nodes)
 }
 

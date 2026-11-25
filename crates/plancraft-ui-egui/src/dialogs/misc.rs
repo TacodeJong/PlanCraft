@@ -40,12 +40,7 @@ impl AssignResources {
             let Some(doc) = ws.index_of(handle).and_then(|i| ws.docs.get(i)) else {
                 return false;
             };
-            doc.project
-                .tasks
-                .iter()
-                .filter(|t| sel.tasks.contains(&t.id) && !t.sched.is_summary)
-                .map(|t| t.id)
-                .collect::<Vec<_>>()
+            doc.project.tasks.iter().filter(|t| sel.tasks.contains(&t.id) && !t.sched.is_summary).map(|t| t.id).collect::<Vec<_>>()
         };
         {
             let Some(doc) = ws.index_of(handle).and_then(|i| ws.docs.get_mut(i)) else {

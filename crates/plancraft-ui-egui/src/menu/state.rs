@@ -80,8 +80,10 @@ pub fn command_enabled(cmd: &Command, s: &MenuSnapshot) -> bool {
         | Command::Print
         | Command::ExportPdf
         | Command::ExportMspdi
+        | Command::ExportMspdiPlanner
         | Command::ExportGantt
-        | Command::ExportPlanner => doc,
+        | Command::ExportPlanner
+        | Command::SendPlanner => doc,
         Command::ExportCsv(_) => doc,
         Command::ExportReport => doc && s.view == ViewKind::Report,
         Command::ExportUsage => doc && s.view == ViewKind::TaskUsage,

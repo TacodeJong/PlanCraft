@@ -18,8 +18,27 @@ const MAX_TIMES: usize = 5;
 /// How many years a yearly exception is written for.
 const YEARLY_OCCURRENCES: i32 = 100;
 
+/// How much of the plan the file should carry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Profile {
+    /// Microsoft Project interchange: manual tasks, constraints, deadlines, every resource kind.
+    Project,
+    /// What Planner Premium's project import keeps. Manual scheduling, deadlines and finish
+    /// constraints are omitted: a pinned finish with the start fallen back to the plan start
+    /// stretches an 8-day task across the whole span. Each leaf keeps its calculated start as
+    /// "start no earlier than", which Project does not throw away on recalculation. Milestones
+    /// stay zero-duration. Only work resources are assigned, and only on leaf tasks. Those names
+    /// are also written on each task in a text column named Resources.
+    PlannerPremium,
+}
+
 /// Writes a plan as an MSPDI document. Returns the XML and notes on what it leaves out.
 pub fn export(p: &Project) -> (String, Vec<String>) {
+    export_with(p, Profile::Project)
+}
+
+/// Writes a plan as an MSPDI document for `profile`.
+pub fn export_with(p: &Project, profile: Profile) -> (String, Vec<String>) {
     let mut notes: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut note = |m: &'static str| *notes.entry(m).or_insert(0) += 1;
     let mut w = Writer::new();
@@ -98,8 +117,19 @@ pub fn export(p: &Project) -> (String, Vec<String>) {
             None => note("custom fields beyond the number Microsoft Project has of their kind were left out"),
         }
     }
-    let planner = used_planner_fields(p);
-    if !defs.is_empty() || !planner.is_empty() {
+    let planner = if profile == Profile::PlannerPremium { Vec::new() } else { used_planner_fields(p) };
+    // Planner Premium does not import resources. A task text column is what its import keeps
+    // (up to ten custom fields). Leave the PlanCraft fields out of this profile so this column
+    // is one of those ten.
+    let resource_field = if profile == Profile::PlannerPremium { resource_column(&slots) } else { None };
+    if profile == Profile::PlannerPremium && has_named_work_assignment(p) {
+        if resource_field.is_none() {
+            note("assigned people were left out of the Resources column; every text field was already in use");
+        } else {
+            note("assigned people were written in the Resources column; Planner Premium does not import resource rows");
+        }
+    }
+    if !defs.is_empty() || !planner.is_empty() || resource_field.is_some() {
         w.open("ExtendedAttributes");
         for (fid, slot, f) in &defs {
             w.open("ExtendedAttribute");
@@ -132,6 +162,18 @@ pub fn export(p: &Project) -> (String, Vec<String>) {
             w.leaf("UserDef", 1);
             w.leaf("Alias", field.alias());
             w.close("ExtendedAttribute");
+        }
+        if let Some(slot) = resource_field {
+            if let Some(fid) = codes::field_id(slot) {
+                w.open("ExtendedAttribute");
+                w.leaf("FieldID", fid);
+                w.leaf("FieldName", slot.field_name());
+                w.leaf("CFType", codes::cf_type_code(CustomFieldKind::Text));
+                w.leaf("ElemType", 20);
+                w.leaf("UserDef", 1);
+                w.leaf("Alias", RESOURCE_COLUMN);
+                w.close("ExtendedAttribute");
+            }
         }
         w.close("ExtendedAttributes");
     }
@@ -174,15 +216,21 @@ pub fn export(p: &Project) -> (String, Vec<String>) {
     w.leaf("Summary", 1);
     w.close("Task");
     for (i, t) in p.tasks.iter().enumerate() {
-        task(&mut w, p, i, t, &slots, &mut note);
+        task(&mut w, p, i, t, &slots, resource_field, profile, &mut note);
     }
     w.close("Tasks");
 
     w.open("Resources");
-    for (i, r) in p.resources.iter().enumerate() {
+    let mut resource_row = 0usize;
+    for r in &p.resources {
+        if profile == Profile::PlannerPremium && r.kind != ResourceType::Work {
+            note("material and cost resources were left out; Planner Premium only assigns work resources");
+            continue;
+        }
+        resource_row += 1;
         w.open("Resource");
         w.leaf("UID", r.id.0);
-        w.leaf("ID", i + 1);
+        w.leaf("ID", resource_row);
         w.leaf("Name", &r.name);
         w.leaf("Type", if r.kind == ResourceType::Material { 0 } else { 1 });
         if !r.initials.is_empty() {
@@ -251,6 +299,21 @@ pub fn export(p: &Project) -> (String, Vec<String>) {
         note("logged time of people not assigned to the task was left out");
     }
     for a in &p.assignments {
+        let resource = p.resource(a.resource);
+        let summary = tasks.get(&a.task).is_some_and(|t| t.sched.is_summary);
+        if profile == Profile::PlannerPremium {
+            if resource.is_none_or(|r| r.kind != ResourceType::Work) {
+                note("assignments of material and cost resources were left out");
+                continue;
+            }
+            if summary {
+                note("assignments on summary tasks were left out; Planner Premium assigns people on the tasks themselves");
+                continue;
+            }
+            if a.contour != WorkContour::Flat {
+                note("work contours were written as flat; Planner Premium does not import contours");
+            }
+        }
         w.open("Assignment");
         w.leaf("UID", a.id.0);
         w.leaf("TaskUID", a.task.0);
@@ -271,7 +334,8 @@ pub fn export(p: &Project) -> (String, Vec<String>) {
         }
         w.leaf("Units", a.units);
         w.leaf("Work", codes::duration_text(a.work));
-        w.leaf("WorkContour", codes::contour_code(a.contour));
+        let contour = if profile == Profile::PlannerPremium { WorkContour::Flat } else { a.contour };
+        w.leaf("WorkContour", codes::contour_code(contour));
         w.close("Assignment");
     }
     w.close("Assignments");
@@ -511,6 +575,73 @@ fn progress_minutes(t: &Task, duration: Minutes) -> (Minutes, Minutes) {
     (done, duration.saturating_sub(done))
 }
 
+/// Alias of the task text column that carries the names of the people assigned to the task.
+const RESOURCE_COLUMN: &str = "Resources";
+/// Text1–Text30 hold at most this many characters.
+const RESOURCE_COLUMN_CHARS: usize = 255;
+
+fn has_named_work_assignment(p: &Project) -> bool {
+    p.assignments.iter().any(|a| p.resource(a.resource).is_some_and(|r| r.kind == ResourceType::Work && !r.name.is_empty()))
+}
+
+/// The first task text slot that is not already a user custom field.
+fn resource_column(slots: &HashMap<CustomFieldId, (u32, CustomFieldKind)>) -> Option<Slot> {
+    let limit = codes::user_slot_limit(CustomFieldKind::Text);
+    (1..=limit).find(|number| !text_slot_taken(slots, *number)).map(|number| Slot { kind: CustomFieldKind::Text, number })
+}
+
+fn text_slot_taken(slots: &HashMap<CustomFieldId, (u32, CustomFieldKind)>, number: usize) -> bool {
+    slots.values().any(|(fid, kind)| *kind == CustomFieldKind::Text && codes::slot_of(*fid).is_some_and(|slot| slot.number == number))
+}
+
+/// Names of the work resources assigned to `task`, joined with "; ", cut at [`RESOURCE_COLUMN_CHARS`].
+fn assigned_names(p: &Project, task: TaskId) -> (String, bool) {
+    let mut text = String::new();
+    let mut truncated = false;
+    for a in &p.assignments {
+        if a.task != task {
+            continue;
+        }
+        let Some(r) = p.resource(a.resource) else { continue };
+        if r.kind != ResourceType::Work || r.name.is_empty() {
+            continue;
+        }
+        if !append_limited(&mut text, &r.name, RESOURCE_COLUMN_CHARS) {
+            truncated = true;
+            break;
+        }
+    }
+    (text, truncated)
+}
+
+/// Appends `name`, preceded by "; " when `text` is not empty. Returns false when `name` did not fit whole.
+fn append_limited(text: &mut String, name: &str, limit: usize) -> bool {
+    let sep = if text.is_empty() { "" } else { "; " };
+    let room = limit.saturating_sub(text.chars().count());
+    let sep_len = sep.chars().count();
+    if room <= sep_len {
+        return false;
+    }
+    let take = room - sep_len;
+    let mut count = 0usize;
+    let mut end = 0usize;
+    for (i, c) in name.char_indices() {
+        if count == take {
+            break;
+        }
+        count += 1;
+        end = i.saturating_add(c.len_utf8());
+    }
+    let Some(piece) = name.get(..end) else { return false };
+    if piece.is_empty() {
+        return false;
+    }
+    let whole = count == name.chars().count();
+    text.push_str(sep);
+    text.push_str(piece);
+    whole
+}
+
 fn used_planner_fields(p: &Project) -> Vec<codes::PlannerField> {
     codes::PlannerField::ALL
         .into_iter()
@@ -563,6 +694,8 @@ fn task(
     row: usize,
     t: &Task,
     slots: &HashMap<CustomFieldId, (u32, CustomFieldKind)>,
+    resource_field: Option<Slot>,
+    profile: Profile,
     note: &mut impl FnMut(&'static str),
 ) {
     let s = &p.settings;
@@ -575,17 +708,25 @@ fn task(
         w.leaf("Active", 0);
     }
     if t.mode == ScheduleMode::Manual {
-        w.leaf("Manual", 1);
+        if profile == Profile::PlannerPremium {
+            note("manually scheduled tasks were exported as automatically scheduled, keeping their scheduled start, finish and duration");
+        } else {
+            w.leaf("Manual", 1);
+        }
     }
     w.leaf("Type", codes::task_type_code(t.task_type));
     w.leaf("WBS", p.wbs(row));
     w.leaf("OutlineNumber", p.wbs(row));
     w.leaf("OutlineLevel", t.outline_level);
     w.leaf("Priority", t.priority);
-    if let Some(v) = t.sched.start {
+    let milestone = t.is_milestone();
+    // Planner Premium treats a non-zero duration as a task. A milestone is the start instant twice.
+    let start = t.sched.start;
+    let finish = if profile == Profile::PlannerPremium && milestone { start } else { t.sched.finish };
+    if let Some(v) = start {
         w.leaf("Start", codes::datetime_text(v));
     }
-    if let Some(v) = t.sched.finish {
+    if let Some(v) = finish {
         w.leaf("Finish", codes::datetime_text(v));
     }
     // The resolved duration. A leaf's stored duration is only the fallback; exporting it next to
@@ -621,14 +762,40 @@ fn task(
     w.leaf("ActualDuration", codes::duration_text(done));
     w.leaf("ActualWork", codes::duration_text(t.sched.actual_work));
     w.leaf("RemainingDuration", codes::duration_text(left));
-    let native = native_constraint(t, note);
-    w.leaf("ConstraintType", codes::constraint_code(native.kind));
-    w.leaf("CalendarUID", t.calendar.map_or(-1, |c| i64::from(c.0)));
-    if let Some(d) = native.date.filter(|_| native.kind.needs_date()) {
-        w.leaf("ConstraintDate", codes::datetime_text(d));
-    }
-    if let Some(d) = native.deadline {
-        w.leaf("Deadline", codes::datetime_text(d));
+    let calendar = t.calendar.map_or(-1, |c| i64::from(c.0));
+    if profile == Profile::PlannerPremium {
+        // A finish constraint (or a deadline the importer keeps as one) pins the finish and lets
+        // the start fall back to the plan start, so the duration becomes the whole span.
+        // As soon as possible is the other failure: Project recalculates and moves the start
+        // back to the plan start, throwing away the calculated dates. Start-no-earlier-than at
+        // the calculated start is a constraint both Project and Planner Premium keep.
+        if t.constraint.kind != ConstraintKind::Asap || !t.bounds.is_empty() {
+            note("constraints were left out; the calculated start is kept with start-no-earlier-than");
+        }
+        if t.deadline.is_some() || t.bounds.finish_latest.is_some() {
+            note("deadlines were left out; Planner Premium does not import them");
+        }
+        if !t.sched.is_summary
+            && let Some(when) = start
+        {
+            w.leaf("ConstraintType", codes::constraint_code(ConstraintKind::Snet));
+            w.leaf("CalendarUID", calendar);
+            w.leaf("ConstraintDate", codes::datetime_text(when));
+            note("calculated starts were pinned with start-no-earlier-than");
+        } else {
+            w.leaf("ConstraintType", codes::constraint_code(ConstraintKind::Asap));
+            w.leaf("CalendarUID", calendar);
+        }
+    } else {
+        let native = native_constraint(t, note);
+        w.leaf("ConstraintType", codes::constraint_code(native.kind));
+        w.leaf("CalendarUID", calendar);
+        if let Some(d) = native.date.filter(|_| native.kind.needs_date()) {
+            w.leaf("ConstraintDate", codes::datetime_text(d));
+        }
+        if let Some(d) = native.deadline {
+            w.leaf("Deadline", codes::datetime_text(d));
+        }
     }
     if t.leveling_delay > 0 {
         let (value, format) = leveling_delay(t.leveling_delay, s.time.minutes_per_day);
@@ -693,12 +860,28 @@ fn task(
         }
         w.close("ExtendedAttribute");
     }
-    for (field, value) in planner_entries(t) {
-        let Some(fid) = codes::field_id(field.slot()) else { continue };
-        w.open("ExtendedAttribute");
-        w.leaf("FieldID", fid);
-        w.leaf("Value", value);
-        w.close("ExtendedAttribute");
+    if profile != Profile::PlannerPremium {
+        for (field, value) in planner_entries(t) {
+            let Some(fid) = codes::field_id(field.slot()) else { continue };
+            w.open("ExtendedAttribute");
+            w.leaf("FieldID", fid);
+            w.leaf("Value", value);
+            w.close("ExtendedAttribute");
+        }
+    }
+    if let Some(slot) = resource_field {
+        if let Some(fid) = codes::field_id(slot) {
+            let (text, truncated) = assigned_names(p, t.id);
+            if !text.is_empty() {
+                if truncated {
+                    note("assigned names were shortened to fit the Resources column");
+                }
+                w.open("ExtendedAttribute");
+                w.leaf("FieldID", fid);
+                w.leaf("Value", text);
+                w.close("ExtendedAttribute");
+            }
+        }
     }
     for (n, i) in &t.interim {
         let Some((start_id, finish_id)) = codes::interim_ids(*n) else { continue };
