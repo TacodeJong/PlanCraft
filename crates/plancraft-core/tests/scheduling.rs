@@ -1026,7 +1026,7 @@ fn elapsed_durations_survive_files() {
     assert_eq!((q.tasks[0].duration, q.tasks[0].sched.finish), (33 * 1440, p.tasks[0].sched.finish));
     // CSV.
     let csv = plancraft_core::tabular::to_csv(&p);
-    assert!(csv.contains("33 edays?"), "{csv}");
+    assert!(csv.contains("33ed?"), "{csv}");
     let sheets = plancraft_core::tabular::read_bytes(csv.as_bytes(), "plan.csv").unwrap();
     let grid = &sheets.sheets[0].1;
     let (r, _) = plancraft_core::tabular::build(grid, &plancraft_core::tabular::ImportOptions::guess(grid, "x")).unwrap();
@@ -1071,9 +1071,8 @@ fn finish_links_into_an_automatic_summary_are_refused() {
     for kind in [LinkType::FF, LinkType::SF] {
         let err = p.link(x.into(), s, kind, Lag::None).unwrap_err();
         assert!(err.to_string().contains("subtasks"), "{err}");
-        let err = p
-            .set_predecessors(s, vec![Dependency { predecessor: x.into(), kind, lag: Lag::None, drive: Default::default() }])
-            .unwrap_err();
+        let err =
+            p.set_predecessors(s, vec![Dependency { predecessor: x.into(), kind, lag: Lag::None, drive: Default::default() }]).unwrap_err();
         assert!(err.to_string().contains("subtasks"), "{err}");
     }
     assert!(p.task(s).unwrap().predecessors.is_empty(), "a refused link leaves nothing behind");
@@ -1472,4 +1471,31 @@ fn cyclus_beleidsbrief_predecessor_respects_fnlt_successor() {
     assert_eq!(send.finish_mode(), DateMode::NoLater);
     assert_eq!(draft.start_mode(), DateMode::Unrestricted);
     assert_eq!(draft.finish_mode(), DateMode::Unrestricted);
+}
+
+#[test]
+fn a_milestone_starts_at_the_clock_the_user_types() {
+    let mut p = project();
+    let id = p.add_milestone("Kickoff", None);
+    recalculate(&mut p);
+    assert!(p.task(id).unwrap().chosen_start().is_none(), "nothing fills a start time in");
+    let at = d(2026, 10, 20).and_hms_opt(15, 30, 0).unwrap();
+    p.set_milestone_start(id, Some(at)).unwrap();
+    recalculate(&mut p);
+    assert_eq!(p.task(id).unwrap().chosen_start(), Some(at));
+    assert_eq!(start(&p, id), at);
+    assert_eq!(finish(&p, id), d(2026, 10, 20).and_hms_opt(16, 30, 0).unwrap());
+}
+
+#[test]
+fn a_milestone_start_time_overrides_a_later_link() {
+    let mut p = project();
+    let earlier = task(&mut p, "Prep", 1);
+    let meet = p.add_milestone("Meet", None);
+    p.link(earlier.into(), meet, LinkType::FS, Lag::None).unwrap();
+    let at = d(2026, 10, 19).and_hms_opt(10, 0, 0).unwrap();
+    p.set_milestone_start(meet, Some(at)).unwrap();
+    recalculate(&mut p);
+    assert_eq!(start(&p, meet), at);
+    assert_eq!(finish(&p, meet), d(2026, 10, 19).and_hms_opt(11, 0, 0).unwrap());
 }

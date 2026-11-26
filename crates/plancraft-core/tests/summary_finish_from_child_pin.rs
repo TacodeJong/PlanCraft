@@ -71,22 +71,10 @@ fn clearing_summary_finish_keeps_child_hard_finish_no_later() {
     p.set_date_mode(s, true, DateMode::Unrestricted).unwrap();
     recalculate(&mut p);
 
-    assert_eq!(
-        start(&p, leaf),
-        dt(2026, 11, 26, 8),
-        "child Start On must still hold after summary finish is from subtasks"
-    );
-    assert_eq!(
-        finish(&p, leaf),
-        dt(2027, 1, 13, 17),
-        "child hard Finish NLT must still hold after summary finish is from subtasks"
-    );
+    assert_eq!(start(&p, leaf), dt(2026, 11, 26, 8), "child Start On must still hold after summary finish is from subtasks");
+    assert_eq!(finish(&p, leaf), dt(2027, 1, 13, 17), "child hard Finish NLT must still hold after summary finish is from subtasks");
     assert_eq!(start(&p, s), dt(2026, 11, 26, 8), "summary start still rolls up from earliest child");
-    assert_eq!(
-        finish(&p, s),
-        dt(2027, 1, 13, 17),
-        "summary finish from subtasks must stay capped by the child hard finish"
-    );
+    assert_eq!(finish(&p, s), dt(2027, 1, 13, 17), "summary finish from subtasks must stay capped by the child hard finish");
 }
 
 #[test]
@@ -120,7 +108,6 @@ fn clearing_summary_finish_keeps_child_finish_on() {
     assert_eq!(finish(&p, s), dt(2027, 1, 13, 17));
     assert_eq!(start(&p, s), dt(2026, 11, 26, 8));
 }
-
 
 #[test]
 fn summary_predecessor_must_not_outrun_child_hard_finish_when_summary_finish_is_dynamic() {
@@ -175,7 +162,6 @@ fn summary_predecessor_must_not_outrun_child_hard_finish_when_summary_finish_is_
     assert_eq!(start(&p, s), dt(2026, 11, 26, 8), "summary start from subtasks follows child, not only FS pred");
     assert_eq!(finish(&p, s), dt(2027, 1, 13, 17), "summary finish from subtasks follows child hard finish");
 }
-
 
 #[test]
 fn nested_share_floor_must_not_outrun_child_hard_finish_no_later() {

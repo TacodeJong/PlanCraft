@@ -33,9 +33,7 @@ fn step(ctx: &Ctx, a: &Args, redo: bool) -> ToolResult {
     let mut done = Vec::new();
     let mut refused = None;
     for _ in 0..steps {
-        let label = ctx.read(a, |doc| {
-            Ok(if redo { doc.redo_label() } else { doc.undo_label() }.map(str::to_string))
-        })?;
+        let label = ctx.read(a, |doc| Ok(if redo { doc.redo_label() } else { doc.undo_label() }.map(str::to_string)))?;
         let Some(label) = label else { break };
         match ctx.run_engine(a, id, json!({})) {
             Ok(_) => done.push(label),

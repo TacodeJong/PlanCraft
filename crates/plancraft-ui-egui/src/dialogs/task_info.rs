@@ -561,6 +561,10 @@ impl TaskInfo {
             if self.finish != o.finish {
                 t.manual_finish = self.finish;
             }
+            // A milestone's typed finish would keep the old clock. The duration owns the finish.
+            if self.milestone && self.start != o.start {
+                t.manual_finish = None;
+            }
         }
         let estimate_changed = self.est_kind != o.est_kind
             || self.points != o.points
@@ -593,10 +597,10 @@ impl TaskInfo {
                 p.set_milestone(id, self.milestone).map_err(err)?;
             }
             // Duration mode before a typed duration: typing opts out of Auto via set_duration.
-            if !self.milestone && self.duration_mode != o.duration_mode {
+            if self.duration_mode != o.duration_mode {
                 p.set_duration_mode(id, self.duration_mode).map_err(err)?;
             }
-            if !self.milestone && (self.duration != o.duration || self.estimated != o.estimated) {
+            if self.duration != o.duration || self.estimated != o.estimated {
                 let typed = p.parse_task_duration(&self.duration).ok_or_else(|| format!("'{}' is not a valid duration", self.duration))?;
                 // The duration text shows "?" for an estimated task: unless it was edited, the box
                 // decides (unticking it would otherwise never take).
@@ -832,13 +836,11 @@ impl TaskInfo {
                     ui.label(format!("{}:", crate::lang::text("common.duration")));
                     // Several tasks: each milestone or summary among them keeps its own duration.
                     // Auto duration is calculated and read-only until Fixed is selected again.
-                    let duration_editable = if self.is_multi() {
-                        !self.summary && self.duration_mode == DurationMode::Fixed
-                    } else {
-                        !self.milestone && !self.summary && self.duration_mode == DurationMode::Fixed
-                    };
+                    let duration_editable = !self.summary && self.duration_mode == DurationMode::Fixed;
                     ui.add_enabled(duration_editable, crate::widgets::craft::text_edit(&mut self.duration).desired_width(80.0))
-                        .on_hover_text(if self.duration_mode == DurationMode::Auto {
+                        .on_hover_text(if self.milestone {
+                            crate::lang::text("prop.milestone_duration")
+                        } else if self.duration_mode == DurationMode::Auto {
                             crate::lang::text("prop.duration_auto_hint")
                         } else {
                             ""
@@ -1050,7 +1052,45 @@ impl TaskInfo {
     /// One side of the single-task date rules: mode combo plus the date editors it needs.
     /// A manual task's pinned date is edited by the Start/Finish fields above, so On shows
     /// no duplicate editor then.
-    fn date_rule_row(&mut self, ui: &mut Ui, p: &Project, finish: bool, minute: u32) {
+    /// Whether the milestone start field should show a clock. A manual start is one the user
+    /// typed. An automatic milestone shows a clock only after it was pinned, not when the
+    /// schedule happens to land at 17:00.
+    fn milestone_show_time(&self) -> bool {
+        if self.mode == ScheduleMode::Manual {
+            return self.start.is_some();
+        }
+        self.start_latest_fixed && self.start_earliest.is_some() && self.start_earliest == self.start_latest
+    }
+
+    /// Stores a typed milestone start. `None` clears the pin. The finish follows the duration.
+    fn pin_milestone_start(&mut self, when: Option<DateTime>) {
+        let Some(dt) = when else {
+            if self.mode == ScheduleMode::Manual {
+                self.start = None;
+            } else {
+                self.start_earliest = None;
+                self.start_latest = None;
+                self.start_latest_fixed = false;
+            }
+            return;
+        };
+        self.start = Some(dt);
+        if self.mode == ScheduleMode::Manual {
+            return;
+        }
+        self.start_earliest = Some(dt);
+        self.start_latest = Some(dt);
+        self.start_latest_fixed = true;
+        self.finish_earliest = None;
+        self.finish_latest = None;
+        self.finish_latest_fixed = false;
+        if matches!(self.constraint, ConstraintKind::Fnet | ConstraintKind::Fnlt | ConstraintKind::Mfo) {
+            self.constraint = ConstraintKind::Asap;
+            self.constraint_date.clear();
+        }
+    }
+
+    fn date_rule_row(&mut self, ui: &mut Ui, p: &Project, finish: bool, minute: u32, choose_time: bool, show_time: bool) {
         ui.label(if finish {
             format!("{}:", crate::lang::text("common.finish"))
         } else {
@@ -1095,30 +1135,37 @@ impl TaskInfo {
                 ui.label(RichText::new(crate::lang::text("ti.pinned_dates")).color(theme::pal().TEXT_WEAK));
             }
             DateMode::On => {
-                if let Some(Some(d)) = pick_date(ui, lo_salt, min, false, true, minute, "") {
-                    set(self, Some(d), Some(d));
+                if let Some(Some(d)) = pick_when(ui, lo_salt, min, false, true, minute, "", choose_time, show_time) {
+                    if choose_time && !finish {
+                        self.pin_milestone_start(Some(d));
+                    } else {
+                        set(self, Some(d), Some(d));
+                    }
                 }
             }
             DateMode::NoEarlier => {
-                if let Some(Some(d)) = pick_date(ui, lo_salt, min, false, true, minute, "") {
+                if let Some(Some(d)) = pick_when(ui, lo_salt, min, false, true, minute, "", choose_time, show_time) {
                     set(self, Some(d), max);
                 }
             }
             DateMode::NoLater => {
-                if let Some(Some(d)) = pick_date(ui, hi_salt, max, false, true, minute, "") {
+                if let Some(Some(d)) = pick_when(ui, hi_salt, max, false, true, minute, "", choose_time, show_time) {
                     set(self, min, Some(d));
+                    if choose_time && !finish {
+                        self.start_latest_fixed = true;
+                    }
                 }
             }
             DateMode::Between => {
                 ui.horizontal(|ui| {
-                    if let Some(Some(d)) = pick_date(ui, lo_salt, min, false, true, minute, "") {
+                    if let Some(Some(d)) = pick_when(ui, lo_salt, min, false, true, minute, "", choose_time, show_time) {
                         if finish {
                             self.finish_earliest = Some(d);
                         } else {
                             self.start_earliest = Some(d);
                         }
                     }
-                    if let Some(Some(d)) = pick_date(ui, hi_salt, max, false, true, minute, "") {
+                    if let Some(Some(d)) = pick_when(ui, hi_salt, max, false, true, minute, "", choose_time, show_time) {
                         if finish {
                             self.finish_latest = Some(d);
                         } else {
@@ -1213,15 +1260,16 @@ impl TaskInfo {
             // A greyed date on an unrestricted side explains itself on hover.
             let unrestricted = |this: &Self, finish: bool| !this.is_multi() && matches!(this.side_window(p, finish), (None, None));
             if self.milestone && !self.is_multi() {
-                // A milestone is one moment, not a start-finish span.
-                ui.label(crate::lang::text("ti.date"));
-                let r = ui.scope(|ui| pick_date(ui, "ti_start", self.start, false, manual, start_minute, empty));
+                // The day can already be known. The clock stays empty until it is typed;
+                // a calculated 17:00 is not filled in as the start time.
+                ui.label(format!("{}:", crate::lang::text("common.start")));
+                let show_time = self.milestone_show_time();
+                let current = if show_time { self.start_earliest.or(self.start) } else { self.start };
+                let r = ui.scope(|ui| pick_when(ui, "ti_start", current, show_time, !self.summary, 0, empty, true, show_time));
                 if let Some(next) = r.inner {
-                    self.start = next;
+                    self.pin_milestone_start(next);
                 }
-                if !manual && unrestricted(self, true) {
-                    r.response.on_hover_text(crate::lang::text("dm.calc_deps"));
-                }
+                r.response.on_hover_text(crate::lang::text("prop.milestone_start"));
             } else {
                 // A summary's dates come from its subtasks: shown greyed, not editable.
                 ui.label(format!("{}:", crate::lang::text("common.start")));
@@ -1325,11 +1373,12 @@ impl TaskInfo {
                 let start_minute = p.settings.time.default_start_time;
                 let finish_minute = p.settings.time.default_finish_time;
                 if self.milestone {
-                    // A milestone is one moment: one rule, on the finish side.
-                    self.date_rule_row(ui, p, true, start_minute);
+                    // The start rule carries the typed clock. The time box stays empty until then.
+                    let show_time = self.milestone_show_time();
+                    self.date_rule_row(ui, p, false, 0, true, show_time);
                 } else {
-                    self.date_rule_row(ui, p, false, start_minute);
-                    self.date_rule_row(ui, p, true, finish_minute);
+                    self.date_rule_row(ui, p, false, start_minute, false, false);
+                    self.date_rule_row(ui, p, true, finish_minute, false, false);
                 }
             });
         } else {
@@ -1856,7 +1905,24 @@ fn pick_date(
     minute: u32,
     empty: &str,
 ) -> Option<Option<DateTime>> {
-    crate::widgets::date_picker::button(ui, crate::widgets::date_picker::DateField { salt, current, clearable, enabled, minute, empty })
+    pick_when(ui, salt, current, clearable, enabled, minute, empty, false, false)
+}
+
+fn pick_when(
+    ui: &mut egui::Ui,
+    salt: &str,
+    current: Option<DateTime>,
+    clearable: bool,
+    enabled: bool,
+    minute: u32,
+    empty: &str,
+    choose_time: bool,
+    show_time: bool,
+) -> Option<Option<DateTime>> {
+    crate::widgets::date_picker::button(
+        ui,
+        crate::widgets::date_picker::DateField { salt, current, clearable, enabled, minute, empty, choose_time, show_time },
+    )
 }
 
 /// A date picker editing an ISO-text field in place, so the diff-apply keeps comparing text.
@@ -2039,7 +2105,10 @@ mod tests {
             assert_eq!(t.duration, 4 * 480);
         }
         let m = p.task(milestone).unwrap();
-        assert!(m.is_milestone() && m.notes == "Same note for all", "a milestone keeps no duration");
+        assert!(
+            m.is_milestone() && m.notes == "Same note for all" && m.duration == 4 * 480,
+            "a milestone keeps its kind and takes the typed duration"
+        );
         assert!(p.task(summary).unwrap().sched.is_summary);
 
         // Only "Estimated" ticked, with durations that differ: each keeps its own, now estimated.

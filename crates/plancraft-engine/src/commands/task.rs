@@ -4,9 +4,7 @@ use plancraft_core::ids::TaskId;
 use plancraft_core::model::{LinkType, ScheduleMode, TaskRef};
 use serde_json::{Value, json};
 
-use super::params::{
-    lag_param, link_type, opt_str, opt_usize, req_task_id, req_u8, schedule_mode, task_ids, top_level_tasks,
-};
+use super::params::{lag_param, link_type, opt_str, opt_usize, req_task_id, req_u8, schedule_mode, task_ids, top_level_tasks};
 use crate::session::{Session, ok_empty};
 
 pub fn run_insert(s: &mut Session, p: &Value) -> Result<Value, String> {
@@ -204,11 +202,7 @@ pub fn run_set_mode(s: &mut Session, p: &Value) -> Result<Value, String> {
         return Err("'tasks' must not be empty".into());
     }
     let mode = schedule_mode(p)?;
-    let label = if mode == ScheduleMode::Manual {
-        "Manually Schedule"
-    } else {
-        "Auto Schedule"
-    };
+    let label = if mode == ScheduleMode::Manual { "Manually Schedule" } else { "Auto Schedule" };
     s.try_edit_active(label, |proj| proj.set_schedule_mode(&ids, mode))?;
     Ok(json!({ "mode": if mode == ScheduleMode::Manual { "manual" } else { "auto" } }))
 }
@@ -256,11 +250,7 @@ pub fn run_toggle_timeline(s: &mut Session, p: &Value) -> Result<Value, String> 
         return Err("'tasks' must not be empty".into());
     }
     let show = s.edit_active("Add to Timeline", |proj| {
-        let new = !ids
-            .first()
-            .and_then(|id| proj.task(*id))
-            .map(|t| t.show_on_timeline)
-            .unwrap_or(false);
+        let new = !ids.first().and_then(|id| proj.task(*id)).map(|t| t.show_on_timeline).unwrap_or(false);
         for id in &ids {
             if let Some(t) = proj.task_mut(*id) {
                 t.show_on_timeline = new;

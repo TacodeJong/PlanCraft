@@ -183,15 +183,14 @@ fn capped_rows_report_their_own_warning_location() {
         collapse_notes.iter().any(|w| w.contains(&collapse_gate_cap.format("%Y-%m-%d %H:%M"))),
         "collapse cap date: {collapse_notes:?}"
     );
-    assert_eq!(
-        fx.p.task(fx.collapse).unwrap().sched.duration,
-        5 * DAY,
-        "impossible window keeps stored duration, not a zero bar"
-    );
+    assert_eq!(fx.p.task(fx.collapse).unwrap().sched.duration, 5 * DAY, "impossible window keeps stored duration, not a zero bar");
 
     assert!(fx.p.task(fx.fixed).unwrap().sched.warnings.is_empty());
     assert!(
-        !report.warnings.iter().any(|w| (w.contains("Auto row:") || w.contains("Stretch row:") || w.contains("Percent row:")) && w.contains("fixed date")),
+        !report
+            .warnings
+            .iter()
+            .any(|w| (w.contains("Auto row:") || w.contains("Stretch row:") || w.contains("Percent row:")) && w.contains("fixed date")),
         "soft limits should not be mislabeled: {report:?}"
     );
     assert!(!report.warnings.iter().any(|w| w.contains("was shortened so a successor's fixed date")));

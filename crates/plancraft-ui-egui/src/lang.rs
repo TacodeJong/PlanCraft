@@ -507,7 +507,10 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
             ("Differs between the selection. Ticking sets them all.", "Verschilt binnen de selectie. Aanvinken zet ze allemaal.")
         }
         "prop.from_children" => ("Calculated from the subtasks", "Berekend uit de subtaken"),
-        "prop.milestone_duration" => ("A milestone is a moment and has no duration", "Een mijlpaal is een moment en heeft geen duur"),
+        "prop.milestone_duration" => (
+            "A milestone lasts 1 hour from its start, unless you type another duration such as 2h or 30min.",
+            "Een mijlpaal duurt 1 uur vanaf de start, tenzij u een andere duur typt, zoals 2h of 30min.",
+        ),
         "prop.advanced" => ("Advanced", "Geavanceerd"),
         "prop.tab.general" => ("General", "Algemeen"),
         "prop.tab.planning" => ("Planning", "Planning"),
@@ -670,6 +673,13 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         "dlg.close" => ("Close", "Sluiten"),
         "cal.prev_month" => ("Previous month", "Vorige maand"),
         "cal.next_month" => ("Next month", "Volgende maand"),
+        "cal.time" => ("Time", "Tijd"),
+        "cal.time_hint" => ("hh:mm", "uu:mm"),
+        "cal.set_time" => ("Set time", "Tijd zetten"),
+        "prop.milestone_start" => (
+            "Pick the day and type the start time, such as 15:30. The time stays empty until you set it; the milestone then finishes one duration later.",
+            "Kies de dag en typ de starttijd, zoals 15:30. De tijd blijft leeg tot u die invult; de mijlpaal eindigt dan één duur later.",
+        ),
         "prop.kind" => ("Kind", "Soort"),
         "prop.type" => ("Type", "Type"),
         "prop.email" => ("Email", "E-mail"),

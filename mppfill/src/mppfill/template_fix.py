@@ -20,7 +20,17 @@ from pathlib import Path
 
 from pymppwriter import blocks as blocks
 from pymppwriter.cfb import write_cfb
-from pymppwriter.writer import ASSN_META_SIZE, ASSN_NATIVE, NATIVE, PRJ, PROJECT_CLSID, RSC_NATIVE, TASK_META_SIZE, MppWriter
+from pymppwriter.writer import (
+    ASSN_META_SIZE,
+    ASSN_NATIVE,
+    NATIVE,
+    PRJ,
+    PROJECT_CLSID,
+    RSC_NATIVE,
+    TASK_META_SIZE,
+    MppWriter,
+    advance_working,
+)
 
 
 def prepare_template(writer: MppWriter) -> None:
@@ -101,7 +111,11 @@ def publish_schedule(path: Path) -> None:
 
     pymppwriter writes the constraint date but leaves its presence bit clear, so
     Planner ignores the date and schedules every task from the project start.
-    Marking the date present keeps the start. The template's actual-work records
+    Marking the date present keeps the start. A milestone has no length, and the
+    importer reads that as 100% complete. A zero-length milestone is given one
+    hour from its start. An unfinished one keeps that hour remaining, so its
+    percent stays 0. A finished one stays at 100%.
+    The template's actual-work records
     are also copied onto every assignment. Planner treats that as progress and
     either gives an unstarted task no length or refuses the file. Drop those
     records where nothing is complete. Project Viewer reads the date bytes
@@ -119,17 +133,36 @@ def _scheduled_bytes(path: Path) -> bytes:
     try:
         task = f"{PRJ}/TBkndTask"
         header, _, metas = writer._meta(f"{task}/FixedMeta", TASK_META_SIZE)
+        try:
+            header2, _, metas2 = writer._meta(f"{task}/Fixed2Meta", 92)
+        except KeyError:
+            header2, metas2 = b"", []
         records = blocks.split_fixed_data(writer._get(f"{task}/FixedData"), metas)
         kind_field = writer.task_fm.get(NATIVE["CONSTRAINT_TYPE"])
         date_field = writer.task_fm.get(NATIVE["CONSTRAINT_DATE"])
         date_bit = writer.task_bit.get(NATIVE["CONSTRAINT_DATE"])
         meta_out: list[bytes] = []
-        for record, meta in zip(records, metas):
+        meta2_out: list[bytes] = []
+        edited: list[bytes] = []
+        opened = False
+        for index, (record, meta) in enumerate(zip(records, metas)):
+            row = bytearray(record)
             bits = bytearray(meta)
-            if len(record) > 100:
-                _mark_constraint_date(record, bits, kind_field, date_field, date_bit)
+            bits2 = bytearray(metas2[index]) if index < len(metas2) else bytearray()
+            if len(row) > 100:
+                _mark_constraint_date(row, bits, kind_field, date_field, date_bit)
+                _mark_percent_present(writer, bits, bits2)
+                opened = _milestone_day(writer, row, bits, bits2) or opened
+            edited.append(bytes(row))
             meta_out.append(bytes(bits))
-        writer._set(f"{task}/FixedMeta", blocks.build_fixed_meta(header, meta_out, len(b"".join(records))))
+            if bits2:
+                meta2_out.append(bytes(bits2))
+        if opened:
+            writer._set(f"{task}/FixedData", b"".join(edited))
+        writer._set(f"{task}/FixedMeta", blocks.build_fixed_meta(header, meta_out, len(b"".join(edited))))
+        if header2 and meta2_out and len(meta2_out) == len(metas2):
+            fixed2 = writer._get(f"{task}/Fixed2Data")
+            writer._set(f"{task}/Fixed2Meta", blocks.build_fixed_meta(header2, meta2_out, len(fixed2)))
         _drop_cloned_actuals(writer)
         return write_cfb(writer.root, root_clsid=PROJECT_CLSID)
     finally:
@@ -230,6 +263,121 @@ def _var_blocks(header: bytes, values: list[tuple[int, int, bytes, int]]) -> tup
     struct.pack_into("<I", meta, 8, len(values))
     struct.pack_into("<I", meta, 20, len(body))
     return bytes(meta) + bytes(entries), bytes(body)
+
+
+def milestone_percents(path: Path) -> list[tuple[str, int]]:
+    """Name and percent complete of each milestone, in file order.
+
+    Percent 0 is unfinished. Percent 100 is the only other value a milestone carries.
+    """
+    writer = MppWriter(str(path))
+    try:
+        percent = writer.task_fm.get(NATIVE["PERCENT_COMPLETE"])
+        duration = writer.task_fm.get(NATIVE["DURATION"])
+        uid_field = writer.task_fm.get(NATIVE["UNIQUE_ID"])
+        milestone = writer.task_bit.get(NATIVE["MILESTONE"])
+        if percent is None or duration is None or uid_field is None or milestone is None:
+            return []
+        if percent.block != 0 or duration.block != 0 or uid_field.block != 0:
+            return []
+        task = f"{PRJ}/TBkndTask"
+        _, _, metas = writer._meta(f"{task}/FixedMeta", TASK_META_SIZE)
+        try:
+            _, _, metas2 = writer._meta(f"{task}/Fixed2Meta", 92)
+        except KeyError:
+            metas2 = []
+        records = blocks.split_fixed_data(writer._get(f"{task}/FixedData"), metas)
+        _, table, _ = blocks.parse_var_meta(writer._get(f"{task}/VarMeta"))
+        data = writer._get(f"{task}/Var2Data")
+        found: list[tuple[str, int]] = []
+        for index, record in enumerate(records):
+            if len(record) <= max(percent.offset + 2, duration.offset + 4, uid_field.offset + 4):
+                continue
+            meta2 = metas2[index] if index < len(metas2) else b""
+            if not blocks.meta_bit(metas[index], meta2, milestone):
+                continue
+            uid = struct.unpack_from("<I", record, uid_field.offset)[0]
+            slot = table.get(uid, {}).get(NATIVE["NAME"])
+            if slot is None:
+                continue
+            name = blocks.read_var(data, slot).decode("utf-16-le", "replace").rstrip("\x00")
+            value = struct.unpack_from("<H", record, percent.offset)[0]
+            found.append((name, 100 if value >= 100 else 0))
+        return found
+    finally:
+        del writer
+        gc.collect()
+
+
+def _milestone_day(writer: MppWriter, row: bytearray, meta: bytearray, meta2: bytearray) -> bool:
+    """Give a zero-length milestone one hour, so its percent is read like a task.
+
+    A row with no length is stored as 100% complete. One hour with that hour
+    still remaining stays at 0%. One hour with nothing remaining stays at 100%.
+    The start stays. The finish is one working hour later.
+    """
+    summary = writer.task_bit.get(NATIVE["SUMMARY"])
+    if summary is not None and blocks.meta_bit(meta, meta2, summary):
+        return False
+    duration = writer.task_fm.get(NATIVE["DURATION"])
+    remaining = writer.task_fm.get(NATIVE["REMAINING_DURATION"])
+    percent = writer.task_fm.get(NATIVE["PERCENT_COMPLETE"])
+    if duration is None or remaining is None or percent is None:
+        return False
+    if duration.block != 0 or remaining.block != 0 or percent.block != 0:
+        return False
+    if duration.offset + 4 > len(row) or remaining.offset + 4 > len(row) or percent.offset + 2 > len(row):
+        return False
+    if struct.unpack_from("<i", row, duration.offset)[0] != 0:
+        return False
+    done = struct.unpack_from("<H", row, percent.offset)[0] >= 100
+    struct.pack_into("<i", row, duration.offset, 600)
+    struct.pack_into("<i", row, remaining.offset, 0 if done else 600)
+    actual = writer.task_fm.get(NATIVE["ACTUAL_DURATION"])
+    if actual is not None and actual.block == 0 and actual.offset + 4 <= len(row):
+        struct.pack_into("<i", row, actual.offset, 600 if done else 0)
+    start = _read_stamp(writer, row, "START")
+    if start is not None:
+        finish = advance_working(start, 600)
+        for name in ("FINISH", "EARLY_FINISH", "LATE_FINISH"):
+            _write_stamp(writer, row, name, finish)
+    for name in ("PERCENT_COMPLETE", "PERCENT_WORK_COMPLETE"):
+        bit = writer.task_bit.get(NATIVE[name])
+        if bit is not None:
+            blocks.set_meta_bit(meta, meta2, bit, True)
+    milestone = writer.task_bit.get(NATIVE["MILESTONE"])
+    if milestone is not None:
+        blocks.set_meta_bit(meta, meta2, milestone, False)
+    return True
+
+
+def _read_stamp(writer: MppWriter, row: bytearray, name: str):
+    field = writer.task_fm.get(NATIVE[name])
+    if field is None or field.block != 0 or field.offset + 4 > len(row):
+        return None
+    return blocks.decode_timestamp(row, field.offset)
+
+
+def _write_stamp(writer: MppWriter, row: bytearray, name: str, moment) -> None:
+    field = writer.task_fm.get(NATIVE[name])
+    if field is None or field.block != 0:
+        return
+    raw = blocks.encode_timestamp(moment)
+    if field.offset + len(raw) > len(row):
+        return
+    row[field.offset:field.offset + len(raw)] = raw
+
+
+def _mark_percent_present(writer: MppWriter, meta: bytearray, meta2: bytearray) -> None:
+    """Keep the stored percent, including zero.
+
+    pymppwriter only marks percent complete present when it is above zero. A
+    milestone then has duration 0 and no percent, which Planner reads as finished.
+    """
+    bit = writer.task_bit.get(NATIVE["PERCENT_COMPLETE"])
+    if bit is None:
+        return
+    blocks.set_meta_bit(meta, meta2, bit, True)
 
 
 def _mark_constraint_date(row: bytes | bytearray, meta: bytearray, kind_field, date_field, date_bit: int | None) -> None:

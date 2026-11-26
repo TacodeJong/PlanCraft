@@ -139,10 +139,7 @@ impl std::fmt::Display for Violation {
                 write!(f, "{krate}: testkit may only be a dev-dependency")
             }
             Violation::UiBelowMin { krate, dep, layer } => {
-                write!(
-                    f,
-                    "{krate} (L{layer}) depends on UI crate `{dep}`; UI toolkits are only allowed in L{UI_MIN_LAYER}+"
-                )
+                write!(f, "{krate} (L{layer}) depends on UI crate `{dep}`; UI toolkits are only allowed in L{UI_MIN_LAYER}+")
             }
         }
     }
@@ -268,10 +265,7 @@ mod tests {
     use super::*;
 
     fn c(name: &str, deps: &[(&str, DepKind, bool)]) -> Crate {
-        Crate {
-            name: name.into(),
-            deps: deps.iter().map(|(n, k, w)| Dep { name: (*n).into(), kind: *k, workspace: *w }).collect(),
-        }
+        Crate { name: name.into(), deps: deps.iter().map(|(n, k, w)| Dep { name: (*n).into(), kind: *k, workspace: *w }).collect() }
     }
     use DepKind::*;
 

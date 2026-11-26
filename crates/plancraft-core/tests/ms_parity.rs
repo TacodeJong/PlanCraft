@@ -1752,7 +1752,7 @@ fn seven_elapsed_days_are_a_calendar_week() {
     assert_eq!(start(&p, elapsed), dt(2026, 10, 19, 8));
     // Seven 24-hour days from Monday 08:00 run through the weekend: the seventh ends Monday 08:00.
     assert_eq!(finish(&p, elapsed), dt(2026, 10, 26, 8));
-    assert_eq!(p.format_task_duration(p.task(elapsed).unwrap()), "7 edays");
+    assert_eq!(p.format_task_duration(p.task(elapsed).unwrap()), "7ed");
 }
 
 // Source: https://learn.microsoft.com/en-us/office-project/xml-data-interchange/durationformat-element?view=project-client-2016 — "DurationFormat Element"
@@ -1787,9 +1787,11 @@ fn a_zero_duration_makes_a_milestone() {
         assert!(!p.task(a).unwrap().is_milestone());
         p.set_duration(a, 0, false).unwrap();
         assert!(p.task(a).unwrap().is_milestone(), "new tasks auto-scheduled: {new_tasks_auto}");
-        // Giving it a duration again makes it a task.
+        // Microsoft turns a milestone back into a task when it gets a duration. PlanCraft keeps
+        // the milestone: the default is one hour from the start, and a typed duration stays.
         p.set_duration(a, DAY, false).unwrap();
-        assert!(!p.task(a).unwrap().is_milestone());
+        assert!(p.task(a).unwrap().is_milestone());
+        assert_eq!(p.task(a).unwrap().duration, DAY);
 
         // A summary task never becomes a milestone.
         let s = task(&mut p, "Phase", DAY);

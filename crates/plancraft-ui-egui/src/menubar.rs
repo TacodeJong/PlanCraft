@@ -135,7 +135,8 @@ pub fn title_bar(ui: &mut Ui, info: &MenuInfo, out: &mut Vec<Command>) {
     let doc = info.doc_title.as_str();
     // Leading + trailing both emit commands; share one buffer (TitleBar holds both closures).
     let pending = std::cell::RefCell::new(Vec::<Command>::new());
-    let _ = crate::craft_shell::show_title_bar(
+    // Integrated caption Close does not close the window. Quit uses the same unsaved-changes path as the menu.
+    let bar = crate::craft_shell::show_title_bar(
         ui,
         doc,
         |ui| {
@@ -190,6 +191,9 @@ pub fn title_bar(ui: &mut Ui, info: &MenuInfo, out: &mut Vec<Command>) {
             }
         },
     );
+    if bar.close_requested {
+        pending.borrow_mut().push(Command::Quit);
+    }
     out.append(&mut pending.into_inner());
 }
 

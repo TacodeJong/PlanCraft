@@ -83,6 +83,8 @@ pub fn task(ui: &mut Ui, rect: Rect, p: &Project, st: &mut UiState) -> Rect {
                     enabled: true,
                     minute,
                     empty: st.t("filter.from"),
+                    choose_time: false,
+                    show_time: false,
                 },
             ) {
                 st.date_from = next.map(|dt| dt.date());
@@ -96,6 +98,8 @@ pub fn task(ui: &mut Ui, rect: Rect, p: &Project, st: &mut UiState) -> Rect {
                     enabled: true,
                     minute,
                     empty: st.t("filter.to"),
+                    choose_time: false,
+                    show_time: false,
                 },
             ) {
                 st.date_to = next.map(|dt| dt.date());

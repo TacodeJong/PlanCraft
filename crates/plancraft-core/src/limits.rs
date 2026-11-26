@@ -702,12 +702,7 @@ mod tests {
         };
         p.external_projects = vec![link("First"), link("Second")];
         let missing = TaskId(p.ids.task + 1);
-        let dep = |predecessor: TaskRef| Dependency {
-            predecessor,
-            kind: LinkType::FS,
-            lag: Lag::None,
-            drive: Default::default(),
-        };
+        let dep = |predecessor: TaskRef| Dependency { predecessor, kind: LinkType::FS, lag: Lag::None, drive: Default::default() };
         p.task_mut(b).unwrap().predecessors = vec![
             dep(TaskRef::Local(a)),
             dep(TaskRef::Local(missing)),

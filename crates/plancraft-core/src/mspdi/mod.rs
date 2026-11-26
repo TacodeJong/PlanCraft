@@ -95,7 +95,7 @@ pub fn to_xml(p: &Project) -> (String, Vec<String>) {
 
 /// Writes a plan as MSPDI text that Planner Premium's project import can keep: automatically
 /// scheduled tasks (so a finish constraint does not stretch the duration back to the plan start),
-/// milestones at zero duration, and assignments of work resources on leaf tasks.
+/// milestones at their scheduled duration (one hour when none was typed), and assignments of work resources on leaf tasks.
 pub fn to_xml_for_planner(p: &Project) -> (String, Vec<String>) {
     write::export_with(p, write::Profile::PlannerPremium)
 }

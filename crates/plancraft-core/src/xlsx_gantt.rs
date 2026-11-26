@@ -37,12 +37,7 @@ pub struct GanttBar {
 
 /// `identity` and `bars` are parallel. `scale` is the Q/M/D timescale the chart
 /// showed (`None` keeps the automatic day/week choice).
-pub fn workbook(
-    p: &Project,
-    identity: &GanttIdentity,
-    bars: &[Option<GanttBar>],
-    scale: Option<Granularity>,
-) -> Result<Vec<u8>, String> {
+pub fn workbook(p: &Project, identity: &GanttIdentity, bars: &[Option<GanttBar>], scale: Option<Granularity>) -> Result<Vec<u8>, String> {
     if identity.cells.len() != bars.len() || identity.outlines.len() != bars.len() {
         return Err("gantt identity rows and bars must match".into());
     }
@@ -68,12 +63,7 @@ pub fn workbook(
         let outline = identity.outlines.get(i).copied().unwrap_or(0).min(7);
         sheet_rows.push(XlsxRow { cells, outline });
     }
-    xlsx_out::sheets(&[XlsxSheet {
-        name: "Gantt".into(),
-        rows: sheet_rows,
-        table: false,
-        freeze: (freeze_cols, 1),
-    }])
+    xlsx_out::sheets(&[XlsxSheet { name: "Gantt".into(), rows: sheet_rows, table: false, freeze: (freeze_cols, 1) }])
 }
 
 fn period_cell(span: (Date, Date), period: &Period, fill: [u8; 3], summary: bool, milestone: bool) -> XlsxCell {
@@ -284,10 +274,7 @@ mod tests {
         let finish = p.tasks[0].sched.finish.unwrap().date();
         let id = GanttIdentity {
             headers: vec!["Name".into()],
-            cells: vec![
-                vec![XlsxCell::plain("Status: To do (1)", true, 0)],
-                vec![XlsxCell::plain("Design", false, 1)],
-            ],
+            cells: vec![vec![XlsxCell::plain("Status: To do (1)", true, 0)], vec![XlsxCell::plain("Design", false, 1)]],
             outlines: vec![0, 1],
         };
         let bars = vec![

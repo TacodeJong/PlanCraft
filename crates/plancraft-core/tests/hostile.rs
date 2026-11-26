@@ -613,10 +613,7 @@ fn apply(p: &mut Project, op: &Op) -> PlanResult<()> {
         Op::Mode(i, manual) => p.set_schedule_mode(&[task_at(p, i)], if manual { ScheduleMode::Manual } else { ScheduleMode::Auto })?,
         Op::ManualDate(i, m, finish) => p.set_manual_date(task_at(p, i), shift(p.start, m), finish)?,
         Op::ElapsedDuration(i, minutes, elapsed) => {
-            p.set_typed_duration(
-                task_at(p, i),
-                TypedDuration { minutes, estimated: false, elapsed, unit: DurationUnit::Days },
-            )?;
+            p.set_typed_duration(task_at(p, i), TypedDuration { minutes, estimated: false, elapsed, unit: DurationUnit::Days })?;
         }
     }
     Ok(())

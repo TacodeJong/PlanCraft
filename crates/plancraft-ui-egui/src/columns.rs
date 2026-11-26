@@ -257,7 +257,7 @@ impl TaskCol {
                     .right()
                     .read_only()
             }
-            Start => ColumnDef::new(ct("col.start"), 96.0).date(start_m, false),
+            Start => ColumnDef::new(ct("col.start"), 136.0).date(start_m, false),
             Finish => ColumnDef::new(ct("col.finish"), 96.0).date(finish_m, false),
             Predecessors => ColumnDef::new(ct("col.predecessors"), 96.0),
             Successors => ColumnDef::new(ct("col.successors"), 96.0).read_only(),
@@ -480,7 +480,19 @@ pub fn cell(col: TaskCol, p: &Project, idx: usize, ctx: &CellCtx) -> Cell {
         }
         Duration => Cell::text(p.format_task_duration(t)),
         LevelingDelay => Cell::text(p.format_duration(t.leveling_delay.max(0), false)),
-        Start => Cell { text: format::date(s.start), edit_text: Some(format::iso_date(s.start)), ..Default::default() },
+        Start => {
+            if t.is_milestone() && !summary {
+                // No clock in the cell until the user has set one. ` *` tells the calendar to ask
+                // for a time instead of stamping 08:00 or 17:00.
+                if let Some(pin) = t.chosen_start() {
+                    Cell { text: format::date_hm(Some(pin)), edit_text: Some(format::iso(Some(pin))), ..Default::default() }
+                } else {
+                    Cell { text: format::date(s.start), edit_text: Some(format!("{} *", format::iso_date(s.start))), ..Default::default() }
+                }
+            } else {
+                Cell { text: format::date(s.start), edit_text: Some(format::iso_date(s.start)), ..Default::default() }
+            }
+        }
         Finish => Cell { text: format::date(s.finish), edit_text: Some(format::iso_date(s.finish)), ..Default::default() },
         Predecessors => Cell::text(p.format_predecessors(t.id)).wrapped(),
         Successors => Cell::text(
@@ -689,11 +701,15 @@ pub fn commit(col: TaskCol, p: &mut Project, id: TaskId, text: &str) -> Result<(
         Start | Finish => {
             let finish = col == Finish;
             let date = parse_date(p, text, finish)?.ok_or("a date is required")?;
-            let t = task_mut(p, id)?;
-            // A date typed on a summary makes it manually scheduled (top-down planning).
-            if summary || t.mode == ScheduleMode::Manual {
+            let manual = p.task(id).is_some_and(|t| t.mode == ScheduleMode::Manual);
+            let milestone = p.task(id).is_some_and(|t| t.is_milestone());
+            if !finish && milestone && !summary {
+                p.set_milestone_start(id, Some(date)).map_err(err)?;
+            } else if summary || manual {
+                // A date typed on a summary makes it manually scheduled (top-down planning).
                 p.set_manual_date(id, date, finish).map_err(err)?;
             } else {
+                let t = task_mut(p, id)?;
                 t.constraint = Constraint { kind: if finish { ConstraintKind::Fnet } else { ConstraintKind::Snet }, date: Some(date) };
             }
         }

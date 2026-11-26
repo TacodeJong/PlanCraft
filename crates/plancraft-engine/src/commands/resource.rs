@@ -5,9 +5,7 @@ use plancraft_core::ids::AssignmentId;
 use plancraft_core::leveling::{LevelingOptions, clear_leveling, level_resources};
 use serde_json::{Value, json};
 
-use super::params::{
-    opt_assignment_id, opt_bool, opt_f64, opt_str, opt_u64, req_resource_id, req_task_id, resource_ids,
-};
+use super::params::{opt_assignment_id, opt_bool, opt_f64, opt_str, opt_u64, req_resource_id, req_task_id, resource_ids};
 use crate::session::{Session, ok_empty};
 
 pub fn run_insert(s: &mut Session, p: &Value) -> Result<Value, String> {
@@ -48,9 +46,7 @@ pub fn run_level_all(s: &mut Session, p: &Value) -> Result<Value, String> {
         opts.resources = resource_ids(p)?;
     }
     let report = s.edit_active("Level Resources", |proj| level_resources(proj, &opts))?;
-    let fmt = |d: Option<plancraft_core::dates::prelude::DateTime>| {
-        d.map(|d| d.format("%Y-%m-%d %H:%M").to_string())
-    };
+    let fmt = |d: Option<plancraft_core::dates::prelude::DateTime>| d.map(|d| d.format("%Y-%m-%d %H:%M").to_string());
     Ok(json!({
         "delayed": report.delayed.iter().map(|(id, mins)| json!({ "task": id.0, "delay_minutes": mins })).collect::<Vec<_>>(),
         "unresolved": report.unresolved,

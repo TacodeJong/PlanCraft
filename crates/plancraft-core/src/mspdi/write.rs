@@ -568,7 +568,7 @@ fn progress_minutes(t: &Task, duration: Minutes) -> (Minutes, Minutes) {
     if t.sched.is_summary {
         return t.duration_progress();
     }
-    if t.is_milestone() {
+    if t.is_milestone() && duration <= 0 {
         return (0, 0);
     }
     let done = duration.saturating_mul(Minutes::from(t.percent_complete.min(100))) / 100;
@@ -720,9 +720,10 @@ fn task(
     w.leaf("OutlineLevel", t.outline_level);
     w.leaf("Priority", t.priority);
     let milestone = t.is_milestone();
-    // Planner Premium treats a non-zero duration as a task. A milestone is the start instant twice.
+    // The scheduled start is the given date. A milestone is one hour from that start unless a
+    // different duration was typed. A zero-length milestone is still the start instant twice.
     let start = t.sched.start;
-    let finish = if profile == Profile::PlannerPremium && milestone { start } else { t.sched.finish };
+    let finish = if profile == Profile::PlannerPremium && milestone && t.sched.duration <= 0 { start } else { t.sched.finish };
     if let Some(v) = start {
         w.leaf("Start", codes::datetime_text(v));
     }
@@ -731,7 +732,7 @@ fn task(
     }
     // The resolved duration. A leaf's stored duration is only the fallback; exporting it next to
     // the scheduled start and finish makes Microsoft Project collapse stretched tasks on recalc.
-    let duration = if t.is_milestone() { 0 } else { t.sched.duration.max(0) };
+    let duration = if t.is_milestone() && t.sched.duration <= 0 { 0 } else { t.sched.duration.max(0) };
     w.leaf("Duration", codes::duration_text(duration));
     w.leaf("DurationFormat", codes::format_code(s.duration_unit, t.elapsed && !t.sched.is_summary, t.estimated));
     w.leaf("Work", codes::duration_text(t.sched.work));

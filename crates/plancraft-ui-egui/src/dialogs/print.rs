@@ -258,6 +258,8 @@ impl PrintDialog {
                         enabled: true,
                         minute: start_minute,
                         empty: crate::lang::text("print.from_empty"),
+                        choose_time: false,
+                        show_time: false,
                     },
                 ) {
                     self.from = next.map(|dt| dt.date());
@@ -273,6 +275,8 @@ impl PrintDialog {
                         enabled: true,
                         minute: start_minute,
                         empty: crate::lang::text("print.to_empty"),
+                        choose_time: false,
+                        show_time: false,
                     },
                 ) {
                     self.to = next.map(|dt| dt.date());

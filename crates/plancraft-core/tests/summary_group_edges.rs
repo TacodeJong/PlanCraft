@@ -528,10 +528,7 @@ fn nested_percent_asap_starts_at_parent_window() {
     let window = cal.between(parent_start, parent_end);
     let nest_span = cal.between(start(&p, nest), finish(&p, nest));
     let expect = ((window as f64) * 0.20).round() as i64;
-    assert!(
-        (nest_span - expect).abs() <= 1,
-        "nest span {nest_span} should be 20% of window {window} (expect {expect})"
-    );
+    assert!((nest_span - expect).abs() <= 1, "nest span {nest_span} should be 20% of window {window} (expect {expect})");
     assert!(finish(&p, nest) < parent_end, "ASAP percent nest finishes before the parent end");
 }
 
@@ -583,9 +580,6 @@ fn nested_percent_alap_finishes_with_parent_window() {
     let window = cal.between(parent_start, parent_end);
     let nest_span = cal.between(start(&p, nest), finish(&p, nest));
     let expect = ((window as f64) * 0.20).round() as i64;
-    assert!(
-        (nest_span - expect).abs() <= 1,
-        "nest span {nest_span} should be 20% of window {window} (expect {expect})"
-    );
+    assert!((nest_span - expect).abs() <= 1, "nest span {nest_span} should be 20% of window {window} (expect {expect})");
     assert!(start(&p, nest) > parent_start, "ALAP percent nest starts after the parent start");
 }

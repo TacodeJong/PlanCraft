@@ -790,12 +790,15 @@ fn tasks(p: &mut Project, records: &[Element], cals: &Calendars, mut fields: Fie
         task.duration = span(t, "Duration").unwrap_or(0).max(0);
         task.elapsed = format.is_some_and(|f| f.elapsed) && task.duration > 0;
         task.estimated = flag(t, "Estimated").unwrap_or(false) || format.is_some_and(|f| f.estimated);
+        if let Some(unit) = format.and_then(|f| f.unit) {
+            task.duration_unit = Some(unit);
+        }
         if flag(t, "Milestone") == Some(true) {
+            task.kind = TaskKind::Milestone;
+            task.estimated = false;
             if task.duration == 0 {
-                task.kind = TaskKind::Milestone;
-                task.estimated = false;
-            } else {
-                notes.add("tasks marked as milestones with a duration were imported as ordinary tasks");
+                task.duration = 60;
+                task.duration_unit = Some(DurationUnit::Hours);
             }
         }
         if flag(t, "Manual") == Some(true) {
@@ -974,12 +977,7 @@ fn predecessors(p: &mut Project, links: Links, notes: &mut Notes) {
             notes.add("a repeated link between the same two tasks was left out");
             continue;
         }
-        task.predecessors.push(Dependency {
-            predecessor: TaskRef::Local(pred),
-            kind: l.kind,
-            lag: l.lag,
-            drive: Default::default(),
-        });
+        task.predecessors.push(Dependency { predecessor: TaskRef::Local(pred), kind: l.kind, lag: l.lag, drive: Default::default() });
     }
 }
 

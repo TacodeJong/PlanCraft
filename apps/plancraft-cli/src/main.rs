@@ -77,11 +77,7 @@ fn run() -> Result<()> {
         "mcp" => {
             args.remove(0);
             let code = plancraft_mcp::cli::run(args);
-            if code == ExitCode::SUCCESS {
-                Ok(())
-            } else {
-                bail!("mcp exited with failure")
-            }
+            if code == ExitCode::SUCCESS { Ok(()) } else { bail!("mcp exited with failure") }
         }
         other => bail!("unknown subcommand '{other}' (try help)"),
     }

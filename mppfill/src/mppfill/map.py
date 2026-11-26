@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from pymppwriter import Assignment, Baseline, Calendar, CalendarException, Project, Relation, Resource, Task
+from pymppwriter.writer import advance_working
 
 from .errors import MppFillError
 from .mspdi import XmlCalendar, XmlPlan, XmlTask
@@ -60,7 +61,7 @@ def to_project(plan: XmlPlan) -> tuple[Project, list[str]]:
                 name=task.name,
                 start=task.start,
                 finish=task.finish,
-                duration_days=0.0 if task.milestone else task.duration_days,
+                duration_days=task.duration_days,
                 outline_level=task.outline_level,
                 parent_uid=task.parent_uid,
                 duration_units=task.duration_units,
@@ -110,11 +111,15 @@ def to_project(plan: XmlPlan) -> tuple[Project, list[str]]:
 
 
 def apply_planner_profile(tasks: list) -> list[str]:
-    """Shape tasks the way the Planner Premium XML export does.
+    """Shape tasks the way Planner Premium can import them.
 
     Leaf tasks keep their start with start-no-earlier-than. Summaries stay
     unconstrained. Manual scheduling, deadlines and every other constraint are
-    dropped. A milestone ends at its start.
+    dropped. A milestone with no duration is one hour from its start before the
+    file is written. A typed duration is kept. Planner rebuilds a task's length
+    from its assignment, so a later edit of the task row alone leaves the
+    assignment at zero and the row comes back as 0 days, which Planner stores
+    as 100% complete.
     """
     summary_ids = {task.parent_uid for task in tasks if task.parent_uid}
     pinned = dropped_deadline = cleared_manual = milestones = 0
@@ -125,15 +130,16 @@ def apply_planner_profile(tasks: list) -> list[str]:
         if task.deadline is not None:
             task.deadline = None
             dropped_deadline += 1
-        if task.duration_days == 0 and task.finish != task.start:
-            task.finish = task.start
-            milestones += 1
         if task.uid in summary_ids:
             if task.constraint is not None or task.constraint_date is not None:
                 task.constraint = None
                 task.constraint_date = None
                 pinned += 1
             continue
+        if task.duration_days == 0 and task.start is not None:
+            task.duration_days = 0.125
+            task.finish = advance_working(task.start, 600)
+            milestones += 1
         if task.constraint != "SNET" or task.constraint_date != task.start:
             task.constraint = "SNET"
             task.constraint_date = task.start
@@ -146,7 +152,7 @@ def apply_planner_profile(tasks: list) -> list[str]:
     if cleared_manual:
         notes.append("manually scheduled tasks were exported as automatically scheduled, keeping their start, finish and duration")
     if milestones:
-        notes.append("milestones keep duration 0 and end at their start")
+        notes.append("milestones with no duration are one hour from their start, so an unfinished one stays at 0%")
     return notes
 
 

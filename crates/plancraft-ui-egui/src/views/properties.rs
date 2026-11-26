@@ -462,10 +462,6 @@ fn schedule_fields(
         label(ui, st.t("prop.duration"));
         // A group's span comes from its subtasks: visible but not editable.
         derived_line(ui, derived_duration.as_deref().unwrap_or_else(|| st.t("common.multiple_lc")), st.t("prop.from_children"));
-    } else if milestone_only {
-        label(ui, st.t("prop.duration"));
-        // A milestone is always 0: greyed rather than hidden.
-        derived_line(ui, snap.duration.as_deref().unwrap_or(""), st.t("prop.milestone_duration"));
     } else {
         let auto = snap.duration_mode_effective == Some(DurationMode::Auto);
         ui.horizontal_wrapped(|ui| {
@@ -490,7 +486,7 @@ fn schedule_fields(
                 ui,
                 ("task_dur", first, multi),
                 snap.duration.as_deref().unwrap_or(""),
-                "",
+                if milestone_only { st.t("prop.milestone_duration") } else { "" },
                 (ui.available_size_before_wrap().x - 8.0).max(72.0),
             ) {
                 let ids = ids.to_vec();
@@ -507,18 +503,9 @@ fn schedule_fields(
     let start_minute = doc.project.settings.time.default_start_time;
     let finish_minute = doc.project.settings.time.default_finish_time;
     if milestone_only {
-        // A milestone is one moment, not a span: one rule, on the finish side (the Swift
-        // app's canonical point for a leaf milestone).
-        let side = DateSide {
-            finish: true,
-            minute: start_minute,
-            scheduled: snap.start,
-            mode: snap.finish_mode,
-            min: snap.finish_earliest,
-            max: snap.finish_latest,
-            fixed: snap.finish_fixed,
-        };
-        date_mode_side(ui, doc, st, ids, first, multi, st.t("prop.moment"), side, false);
+        // The start clock is typed in the calendar. A calculated 17:00 (the previous task's
+        // finish) is not shown as if it had been chosen.
+        milestone_start_row(ui, doc, st, ids, first, snap);
     } else {
         let side = DateSide {
             finish: false,
@@ -1548,6 +1535,29 @@ pub(crate) fn effective_duration_mode_for_ui(p: &Project, id: TaskId, t: &Task) 
     if percent_derived || stretch_derived { (DurationMode::Auto, true) } else { (DurationMode::Fixed, false) }
 }
 
+/// Start of a milestone: the day may already be known, the clock is empty until typed.
+fn milestone_start_row(ui: &mut Ui, doc: &mut Document, st: &mut UiState, ids: &[TaskId], first: TaskId, snap: &Snap) {
+    let chosen = common_eq(ids.iter().filter_map(|id| doc.project.task(*id).map(|t| t.chosen_start())));
+    let pinned = chosen.and_then(|c| c);
+    let show_time = pinned.is_some();
+    let current = pinned.or(snap.start.flatten());
+    let value = if chosen.is_none() && snap.start.is_none() { None } else { Some(current) };
+    ui.horizontal_wrapped(|ui| {
+        compact_label(ui, st.t("prop.start"));
+        if let Some(next) = show_date_time(ui, &format!("ms_start{first}"), value, show_time, true, 0, true, show_time) {
+            let ids = ids.to_vec();
+            edit(doc, st, "Start time", move |p| {
+                for id in &ids {
+                    p.set_milestone_start(*id, next).map_err(|e| e.to_string())?;
+                }
+                Ok(())
+            });
+        }
+    })
+    .response
+    .on_hover_text(st.t("prop.milestone_start"));
+}
+
 fn show_date(
     ui: &mut Ui,
     salt: &str,
@@ -1556,12 +1566,28 @@ fn show_date(
     enabled: bool,
     minute: u32,
 ) -> Option<Option<DateTime>> {
+    show_date_time(ui, salt, value, clearable, enabled, minute, false, false)
+}
+
+fn show_date_time(
+    ui: &mut Ui,
+    salt: &str,
+    value: Option<Option<DateTime>>,
+    clearable: bool,
+    enabled: bool,
+    minute: u32,
+    choose_time: bool,
+    show_time: bool,
+) -> Option<Option<DateTime>> {
     let (current, empty) = match value {
         None => (None, crate::lang::text("common.multiple_lc")),
         Some(None) => (None, crate::lang::text("common.none_lc")),
         Some(Some(dt)) => (Some(dt), crate::lang::text("common.none_lc")),
     };
-    crate::widgets::date_picker::button(ui, crate::widgets::date_picker::DateField { salt, current, clearable, enabled, minute, empty })
+    crate::widgets::date_picker::button(
+        ui,
+        crate::widgets::date_picker::DateField { salt, current, clearable, enabled, minute, empty, choose_time, show_time },
+    )
 }
 
 /// One side (start or finish) of the date rules: everything [`date_mode_side`] needs.
@@ -2153,7 +2179,7 @@ mod tests {
         let _ = doc.edit("Milestone", |proj| set_milestones(proj, &[t], true)).unwrap();
         let now = doc.project.task(t).unwrap();
         assert!(now.is_milestone());
-        assert_eq!(now.duration, 0);
+        assert_eq!(now.duration, 2 * DAY, "a duration already set stays on the milestone");
         assert_eq!(now.duration_mode, DurationMode::Fixed);
 
         assert!(doc.undo());

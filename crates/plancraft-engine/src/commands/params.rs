@@ -31,11 +31,7 @@ pub fn opt_usize(p: &Value, key: &str) -> Result<Option<usize>, String> {
 pub fn opt_f64(p: &Value, key: &str) -> Result<Option<f64>, String> {
     match p.get(key) {
         None | Some(Value::Null) => Ok(None),
-        Some(v) => v
-            .as_f64()
-            .or_else(|| v.as_i64().map(|i| i as f64))
-            .map(Some)
-            .ok_or_else(|| format!("param '{key}' must be a number")),
+        Some(v) => v.as_f64().or_else(|| v.as_i64().map(|i| i as f64)).map(Some).ok_or_else(|| format!("param '{key}' must be a number")),
     }
 }
 
@@ -53,10 +49,7 @@ pub fn req_u8(p: &Value, key: &str) -> Result<u8, String> {
 }
 
 fn as_id(v: &Value, what: &str) -> Result<u32, String> {
-    let n = v
-        .as_u64()
-        .or_else(|| v.as_i64().and_then(|i| u64::try_from(i).ok()))
-        .ok_or_else(|| format!("{what} id must be a number"))?;
+    let n = v.as_u64().or_else(|| v.as_i64().and_then(|i| u64::try_from(i).ok())).ok_or_else(|| format!("{what} id must be a number"))?;
     u32::try_from(n).map_err(|_| format!("{what} id out of range"))
 }
 
@@ -78,18 +71,12 @@ pub fn opt_assignment_id(p: &Value, key: &str) -> Result<Option<AssignmentId>, S
 }
 
 pub fn task_ids(p: &Value) -> Result<Vec<TaskId>, String> {
-    let arr = p
-        .get("tasks")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "missing array param 'tasks'".to_string())?;
+    let arr = p.get("tasks").and_then(Value::as_array).ok_or_else(|| "missing array param 'tasks'".to_string())?;
     arr.iter().map(|v| as_id(v, "task").map(TaskId)).collect()
 }
 
 pub fn resource_ids(p: &Value) -> Result<Vec<ResourceId>, String> {
-    let arr = p
-        .get("resources")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "missing array param 'resources'".to_string())?;
+    let arr = p.get("resources").and_then(Value::as_array).ok_or_else(|| "missing array param 'resources'".to_string())?;
     arr.iter().map(|v| as_id(v, "resource").map(ResourceId)).collect()
 }
 
@@ -117,8 +104,7 @@ pub fn lag_param(project: &Project, p: &Value) -> Result<Lag, String> {
                 .ok_or_else(|| "param 'lag' must be a number or string".to_string())?;
             Ok(if mins == 0 { Lag::None } else { Lag::Working(mins) })
         }
-        Some(Value::String(s)) => Lag::parse(s, &project.settings.time)
-            .ok_or_else(|| format!("invalid lag '{s}'")),
+        Some(Value::String(s)) => Lag::parse(s, &project.settings.time).ok_or_else(|| format!("invalid lag '{s}'")),
         Some(_) => Err("param 'lag' must be a number or string".into()),
     }
 }

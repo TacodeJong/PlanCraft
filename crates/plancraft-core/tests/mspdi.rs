@@ -886,8 +886,8 @@ fn cyclus_export_matches_the_swift_file_and_reimports_stable() {
 
 /// Planner Premium's importer drops manual scheduling, constraints and deadlines, and then
 /// stretches a task from the plan start to the old finish. The Planner profile keeps the
-/// scheduled duration instead, writes a milestone as zero duration, and assigns only work
-/// resources on leaf tasks.
+/// scheduled duration instead, writes a milestone as one hour from its start, and assigns only
+/// work resources on leaf tasks.
 #[test]
 fn planner_profile_keeps_duration_milestones_and_work_assignments() {
     let mut p = Project::new("Cycle", d(2026, 10, 15));
@@ -899,7 +899,7 @@ fn planner_profile_keeps_duration_milestones_and_work_assignments() {
         t.constraint = Constraint { kind: ConstraintKind::Mfo, date: Some(dt(2027, 1, 27, 17)) };
         t.deadline = Some(dt(2027, 1, 27, 17));
     }
-    let gate = p.add_milestone("Gate", None);
+    let _gate = p.add_milestone("Gate", None);
     let ana = p.add_resource("Ana");
     p.resource_mut(ana).unwrap().email = "ana@example.com".into();
     let truck = p.add_resource("Truck");
@@ -919,7 +919,7 @@ fn planner_profile_keeps_duration_milestones_and_work_assignments() {
     let gate_end = xml[gate_at..].find("</Task>").unwrap() + gate_at;
     let gate_xml = &xml[gate_at..gate_end];
     assert!(gate_xml.contains("<Milestone>1</Milestone>"));
-    assert!(gate_xml.contains("<Duration>PT0H0M0S</Duration>"));
+    assert!(gate_xml.contains("<Duration>PT1H0M0S</Duration>"));
     let task_at = xml.find("Opstellen concept").unwrap();
     let task_end = xml[task_at..].find("</Task>").unwrap() + task_at;
     let task_xml = &xml[task_at..task_end];

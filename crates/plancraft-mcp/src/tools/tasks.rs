@@ -589,7 +589,8 @@ pub fn insert_new_task(p: &mut Project, name: &str, index: usize, level: Option<
     };
     if milestone && let Some(t) = p.task_mut(id) {
         t.kind = TaskKind::Milestone;
-        t.duration = 0;
+        t.duration = 60;
+        t.duration_unit = Some(plancraft_core::duration::DurationUnit::Hours);
         t.estimated = false;
     }
     id
@@ -611,11 +612,7 @@ fn create_task(ctx: &Ctx, a: &Args) -> ToolResult {
     // outline level the same way. after/before need an explicit level (children of the anchor).
     if create_position_only(a) && a.get("parent").is_none() && a.get("after").is_none() && a.get("before").is_none() {
         let at = ctx.read(a, |doc| {
-            if let Some(i) = a.u64("index")? {
-                Ok(Some((i.max(1) as usize - 1).min(doc.project.tasks.len())))
-            } else {
-                Ok(None)
-            }
+            if let Some(i) = a.u64("index")? { Ok(Some((i.max(1) as usize - 1).min(doc.project.tasks.len()))) } else { Ok(None) }
         })?;
         let id = if ms { "task.insertMilestone" } else { "task.insert" };
         let mut params = json!({ "name": name });

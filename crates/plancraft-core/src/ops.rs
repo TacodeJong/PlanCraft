@@ -167,7 +167,8 @@ impl Project {
         let id = self.add_task(name, index);
         if let Some(t) = self.task_mut(id) {
             t.kind = TaskKind::Milestone;
-            t.duration = 0;
+            t.duration = 60;
+            t.duration_unit = Some(DurationUnit::Hours);
             t.estimated = false;
         }
         id
@@ -617,12 +618,7 @@ impl Project {
         } else if t.predecessors.len() >= MAX_LINKS_PER_TASK {
             return invalid(format!("a task can have at most {MAX_LINKS_PER_TASK} predecessors"));
         } else {
-            t.predecessors.push(Dependency {
-                predecessor: pred,
-                kind,
-                lag,
-                drive: drive.unwrap_or_default(),
-            });
+            t.predecessors.push(Dependency { predecessor: pred, kind, lag, drive: drive.unwrap_or_default() });
         }
         Ok(())
     }
@@ -785,6 +781,13 @@ impl Project {
                 t.members.push(*member);
             }
         }
+        // A milestone with members is the instant those tasks finish. The one-hour default
+        // would push that instant to the next morning, so it is cleared unless a duration was typed.
+        let t = self.row_mut(mi)?;
+        if !t.members.is_empty() && t.duration == 60 && matches!(t.duration_unit, None | Some(DurationUnit::Hours)) {
+            t.duration = 0;
+            t.duration_unit = None;
+        }
         Ok(())
     }
 
@@ -870,6 +873,47 @@ impl Project {
             let length = t.manual_finish.zip(t.manual_start).map(|(f, s)| f.signed_duration_since(s));
             t.manual_start = Some(date);
             t.manual_finish = length.and_then(|d| date.checked_add_signed(d));
+        }
+        Ok(())
+    }
+
+    /// Pins a milestone so it starts at `date`, including the clock, or clears that pin when
+    /// `date` is `None`. The finish is the start plus the milestone's duration: a finish pin is
+    /// dropped, and a manual milestone drops its typed finish so the duration applies. The clock
+    /// is whatever the caller supplies; this does not substitute 08:00 or 17:00.
+    pub fn set_milestone_start(&mut self, id: TaskId, date: Option<DateTime>) -> PlanResult<()> {
+        let idx = self.require_task(id)?;
+        if !self.row(idx)?.is_milestone() {
+            return invalid("only a milestone can take a start time");
+        }
+        if self.has_children(idx) {
+            return invalid("a summary milestone's dates come from its subtasks");
+        }
+        let manual = self.row(idx)?.mode == ScheduleMode::Manual;
+        let Some(date) = date else {
+            if manual {
+                let t = self.row_mut(idx)?;
+                t.manual_start = None;
+                t.manual_finish = None;
+            } else {
+                self.set_date_window(id, false, None, None)?;
+            }
+            return Ok(());
+        };
+        if manual {
+            let t = self.row_mut(idx)?;
+            t.manual_start = Some(date);
+            t.manual_finish = None;
+            return Ok(());
+        }
+        self.set_date_window(id, false, Some(date), Some(date))?;
+        let t = self.row_mut(idx)?;
+        t.bounds.start_latest_fixed = true;
+        t.bounds.finish_earliest = None;
+        t.bounds.finish_latest = None;
+        t.bounds.finish_latest_fixed = false;
+        if matches!(t.constraint.kind, ConstraintKind::Fnet | ConstraintKind::Fnlt | ConstraintKind::Mfo) {
+            t.constraint = Constraint::default();
         }
         Ok(())
     }
@@ -1048,7 +1092,7 @@ impl Project {
     }
 
     /// Sets a task's duration as typed: working or elapsed time (see [`TypedDuration`]). A
-    /// summary task takes working time only. Remembers the typed unit for display (`1d`, `2wk`).
+    /// summary task takes working time only. The typed unit is what the column shows (`1h`, `1d`, `1w`).
     pub fn set_typed_duration(&mut self, id: TaskId, typed: TypedDuration) -> PlanResult<()> {
         let idx = self.require_task(id)?;
         if typed.elapsed && self.has_children(idx) {
@@ -1098,13 +1142,11 @@ impl Project {
         }
         t.fills_group = false;
         t.duration_percent = None;
-        // A zero duration makes a milestone, whether the task is scheduled automatically or
-        // manually (a summary, handled above, never becomes one).
+        // A zero duration makes a milestone. A milestone keeps its kind when given a duration:
+        // the default is one hour, and another typed duration stays on the milestone.
         if minutes == 0 && t.kind == TaskKind::Task {
             t.kind = TaskKind::Milestone;
             t.duration_mode = DurationMode::Fixed;
-        } else if minutes > 0 && t.kind == TaskKind::Milestone && t.members.is_empty() {
-            t.kind = TaskKind::Task;
         }
         // A manual task's finish follows its new duration.
         if t.mode == ScheduleMode::Manual {
@@ -1183,7 +1225,10 @@ impl Project {
         let t = self.row_mut(idx)?;
         if milestone {
             t.kind = TaskKind::Milestone;
-            t.duration = 0;
+            if t.duration == 0 {
+                t.duration = 60;
+                t.duration_unit = Some(DurationUnit::Hours);
+            }
             t.estimated = false;
             t.duration_mode = DurationMode::Fixed;
         } else {
@@ -2113,7 +2158,7 @@ impl Project {
     }
 
     /// `minutes` of a task's own kind of time (elapsed for an elapsed task), as shown.
-    /// Uses the unit the user typed when present (`1d`, `2wk`); otherwise the project default.
+    /// Uses the unit stored on the task (`1h`, `1d`, `1w`); otherwise the project default.
     pub fn format_task_minutes(&self, t: &Task, minutes: Minutes, estimated: bool) -> String {
         let unit = t.duration_unit.unwrap_or(self.settings.duration_unit);
         if t.elapsed && !t.sched.is_summary {

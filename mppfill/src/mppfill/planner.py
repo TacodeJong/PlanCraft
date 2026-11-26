@@ -20,7 +20,7 @@ from pathlib import Path
 
 from .errors import MppFillError
 from .limits import MAX_FILE_BYTES
-from .template_fix import publish_schedule
+from .template_fix import milestone_percents, publish_schedule
 
 # Org, app and calendar used by docs/PLANNER-IMPORT.md. Flags and environment
 # variables override them.
@@ -48,7 +48,7 @@ def push_project(
     org = _org(org)
     calendar_id = _guid(calendar_id, "calendar")
     app_id = _guid(app_id, "app")
-    data = _prepared(mpp)
+    data, marks = _prepared(mpp)
     token = _token(org)
     manager = _whoami(org, token)
     staging = _create_staging(org, token, name, calendar_id, manager)
@@ -60,6 +60,7 @@ def push_project(
     for code, count in sorted(warnings.items()):
         print(f"- {code}: {count}")
     _wait_for_schedule(org, token, project_id)
+    _correct_milestone_progress(org, token, project_id, marks)
     _open_project(link)
     return project_id
 
@@ -116,8 +117,8 @@ def parse_import(payload: dict) -> tuple[str, int, dict]:
     return project_id, status if isinstance(status, int) else -1, {str(k): v for k, v in warnings.items()}
 
 
-def _prepared(path: Path) -> bytes:
-    """Copy the file, apply the Planner date fix, and return the bytes to upload."""
+def _prepared(path: Path) -> tuple[bytes, list[tuple[str, int]]]:
+    """Copy the file, apply the Planner date fix, and return the bytes and milestone percents."""
     if not path.is_file():
         raise MppFillError(f"{path} is not a file")
     if path.stat().st_size > MAX_FILE_BYTES:
@@ -127,7 +128,7 @@ def _prepared(path: Path) -> bytes:
             copy = Path(folder) / path.name
             shutil.copyfile(path, copy)
             publish_schedule(copy)
-            return copy.read_bytes()
+            return copy.read_bytes(), milestone_percents(copy)
     except OSError as exc:
         raise MppFillError(f"cannot prepare {path}: {exc.strerror or exc}") from exc
 
@@ -364,6 +365,191 @@ def check_lines(rows: list) -> list[str]:
         finish = row.get("msdyn_scheduledend") or ""
         lines.append(f"{subject}: {start} – {finish}")
     return lines
+
+
+def milestone_updates(marks: list[tuple[str, int]], rows: list) -> list[tuple[str, float]]:
+    """Pair each milestone with the imported row of the same name.
+
+    Returns `(task id, progress)` where progress is 0 or 1. A row already at that
+    progress is left out. Duplicate names are paired in the order both lists
+    provide them.
+    """
+    waiting: dict[str, list[dict]] = {}
+    for row in rows:
+        if not isinstance(row, dict) or not _imported_milestone(row):
+            continue
+        task_id = str(row.get("msdyn_projecttaskid") or "")
+        if not _GUID.match(task_id):
+            continue
+        name = _task_name(row.get("msdyn_subject"))
+        waiting.setdefault(name, []).append(row)
+    updates: list[tuple[str, float]] = []
+    for name, percent in marks:
+        queue = waiting.get(_task_name(name))
+        if not queue:
+            continue
+        row = queue.pop(0)
+        target = 1.0 if percent >= 100 else 0.0
+        current = _progress_fraction(row.get("msdyn_progress"))
+        if current is not None and abs(current - target) < 0.001:
+            continue
+        updates.append((str(row.get("msdyn_projecttaskid")), target))
+    return updates
+
+
+def _task_name(value: object) -> str:
+    return " ".join(str(value or "").casefold().split())
+
+
+def _imported_milestone(row: dict) -> bool:
+    if row.get("msdyn_summary") is True:
+        return False
+    if row.get("msdyn_ismilestone") is True:
+        return True
+    duration = row.get("msdyn_duration")
+    return duration == 0 or duration == 0.0
+
+
+def _progress_fraction(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if number > 1:
+        number /= 100.0
+    if number < 0:
+        return 0.0
+    if number > 1:
+        return 1.0
+    return number
+
+
+def progress_entity(task_id: str, progress: float) -> dict:
+    """Schedule update for one task. Progress is 0 or 1, which is 0% or 100%."""
+    return {
+        "@odata.type": "Microsoft.Dynamics.CRM.msdyn_projecttask",
+        "msdyn_projecttaskid": task_id,
+        "msdyn_progress": 1.0 if progress >= 1 else 0.0,
+    }
+
+
+def _correct_milestone_progress(org: str, token: str, project_id: str, marks: list[tuple[str, int]]) -> None:
+    """Write each milestone's percent onto the imported task.
+
+    The importer stores a milestone as 100% complete. A direct save of 0 is
+    then recalculated from the completed effort and comes back as 100%. The
+    schedule update is what sets the checkbox and the % bar.
+    """
+    if not marks:
+        return
+    rows = _milestone_rows(org, token, project_id)
+    updates = milestone_updates(marks, rows)
+    if not updates:
+        return
+    if _send_progress(org, token, project_id, updates):
+        open_count = sum(1 for _, progress in updates if progress == 0.0)
+        done_count = len(updates) - open_count
+        print(f"Milestones: {open_count} set to 0%, {done_count} left at 100%.")
+        return
+    print("Milestones kept the importer's percent. Planner did not accept the 0% update.")
+
+
+def _send_progress(org: str, token: str, project_id: str, updates: list[tuple[str, float]]) -> bool:
+    """Send milestone percents through the project schedule. Leaves dates alone."""
+    sent = False
+    for batch in _batches(updates, 200):
+        operation = _open_operation_set(org, token, project_id)
+        if not operation:
+            return False
+        accepted = True
+        for task_id, progress in batch:
+            status, _body = _call(
+                "POST",
+                f"{org}/api/data/v9.2/msdyn_PssUpdateV1",
+                token,
+                json.dumps({"Entity": progress_entity(task_id, progress), "OperationSetId": operation}).encode("utf-8"),
+                {"Content-Type": "application/json"},
+            )
+            if status not in (200, 204):
+                accepted = False
+                break
+        if not accepted or not _execute_operation_set(org, token, operation):
+            _abandon_operation_set(org, token, operation)
+            return False
+        sent = True
+    return sent
+
+
+def _batches(items: list[tuple[str, float]], size: int) -> list[list[tuple[str, float]]]:
+    return [items[start:start + size] for start in range(0, len(items), size)]
+
+
+def _open_operation_set(org: str, token: str, project_id: str) -> str:
+    status, body = _call(
+        "POST",
+        f"{org}/api/data/v9.2/msdyn_CreateOperationSetV1",
+        token,
+        json.dumps({"ProjectId": project_id, "Description": "Milestone percent from the plan"}).encode("utf-8"),
+        {"Content-Type": "application/json"},
+    )
+    if status not in (200, 201):
+        return ""
+    return _operation_id(body)
+
+
+def _execute_operation_set(org: str, token: str, operation: str) -> bool:
+    status, _body = _call(
+        "POST",
+        f"{org}/api/data/v9.2/msdyn_ExecuteOperationSetV1",
+        token,
+        json.dumps({"OperationSetId": operation}).encode("utf-8"),
+        {"Content-Type": "application/json"},
+    )
+    return status in (200, 204)
+
+
+def _abandon_operation_set(org: str, token: str, operation: str) -> None:
+    _call(
+        "POST",
+        f"{org}/api/data/v9.2/msdyn_AbandonOperationSetV1",
+        token,
+        json.dumps({"OperationSetId": operation}).encode("utf-8"),
+        {"Content-Type": "application/json"},
+    )
+
+
+def _operation_id(body: bytes) -> str:
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("OperationSetId", "operationSetId"):
+        found = str(payload.get(key) or "")
+        if _GUID.match(found):
+            return found
+    nested = payload.get("OperationSetResponse")
+    if isinstance(nested, str):
+        return _operation_id(nested.encode("utf-8"))
+    return ""
+
+
+def _milestone_rows(org: str, token: str, project_id: str) -> list:
+    query = urllib.parse.quote(f"_msdyn_project_value eq {project_id}")
+    select = "msdyn_projecttaskid,msdyn_subject,msdyn_progress,msdyn_ismilestone,msdyn_summary,msdyn_duration"
+    status, body = _call(
+        "GET",
+        f"{org}/api/data/v9.2/msdyn_projecttasks?$select={select}&$filter={query}",
+        token,
+    )
+    if status != 200:
+        return []
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return []
+    rows = payload.get("value") if isinstance(payload, dict) else None
+    return rows if isinstance(rows, list) else []
 
 
 def _report_tasks(org: str, token: str, project_id: str) -> list[str]:

@@ -38,9 +38,7 @@ enum Share {
 pub fn needed(p: &Project) -> bool {
     p.settings.rules.enabled()
         || p.tasks.iter().any(|t| {
-            t.duration_mode == DurationMode::Auto
-                || t.fills_group
-                || t.duration_percent.is_some_and(|pct| pct.is_finite() && pct > 0.0)
+            t.duration_mode == DurationMode::Auto || t.fills_group || t.duration_percent.is_some_and(|pct| pct.is_finite() && pct > 0.0)
         })
 }
 
@@ -114,9 +112,8 @@ pub fn resolve(p: &Project) -> SharePlan {
             .or_else(|| ancestor_bound_start(p, &parent, g))
             .or_else(|| base.tasks.get(g).and_then(|t| t.sched.start))
             .unwrap_or(p.start);
-        let window_end = finish
-            .or_else(|| base.tasks.get(g).and_then(|t| t.sched.finish))
-            .unwrap_or_else(|| cal.add(window_start, length.max(0)));
+        let window_end =
+            finish.or_else(|| base.tasks.get(g).and_then(|t| t.sched.finish)).unwrap_or_else(|| cal.add(window_start, length.max(0)));
         let mut remaining = length;
         let mut fills: Vec<usize> = Vec::new();
         let mut finish_ons: Vec<usize> = Vec::new();
@@ -223,9 +220,7 @@ pub fn resolve(p: &Project) -> SharePlan {
         if base_span > allotted_len
             && let Some(name) = p.tasks.get(i).map(|t| t.name.as_str())
         {
-            plan.notes.push(format!(
-                "Group {name} needs more than its share of its group; it grows to fit its activities"
-            ));
+            plan.notes.push(format!("Group {name} needs more than its share of its group; it grows to fit its activities"));
         }
     }
     note_unresolved_auto(p, &parent, &summary, &shares, &mut plan);
@@ -237,11 +232,10 @@ pub fn resolve(p: &Project) -> SharePlan {
 /// parallel branches and can each occupy the same remaining time window.
 fn fills_are_independent(p: &Project, fills: &[usize]) -> bool {
     let ids: Vec<TaskId> = fills.iter().filter_map(|&i| p.tasks.get(i).map(|t| t.id)).collect();
-    !fills.iter().filter_map(|&i| p.tasks.get(i)).any(|t| {
-        t.predecessors
-            .iter()
-            .any(|d| matches!(d.predecessor, TaskRef::Local(id) if ids.contains(&id)))
-    })
+    !fills
+        .iter()
+        .filter_map(|&i| p.tasks.get(i))
+        .any(|t| t.predecessors.iter().any(|d| matches!(d.predecessor, TaskRef::Local(id) if ids.contains(&id))))
 }
 
 /// Whether a fixed-duration sibling is an ancestor (via local predecessor links among `siblings`)
@@ -282,10 +276,7 @@ fn note_unresolved_auto(p: &Project, parent: &[Option<usize>], summary: &[bool],
             continue;
         }
         if parent.get(i).copied().flatten().is_none() {
-            plan.notes.push(format!(
-                "'{}' is set to Auto duration but has no parent group; it keeps its own duration",
-                t.name
-            ));
+            plan.notes.push(format!("'{}' is set to Auto duration but has no parent group; it keeps its own duration", t.name));
         }
     }
 }
@@ -411,10 +402,7 @@ fn group_length(
         return n.max(0);
     }
     let base_start = base.tasks.get(g).and_then(|t| t.sched.start);
-    let start = bound_start(group)
-        .or_else(|| ancestor_bound_start(p, parent, g))
-        .or(base_start)
-        .unwrap_or(p.start);
+    let start = bound_start(group).or_else(|| ancestor_bound_start(p, parent, g)).or(base_start).unwrap_or(p.start);
     if let Some(fin) = finish {
         return cal.between(start, fin).max(0);
     }
@@ -734,12 +722,7 @@ fn link_pred_finish_cap(
     Some(schedule::unapply_lag(cal, hard, dep.lag, pred_duration))
 }
 
-fn hard_start_of(
-    t: &Task,
-    cal: &crate::calendar::WorkCal<'_>,
-    finish_hard: Option<DateTime>,
-    include_soft: bool,
-) -> Option<DateTime> {
+fn hard_start_of(t: &Task, cal: &crate::calendar::WorkCal<'_>, finish_hard: Option<DateTime>, include_soft: bool) -> Option<DateTime> {
     if let Some(d) = hard_pinned_start(t) {
         return Some(d);
     }
@@ -1116,11 +1099,7 @@ mod tests {
         assert!(!p.task(nest).unwrap().fills_group);
 
         let report = recalculate(&mut p);
-        assert!(
-            !report.warnings.iter().any(|w| w.contains("no window")),
-            "ancestor deadline must supply a window: {:?}",
-            report.warnings
-        );
+        assert!(!report.warnings.iter().any(|w| w.contains("no window")), "ancestor deadline must supply a window: {:?}", report.warnings);
         let window = project_calendar(&p).between(p.start, deadline);
         assert!(window > 480, "deadline opens a multi-day window");
         assert!((span(&p, leaf) - window).abs() <= 1, "Auto leaf {} vs window {window}", span(&p, leaf));
@@ -1207,21 +1186,10 @@ mod tests {
             project_calendar(&p).between(t.bounds.start_earliest.unwrap(), t.bounds.finish_latest.unwrap())
         };
         let soft_span = project_calendar(&p).between(p.start, soft_cap);
-        assert!(
-            (span(&p, b) - soft_span).abs() <= 1,
-            "soft No-later overrules typed 10d: got {} soft {soft_span}",
-            span(&p, b)
-        );
-        assert!(
-            span(&p, b) < stored_long,
-            "typed duration must not win over the soft rule"
-        );
+        assert!((span(&p, b) - soft_span).abs() <= 1, "soft No-later overrules typed 10d: got {} soft {soft_span}", span(&p, b));
+        assert!(span(&p, b) < stored_long, "typed duration must not win over the soft rule");
         // Parallel Auto siblings each take the full remaining window (not a half-split).
-        assert!(
-            (span(&p, a) - window).abs() <= 1,
-            "sibling Auto fills the group window: got {} window {window}",
-            span(&p, a)
-        );
+        assert!((span(&p, a) - window).abs() <= 1, "sibling Auto fills the group window: got {} window {window}", span(&p, a));
     }
 
     /// Nested unrestricted summary with fills_group under a parent deadline: the nest is Fill,
@@ -1378,11 +1346,7 @@ mod tests {
             t.estimated = false;
         }
         let report = recalculate(&mut p);
-        assert!(
-            report.warnings.iter().any(|w| w.contains("needs more than its share")),
-            "overflow note: {:?}",
-            report.warnings
-        );
+        assert!(report.warnings.iter().any(|w| w.contains("needs more than its share")), "overflow note: {:?}", report.warnings);
         assert!(span(&p, nest) >= 8 * 480 - 1, "nest grows to fit long child");
     }
 
@@ -1414,10 +1378,7 @@ mod tests {
         let warning = p.task(row).unwrap().sched.warnings.first().cloned().unwrap_or_default();
         assert_eq!(p.task(row).unwrap().sched.duration, 0, "the stored duration still stays at zero");
         assert_eq!(p.task(row).unwrap().sched.warnings.len(), 1, "the no-room warning is still attached to the row");
-        assert!(
-            warning.contains("no room") || warning.contains("keeping"),
-            "warning: {warning}"
-        );
+        assert!(warning.contains("no room") || warning.contains("keeping"), "warning: {warning}");
     }
 
     #[test]
@@ -1444,11 +1405,7 @@ mod tests {
         }
         p.link(row.into(), gate, LinkType::FS, Lag::None).unwrap();
         recalculate(&mut p);
-        assert_eq!(
-            p.task(row).unwrap().sched.duration,
-            3 * 480,
-            "impossible cap must keep the stored duration, not collapse to zero"
-        );
+        assert_eq!(p.task(row).unwrap().sched.duration, 3 * 480, "impossible cap must keep the stored duration, not collapse to zero");
         assert!(
             p.task(row).unwrap().sched.warnings.iter().any(|w| w.contains("no room left")),
             "impossible window is still warned: {:?}",
@@ -1683,14 +1640,8 @@ mod tests {
         let d_none = none.task(fill_n).unwrap().sched.duration;
         let d_elapsed = elapsed.task(fill_e).unwrap().sched.duration;
         let d_working = working.task(fill_w).unwrap().sched.duration;
-        assert!(
-            d_elapsed < d_none,
-            "elapsed lag must pull the Auto cap earlier than none: elapsed={d_elapsed} none={d_none}"
-        );
-        assert!(
-            d_working < d_none,
-            "working lag should shorten more than none: working={d_working} none={d_none}"
-        );
+        assert!(d_elapsed < d_none, "elapsed lag must pull the Auto cap earlier than none: elapsed={d_elapsed} none={d_none}");
+        assert!(d_working < d_none, "working lag should shorten more than none: working={d_working} none={d_none}");
     }
 
     #[test]
@@ -1699,10 +1650,7 @@ mod tests {
         let (pct, fill_p) = fill_before_mfo(Lag::Percent(50));
         let d_none = none.task(fill_n).unwrap().sched.duration;
         let d_pct = pct.task(fill_p).unwrap().sched.duration;
-        assert!(
-            d_pct < d_none,
-            "percent lag must pull the Auto cap earlier than none: pct={d_pct} none={d_none}"
-        );
+        assert!(d_pct < d_none, "percent lag must pull the Auto cap earlier than none: pct={d_pct} none={d_none}");
     }
 
     /// Re-cap must grow back when a later pass opens the window (predecessor Auto shortened and
@@ -1763,8 +1711,7 @@ mod tests {
         p.link(write.into(), gate, LinkType::FS, Lag::None).unwrap();
         p.link(gate.into(), fix, LinkType::FS, Lag::None).unwrap();
         p.link(fix.into(), send, LinkType::FS, Lag::None).unwrap();
-        p.link_drive(send.into(), board, LinkType::SS, Lag::None, Some(crate::model::LinkDrive::FromSuccessor))
-            .unwrap();
+        p.link_drive(send.into(), board, LinkType::SS, Lag::None, Some(crate::model::LinkDrive::FromSuccessor)).unwrap();
         recalculate(&mut p);
         let fix_t = p.task(fix).unwrap();
         let board_s = p.task(board).unwrap().sched.start.unwrap();
@@ -1832,8 +1779,7 @@ mod tests {
         p.set_date_mode(board, true, crate::model::DateMode::On).unwrap();
         p.set_date_window(board, true, Some(board_finish_pin), Some(board_finish_pin)).unwrap();
         p.link(write.into(), send, LinkType::FS, Lag::None).unwrap();
-        p.link_drive(send.into(), board, LinkType::SS, Lag::None, Some(crate::model::LinkDrive::FromSuccessor))
-            .unwrap();
+        p.link_drive(send.into(), board, LinkType::SS, Lag::None, Some(crate::model::LinkDrive::FromSuccessor)).unwrap();
         recalculate(&mut p);
         let board_start = p.task(board).unwrap().sched.start.unwrap();
         let send_start = p.task(send).unwrap().sched.start.unwrap();

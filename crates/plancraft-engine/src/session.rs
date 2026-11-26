@@ -112,10 +112,7 @@ impl Session {
         label: &str,
         f: impl FnOnce(&mut Project) -> plancraft_core::ops::PlanResult<R>,
     ) -> Result<R, String> {
-        let i = self
-            .workspace
-            .index_of(handle)
-            .ok_or_else(|| "document was closed".to_string())?;
+        let i = self.workspace.index_of(handle).ok_or_else(|| "document was closed".to_string())?;
         let prev = self.workspace.active;
         self.workspace.active = Some(i);
         let result = self.try_edit_active(label, f);
@@ -126,12 +123,7 @@ impl Session {
     }
 
     /// Run a registered command against an existing workspace (UI / MCP shared mutex).
-    pub fn execute_mut(
-        workspace: &mut Workspace,
-        source: ChangeSource,
-        id: &str,
-        params: &Params,
-    ) -> Result<Value, CommandError> {
+    pub fn execute_mut(workspace: &mut Workspace, source: ChangeSource, id: &str, params: &Params) -> Result<Value, CommandError> {
         let taken = std::mem::take(workspace);
         let mut session = Self::new(taken).with_source(source);
         let result = session.execute(id, params);
@@ -149,9 +141,7 @@ impl Session {
     ) -> Result<R, String> {
         let taken = std::mem::take(workspace);
         let mut session = Self::new(taken).with_source(source);
-        let result = session.try_edit_doc(handle, label, |p| {
-            f(p).map_err(plancraft_core::ops::PlanError::Invalid)
-        });
+        let result = session.try_edit_doc(handle, label, |p| f(p).map_err(plancraft_core::ops::PlanError::Invalid));
         *workspace = session.workspace;
         result
     }
@@ -169,11 +159,7 @@ impl Session {
     }
 
     pub fn require_active(&self) -> Result<(), String> {
-        if self.workspace.active_doc().is_some() {
-            Ok(())
-        } else {
-            Err("no open document".into())
-        }
+        if self.workspace.active_doc().is_some() { Ok(()) } else { Err("no open document".into()) }
     }
 }
 

@@ -406,12 +406,7 @@ pub struct Dependency {
 
 impl Dependency {
     pub fn fs(pred: impl Into<TaskRef>) -> Self {
-        Self {
-            predecessor: pred.into(),
-            kind: LinkType::FS,
-            lag: Lag::None,
-            drive: LinkDrive::FromPredecessor,
-        }
+        Self { predecessor: pred.into(), kind: LinkType::FS, lag: Lag::None, drive: LinkDrive::FromPredecessor }
     }
 }
 
@@ -652,8 +647,8 @@ pub struct Task {
     /// holidays included, instead of in working time.
     #[serde(default, skip_serializing_if = "is_false")]
     pub elapsed: bool,
-    /// Unit the user typed for this duration (`1d`, `2wk`, …). When set, tables and properties
-    /// show that unit instead of the project default. Absent on old files → project unit.
+    /// Unit shown in the duration column (`1h`, `1d`, `1w`). Absent on old files, which
+    /// then use the project default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_unit: Option<DurationUnit>,
     #[serde(default)]
@@ -812,6 +807,22 @@ impl Task {
             _ => {}
         }
         (min, max)
+    }
+
+    /// The start clock the user typed. A calculated start is not one: a milestone often
+    /// lands at 17:00 because the previous task finishes then, and that clock is not a choice.
+    pub fn chosen_start(&self) -> Option<DateTime> {
+        if self.mode == ScheduleMode::Manual {
+            return self.manual_start;
+        }
+        if self.constraint.kind == ConstraintKind::Mso {
+            return self.constraint.date;
+        }
+        if self.bounds.start_latest_fixed && self.bounds.start_earliest.is_some() && self.bounds.start_earliest == self.bounds.start_latest
+        {
+            return self.bounds.start_earliest;
+        }
+        None
     }
 
     /// The finish side's minimum and maximum (FNET → minimum, FNLT → maximum, MFO → both),
@@ -992,17 +1003,11 @@ impl Task {
 
     /// Working time done so far: % complete of the duration (Microsoft Project's Actual Duration).
     pub fn actual_duration(&self) -> Minutes {
-        if self.is_milestone() {
-            return 0;
-        }
         self.duration.max(0).saturating_mul(Minutes::from(self.percent_complete.min(100))) / 100
     }
 
     /// Working time still to do (Microsoft Project's Remaining Duration).
     pub fn remaining_duration(&self) -> Minutes {
-        if self.is_milestone() {
-            return 0;
-        }
         self.duration.max(0).saturating_sub(self.actual_duration())
     }
 

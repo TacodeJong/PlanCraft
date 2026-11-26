@@ -14,7 +14,9 @@ from mppfill.planner import (
     check_lines,
     failure_message,
     parse_import,
+    progress_entity,
     project_url,
+    milestone_updates,
     schedule_ready,
     staging_body,
     tenant_from_header,
@@ -82,13 +84,26 @@ class PlannerRequestTest(unittest.TestCase):
             constraint="MSO",
             constraint_date=start,
         )
-        notes = apply_planner_profile([summary, leaf, milestone])
+        point = Task(
+            uid=4,
+            name="Point",
+            start=start,
+            finish=start,
+            duration_days=0,
+            outline_level=2,
+            parent_uid=1,
+        )
+        notes = apply_planner_profile([summary, leaf, milestone, point])
         self.assertIsNone(summary.constraint)
+        self.assertEqual(summary.duration_days, 1.0)
         self.assertEqual(leaf.constraint, "SNET")
         self.assertEqual(leaf.constraint_date, start)
         self.assertIsNone(leaf.deadline)
         self.assertFalse(leaf.manual)
-        self.assertEqual(milestone.finish, start)
+        self.assertEqual(milestone.duration_days, 0.125)
+        self.assertEqual(milestone.finish, datetime(2027, 1, 4, 9, 0))
+        self.assertEqual(point.duration_days, 0.125)
+        self.assertEqual(point.finish, datetime(2027, 1, 4, 9, 0))
         self.assertTrue(any("start-no-earlier-than" in note for note in notes))
         self.assertTrue(any("deadlines" in note for note in notes))
 
@@ -115,6 +130,56 @@ class PlannerRequestTest(unittest.TestCase):
         self.assertIn("etn=msdyn_project", link)
         self.assertIn("id=e4804c3a-1e3f-41ca-8a25-62c007f713e1", link)
         self.assertIn("extraqs=TabToFocus%3DPexWebTab", link)
+
+    def test_an_unfinished_milestone_is_not_left_at_100_percent(self) -> None:
+        marks = [("Gate", 0), ("Done gate", 100), ("Gate", 0)]
+        rows = [
+            {
+                "msdyn_projecttaskid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "msdyn_subject": "Work item",
+                "msdyn_ismilestone": False,
+                "msdyn_duration": 2,
+                "msdyn_progress": 0,
+            },
+            {
+                "msdyn_projecttaskid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "msdyn_subject": "Gate",
+                "msdyn_ismilestone": True,
+                "msdyn_progress": 1,
+            },
+            {
+                "msdyn_projecttaskid": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                "msdyn_subject": "Done gate",
+                "msdyn_ismilestone": True,
+                "msdyn_progress": 1,
+            },
+            {
+                "msdyn_projecttaskid": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+                "msdyn_subject": "  gate ",
+                "msdyn_ismilestone": True,
+                "msdyn_progress": 0,
+            },
+        ]
+        self.assertEqual(
+            milestone_updates(marks, rows),
+            [("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", 0.0)],
+        )
+        rows.insert(
+            1,
+            {
+                "msdyn_projecttaskid": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+                "msdyn_subject": "Gate",
+                "msdyn_summary": True,
+                "msdyn_duration": 0,
+                "msdyn_progress": 1,
+            },
+        )
+        self.assertEqual(
+            milestone_updates(marks, rows),
+            [("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", 0.0)],
+        )
+        self.assertEqual(progress_entity("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", 0.0)["msdyn_progress"], 0.0)
+        self.assertEqual(progress_entity("cccccccc-cccc-cccc-cccc-cccccccccccc", 1.0)["msdyn_progress"], 1.0)
 
     def test_the_schedule_is_not_ready_until_the_finish_is_filled(self) -> None:
         self.assertFalse(schedule_ready(""))

@@ -999,18 +999,34 @@ pub fn show(
             Editor::Date { minute, clearable } => {
                 body_painter.rect_filled(r, 0.0, theme::pal().BG);
                 body_painter.rect_stroke(r.shrink(0.5), 0.0, Stroke::new(1.5, theme::pal().ACCENT), StrokeKind::Inside);
-                let current = parse_iso_day(&edit.text).and_then(|d| date_at_minute(d, minute));
-                let label = crate::format::date(current);
+                // A milestone start asks for a clock (` *` or an already typed time). Other date
+                // cells still land on the column's default minute.
+                let ask_time = time_request(&edit.text);
+                let clock = clock_minutes(&edit.text).unwrap_or(if ask_time.is_some() { 0 } else { minute });
+                let current = parse_iso_day(&edit.text).and_then(|d| date_at_minute(d, clock));
+                let label = if ask_time == Some(true) { crate::format::date_hm(current) } else { crate::format::date(current) };
                 body_painter.text(pos2(r.left() + 5.0, r.center().y), Align2::LEFT_CENTER, &label, cell_font.clone(), theme::pal().TEXT);
+                let salt = format!("grid_date_{}_{}", edit.row, edit.col);
+                let clock = cfg.id.with(("grid_clock", edit.row, edit.col, edit.original.as_deref().unwrap_or("")));
                 let area = egui::Area::new(cfg.id.with("date")).order(egui::Order::Foreground).fixed_pos(pos2(r.left(), r.bottom())).show(
                     ui.ctx(),
                     |ui| {
-                        craft::menu_frame()
-                            .show(ui, |ui| crate::widgets::date_picker::calendar(ui, "grid_date", current, clearable, minute))
+                        craft::menu_frame().show(ui, |ui| {
+                            crate::widgets::date_picker::calendar(
+                                ui,
+                                &salt,
+                                current,
+                                clearable,
+                                minute,
+                                ask_time.is_some(),
+                                ask_time == Some(true),
+                                clock,
+                            )
+                        })
                     },
                 );
                 if let Some(next) = area.inner.inner {
-                    edit.text = crate::format::iso_date(next);
+                    edit.text = if ask_time.is_some() { crate::format::iso(next) } else { crate::format::iso_date(next) };
                     finished = Some((true, None));
                 } else if ui.input(|i| i.key_pressed(Key::Escape))
                     || (edit.started
@@ -1223,6 +1239,28 @@ pub fn show(
         _ => None,
     };
     GridOutput { events }
+}
+
+/// `Some(false)` when a milestone start still needs a clock (`2026-10-15 *`).
+/// `Some(true)` when that clock was already typed. `None` for an ordinary date cell.
+fn time_request(text: &str) -> Option<bool> {
+    let t = text.trim();
+    if t.ends_with('*') {
+        return Some(false);
+    }
+    clock_minutes(t).map(|_| true)
+}
+
+fn clock_minutes(text: &str) -> Option<u32> {
+    let time = text.trim().split([' ', 'T']).nth(1)?;
+    let (hour, min) = time.split_once(':')?;
+    let hour: u32 = hour.parse().ok()?;
+    let minute: String = min.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let minute: u32 = minute.parse().ok()?;
+    if hour > 23 || minute > 59 {
+        return None;
+    }
+    Some(hour.saturating_mul(60).saturating_add(minute))
 }
 
 /// `YYYY-MM-DD` from the sheet date editor (or empty).

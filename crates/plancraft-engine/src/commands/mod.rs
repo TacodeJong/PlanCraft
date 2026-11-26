@@ -28,16 +28,7 @@ macro_rules! cmd {
 
 macro_rules! query {
     ($id:literal, $label:literal, $params:literal, $enabled:expr, $run:expr $(,)?) => {
-        CommandSpec {
-            id: $id,
-            label: $label,
-            menu: &[],
-            shortcut: None,
-            params: $params,
-            enabled: $enabled,
-            run: $run,
-            journal: false,
-        }
+        CommandSpec { id: $id, label: $label, menu: &[], shortcut: None, params: $params, enabled: $enabled, run: $run, journal: false }
     };
 }
 
@@ -66,10 +57,7 @@ fn run_new_demo(s: &mut Session, _p: &Value) -> Result<Value, String> {
 }
 
 fn run_open(s: &mut Session, p: &Value) -> Result<Value, String> {
-    let path = p
-        .get("path")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "missing string param 'path'".to_string())?;
+    let path = p.get("path").and_then(|v| v.as_str()).ok_or_else(|| "missing string param 'path'".to_string())?;
     let handle = s.open_path(path)?;
     Ok(ok_doc(handle))
 }
@@ -85,10 +73,7 @@ fn run_save(s: &mut Session, _p: &Value) -> Result<Value, String> {
 }
 
 fn run_save_as(s: &mut Session, p: &Value) -> Result<Value, String> {
-    let path = p
-        .get("path")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "missing string param 'path'".to_string())?;
+    let path = p.get("path").and_then(|v| v.as_str()).ok_or_else(|| "missing string param 'path'".to_string())?;
     let doc = s.active_doc_mut().ok_or_else(|| "no open document".to_string())?;
     doc.save_as(path).map_err(|e| e.to_string())?;
     s.push_event(Event::ProjectChanged);
@@ -102,11 +87,7 @@ fn run_close(s: &mut Session, _p: &Value) -> Result<Value, String> {
     if i < s.workspace.docs.len() {
         s.workspace.docs.remove(i);
     }
-    s.workspace.active = if s.workspace.docs.is_empty() {
-        None
-    } else {
-        Some(i.min(s.workspace.docs.len().saturating_sub(1)))
-    };
+    s.workspace.active = if s.workspace.docs.is_empty() { None } else { Some(i.min(s.workspace.docs.len().saturating_sub(1))) };
     s.push_event(Event::ProjectChanged);
     Ok(ok_empty())
 }
@@ -193,29 +174,13 @@ pub static ALL: &[CommandSpec] = &[
     cmd!("file.newDemo", "New Demo Project", &["File"], None, r#"{}"#, always_ok, run_new_demo),
     cmd!("file.open", "Open…", &["File"], Some("Cmd+O"), r#"{"path":"string"}"#, always_ok, run_open),
     cmd!("file.save", "Save", &["File"], Some("Cmd+S"), r#"{}"#, needs_doc, run_save),
-    cmd!(
-        "file.saveAs",
-        "Save As…",
-        &["File"],
-        Some("Cmd+Shift+S"),
-        r#"{"path":"string"}"#,
-        needs_doc,
-        run_save_as,
-    ),
+    cmd!("file.saveAs", "Save As…", &["File"], Some("Cmd+Shift+S"), r#"{"path":"string"}"#, needs_doc, run_save_as,),
     cmd!("file.close", "Close", &["File"], None, r#"{}"#, needs_doc, run_close),
     // —— Edit ——
     cmd!("edit.undo", "Undo", &["Edit"], Some("Cmd+Z"), r#"{}"#, needs_doc, run_undo),
     cmd!("edit.redo", "Redo", &["Edit"], Some("Cmd+Shift+Z"), r#"{}"#, needs_doc, run_redo),
     // —— Task ——
-    cmd!(
-        "task.insert",
-        "Insert Task",
-        &["Task"],
-        None,
-        r#"{"name":"string?","at":"number?"}"#,
-        needs_doc,
-        task::run_insert,
-    ),
+    cmd!("task.insert", "Insert Task", &["Task"], None, r#"{"name":"string?","at":"number?"}"#, needs_doc, task::run_insert,),
     cmd!(
         "task.insertMilestone",
         "Insert Milestone",
@@ -234,15 +199,7 @@ pub static ALL: &[CommandSpec] = &[
         needs_doc,
         task::run_insert_summary,
     ),
-    cmd!(
-        "task.delete",
-        "Delete Tasks",
-        &["Task"],
-        None,
-        r#"{"tasks":"number[]"}"#,
-        needs_doc,
-        task::run_delete,
-    ),
+    cmd!("task.delete", "Delete Tasks", &["Task"], None, r#"{"tasks":"number[]"}"#, needs_doc, task::run_delete,),
     cmd!("task.indent", "Indent", &["Task"], None, r#"{"tasks":"number[]"}"#, needs_doc, task::run_indent),
     cmd!("task.outdent", "Outdent", &["Task"], None, r#"{"tasks":"number[]"}"#, needs_doc, task::run_outdent),
     cmd!("task.moveUp", "Move Up", &["Task"], None, r#"{"tasks":"number[]"}"#, needs_doc, task::run_move_up),
@@ -293,70 +250,14 @@ pub static ALL: &[CommandSpec] = &[
         needs_doc,
         task::run_set_mode,
     ),
-    cmd!(
-        "task.toggleActive",
-        "Toggle Active",
-        &["Task"],
-        None,
-        r#"{"tasks":"number[]"}"#,
-        needs_doc,
-        task::run_toggle_active,
-    ),
-    cmd!(
-        "task.clearDates",
-        "Clear Dates",
-        &["Task"],
-        None,
-        r#"{"tasks":"number[]"}"#,
-        needs_doc,
-        task::run_clear_dates,
-    ),
-    cmd!(
-        "task.markOnTrack",
-        "Mark on Track",
-        &["Task"],
-        None,
-        r#"{"tasks":"number[]"}"#,
-        needs_doc,
-        task::run_mark_on_track,
-    ),
-    cmd!(
-        "task.toggleTimeline",
-        "Add to Timeline",
-        &["Task"],
-        None,
-        r#"{"tasks":"number[]"}"#,
-        needs_doc,
-        task::run_toggle_timeline,
-    ),
-    cmd!(
-        "task.rejoinSplits",
-        "Rejoin Split Task",
-        &["Task"],
-        None,
-        r#"{"tasks":"number[]"}"#,
-        needs_doc,
-        task::run_rejoin,
-    ),
+    cmd!("task.toggleActive", "Toggle Active", &["Task"], None, r#"{"tasks":"number[]"}"#, needs_doc, task::run_toggle_active,),
+    cmd!("task.clearDates", "Clear Dates", &["Task"], None, r#"{"tasks":"number[]"}"#, needs_doc, task::run_clear_dates,),
+    cmd!("task.markOnTrack", "Mark on Track", &["Task"], None, r#"{"tasks":"number[]"}"#, needs_doc, task::run_mark_on_track,),
+    cmd!("task.toggleTimeline", "Add to Timeline", &["Task"], None, r#"{"tasks":"number[]"}"#, needs_doc, task::run_toggle_timeline,),
+    cmd!("task.rejoinSplits", "Rejoin Split Task", &["Task"], None, r#"{"tasks":"number[]"}"#, needs_doc, task::run_rejoin,),
     // —— Resource ——
-    cmd!(
-        "resource.insert",
-        "Add Resource",
-        &["Resource"],
-        None,
-        r#"{"name":"string?"}"#,
-        needs_doc,
-        resource::run_insert,
-    ),
-    cmd!(
-        "resource.delete",
-        "Delete Resources",
-        &["Resource"],
-        None,
-        r#"{"resources":"number[]"}"#,
-        needs_doc,
-        resource::run_delete,
-    ),
+    cmd!("resource.insert", "Add Resource", &["Resource"], None, r#"{"name":"string?"}"#, needs_doc, resource::run_insert,),
+    cmd!("resource.delete", "Delete Resources", &["Resource"], None, r#"{"resources":"number[]"}"#, needs_doc, resource::run_delete,),
     cmd!(
         "resource.levelAll",
         "Level Resources",
@@ -366,15 +267,7 @@ pub static ALL: &[CommandSpec] = &[
         needs_doc,
         resource::run_level_all,
     ),
-    cmd!(
-        "resource.clearLeveling",
-        "Clear Leveling",
-        &["Resource"],
-        None,
-        r#"{}"#,
-        needs_doc,
-        resource::run_clear_leveling,
-    ),
+    cmd!("resource.clearLeveling", "Clear Leveling", &["Resource"], None, r#"{}"#, needs_doc, resource::run_clear_leveling,),
     cmd!(
         "resource.assign",
         "Assign Resource",
@@ -459,8 +352,7 @@ mod tests {
     fn execute_mut_uses_shared_workspace() {
         let mut ws = Workspace::default();
         ws.add(Project::new("T", today()), None);
-        Session::execute_mut(&mut ws, plancraft_core::workspace::ChangeSource::User, "task.insert", &json!({"name": "X"}))
-            .unwrap();
+        Session::execute_mut(&mut ws, plancraft_core::workspace::ChangeSource::User, "task.insert", &json!({"name": "X"})).unwrap();
         assert_eq!(ws.active_doc().unwrap().project.tasks.len(), 1);
     }
 }

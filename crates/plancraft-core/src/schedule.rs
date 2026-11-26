@@ -159,7 +159,7 @@ pub fn segments_of(start: DateTime, splits: &[Split], gaps: &[Gap], cal: &WorkCa
 /// and the part left; `None` for any other task.
 pub fn parts_of(t: &Task, cal: &WorkCal, dur: Minutes) -> Option<Parts> {
     let start = t.actual_start?;
-    if t.actual_finish.is_some() || t.is_milestone() || dur <= 0 || t.mode == ScheduleMode::Manual {
+    if t.actual_finish.is_some() || dur <= 0 || t.mode == ScheduleMode::Manual || (t.is_milestone() && t.duration <= 0) {
         return None;
     }
     let pct = Minutes::from(t.percent_complete);
@@ -907,8 +907,7 @@ impl<'a> Engine<'a> {
             let Some(task) = self.task(succ) else { continue };
             // Own links (no summary cap), then links inherited from ancestor summaries (capped by
             // that summary's fixedStartCap), then milestone membership.
-            let mut deps: Vec<(Dependency, Option<DateTime>)> =
-                task.predecessors.iter().copied().map(|d| (d, None)).collect();
+            let mut deps: Vec<(Dependency, Option<DateTime>)> = task.predecessors.iter().copied().map(|d| (d, None)).collect();
             // Links into a manually scheduled summary stop at it (it doesn't move, and its
             // subtasks follow its start instead), and so do links into the summaries around it.
             let mut anc = self.parent.get(succ).copied().flatten();
@@ -919,11 +918,7 @@ impl<'a> Engine<'a> {
                 if let Some(t) = p.tasks.get(a) {
                     let cap = self.fixed_start_cap.get(a).copied().flatten();
                     deps.extend(
-                        t.predecessors
-                            .iter()
-                            .copied()
-                            .filter(|d| !matches!(d.kind, LinkType::FF | LinkType::SF))
-                            .map(|d| (d, cap)),
+                        t.predecessors.iter().copied().filter(|d| !matches!(d.kind, LinkType::FF | LinkType::SF)).map(|d| (d, cap)),
                     );
                 }
                 anc = self.parent.get(a).copied().flatten();
@@ -951,14 +946,7 @@ impl<'a> Engine<'a> {
                     if let Some(inc) = self.incoming.get_mut(succ) {
                         inc.push(e);
                     }
-                    self.edges.push(Edge {
-                        pred: src,
-                        succ,
-                        kind: d.kind,
-                        lag: d.lag,
-                        drive: d.drive,
-                        via_summary_cap,
-                    });
+                    self.edges.push(Edge { pred: src, succ, kind: d.kind, lag: d.lag, drive: d.drive, via_summary_cap });
                 }
             }
         }
@@ -1052,7 +1040,7 @@ impl<'a> Engine<'a> {
             return minutes.max(0);
         }
         match self.task(i) {
-            Some(t) if !t.is_milestone() => t.duration.max(0),
+            Some(t) => t.duration.max(0),
             _ => 0,
         }
     }
@@ -1765,7 +1753,7 @@ fn calculate(p: &mut Project) -> ScheduleReport {
         t.sched.parts = segments.remove(&i).unwrap_or_default();
         t.sched.total_slack = ts;
         t.sched.free_slack = free_slack.get(i).copied().unwrap_or(0);
-        t.sched.duration = if t.is_milestone() { 0 } else { share.durations.get(i).copied().flatten().unwrap_or(t.duration) };
+        t.sched.duration = share.durations.get(i).copied().flatten().unwrap_or(t.duration.max(0));
         t.sched.rollup_start = None;
         t.sched.rollup_finish = None;
         t.sched.critical = t.active && !t.is_complete() && t.mode == ScheduleMode::Auto && ts <= crit;
@@ -1858,10 +1846,10 @@ struct Rollup {
     weight: (f64, f64),
 }
 
-/// Weight of a subtask in % complete rollups: its duration (a milestone counts as one minute),
-/// so a summary's % complete is the duration-weighted progress of all subtasks below it.
+/// Weight of a subtask in % complete rollups: its duration (a zero-length milestone counts as
+/// one minute), so a summary's % complete is the duration-weighted progress of all subtasks below it.
 fn percent_weight(t: &Task) -> f64 {
-    if t.is_milestone() { 1.0 } else { t.duration.max(1) as f64 }
+    (t.duration.max(0) as f64).max(1.0)
 }
 
 /// Work, actual work and cost a summary carries itself (fixed cost and its own assignments).

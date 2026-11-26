@@ -21,6 +21,11 @@ pub fn date(dt: Option<DateTime>) -> String {
     dt.map(|d| dates::dmy(d.date())).unwrap_or_else(|| "NA".into())
 }
 
+/// `15-10-2026 15:30`, or `NA`: a date with the clock the user set.
+pub fn date_hm(dt: Option<DateTime>) -> String {
+    dt.map(|d| format!("{} {:02}:{:02}", dates::dmy(d.date()), d.hour32(), d.minute32())).unwrap_or_else(|| "NA".into())
+}
+
 /// `do 15-10-2026 08:00`, or `NA`: a date with its weekday and time, where there is room.
 pub fn date_long(dt: Option<DateTime>) -> String {
     dt.map(|d| format!("{} {} {:02}:{:02}", names().weekday(d.date()), dates::dmy(d.date()), d.hour32(), d.minute32()))
