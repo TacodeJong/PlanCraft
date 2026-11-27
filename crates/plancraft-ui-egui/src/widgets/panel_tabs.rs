@@ -2,8 +2,8 @@
 //!
 //! Structure and fit rules follow craft-ui `TabKind::Panel` (storytold/craft-libs @ 77c7c623):
 //! - `crates/ui-widgets/src/tabs/rules.rs` — shrink before overflow, keep active width,
-//!   overflow menu lists **hidden** tabs only, overflow sits after the last shown tab,
-//!   no close buttons on tabs.
+//!   overflow menu lists **hidden** tabs only, overflow sits after the last shown tab.
+//!   The active tab carries a small close cross so the inspector can be dismissed.
 //! - `crates/ui-widgets/src/tabs/tab.rs` — selected tab fills panel surface; idle tabs are
 //!   muted labels on the strip (no document-style dividers).
 //! - `crates/ui-panels/src/docking/group.rs` — dock groups use
@@ -14,7 +14,7 @@
 //! docking/`TabStrip` are not wired as deps yet, so this module mirrors `TabKind::Panel`
 //! structure and tokens for side inspectors.
 
-use egui::{Align, FontFamily, FontId, Layout, PopupCloseBehavior, Rect, Sense, Ui, vec2};
+use egui::{Align, FontFamily, FontId, Layout, PopupCloseBehavior, Rect, Sense, Stroke, Ui, pos2, vec2};
 
 use crate::theme;
 
@@ -24,6 +24,8 @@ pub const PANEL_TAB_H: f32 = 28.0;
 const MIN_TAB_W: f32 = 36.0;
 const OVERFLOW_W: f32 = 28.0;
 const TAB_PAD_X: f32 = 10.0;
+/// Room for the little close cross on the active tab.
+const CLOSE_W: f32 = 16.0;
 
 /// One panel tab: stable id + label.
 #[derive(Clone, Debug)]
@@ -37,6 +39,8 @@ pub struct PanelTab {
 pub struct PanelTabOut {
     /// Tab id clicked this pass (including from the overflow menu).
     pub picked: Option<&'static str>,
+    /// The close cross on the active tab was clicked.
+    pub close: bool,
 }
 
 /// Draws a PhotoCraft-family panel tab strip: active tab on a lighter panel fill, idle muted,
@@ -57,7 +61,8 @@ pub fn show(ui: &mut Ui, tabs: &[PanelTab], active_id: &str) -> PanelTabOut {
         .iter()
         .map(|t| {
             let g = ui.painter().layout_no_wrap(t.label.clone(), font.clone(), theme::pal().TEXT);
-            (g.size().x + 2.0 * TAB_PAD_X).max(MIN_TAB_W)
+            let close = if t.id == active_id { CLOSE_W } else { 0.0 };
+            (g.size().x + 2.0 * TAB_PAD_X + close).max(MIN_TAB_W)
         })
         .collect();
     let selected = tabs.iter().position(|t| t.id == active_id).unwrap_or(0);
@@ -78,14 +83,18 @@ pub fn show(ui: &mut Ui, tabs: &[PanelTab], active_id: &str) -> PanelTabOut {
         }
         let color = if active { theme::pal().TEXT } else { theme::pal().TEXT_WEAK };
         let galley = child.painter().layout_no_wrap(tab.label.clone(), font.clone(), color);
+        let label_right = if active { rect.right() - CLOSE_W } else { rect.right() - 2.0 };
         // Panel tabs clip labels at the edge (`TabKind::clips_label`), not ellipsis.
-        let clip = Rect::from_min_max(egui::pos2(rect.left() + 2.0, rect.top()), egui::pos2(rect.right() - 2.0, rect.bottom()));
+        let clip = Rect::from_min_max(egui::pos2(rect.left() + 2.0, rect.top()), egui::pos2(label_right, rect.bottom()));
         child.painter().with_clip_rect(clip).galley(
             egui::pos2(rect.left() + TAB_PAD_X, rect.center().y - galley.size().y * 0.5),
             galley,
             color,
         );
-        if resp.clicked() {
+        let closed = if active { close_cross(&mut child, rect, tab.id) } else { false };
+        if closed {
+            out.close = true;
+        } else if resp.clicked() {
             out.picked = Some(tab.id);
         }
         resp.on_hover_text(&tab.label);
@@ -108,6 +117,22 @@ pub fn show(ui: &mut Ui, tabs: &[PanelTab], active_id: &str) -> PanelTabOut {
 
     ui.allocate_rect(strip, Sense::hover());
     out
+}
+
+/// A small cross at the right of the active tab. Returns whether it was clicked.
+fn close_cross(ui: &mut Ui, tab: Rect, tab_id: &str) -> bool {
+    let cross = Rect::from_center_size(pos2(tab.right() - CLOSE_W * 0.5 - 1.0, tab.center().y), vec2(CLOSE_W - 2.0, CLOSE_W - 2.0));
+    let resp = ui.interact(cross, ui.scope_id().with(("panel_tab_close", tab_id)), Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(cross, 2.0, theme::pal().WASH_HOVER);
+    }
+    let color = if resp.hovered() { theme::pal().TEXT } else { theme::pal().TEXT_WEAK };
+    let mark = cross.shrink(3.5);
+    let stroke = Stroke::new(1.15, color);
+    ui.painter().line_segment([mark.left_top(), mark.right_bottom()], stroke);
+    ui.painter().line_segment([mark.right_top(), mark.left_bottom()], stroke);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, crate::lang::text("dlg.close")));
+    resp.on_hover_text(crate::lang::text("dlg.close")).on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }
 
 /// Same fit idea as craft `FitMode::Shrink { keep_selected: true }`: keep the active tab's

@@ -406,6 +406,29 @@ pub fn toggle_column(p: &Project, table: TaskTable, choice: &mut crate::settings
     }
 }
 
+/// Columns the Insert Column menu should offer first: this table's own columns and the short
+/// chooser list, then custom fields. The long tail (baselines, slack, variance, …) stays out of
+/// this list so Notes and the other everyday columns are not buried under it.
+pub fn columns_to_insert(p: &Project, table: TaskTable, shown: &[Field]) -> (Vec<Field>, Vec<Field>) {
+    let mut quick = Vec::new();
+    let mut push = |f: Field| {
+        if !shown.contains(&f) && !quick.contains(&f) {
+            quick.push(f);
+        }
+    };
+    for col in table.columns() {
+        push(Field::Builtin(col));
+    }
+    for col in CHOOSER_EXTRAS {
+        push(Field::Builtin(col));
+    }
+    for f in p.custom_fields.iter().map(|f| Field::Custom(f.id)) {
+        push(f);
+    }
+    let rest: Vec<Field> = all_fields(p).into_iter().filter(|f| !shown.contains(f) && !quick.contains(f)).collect();
+    (quick, rest)
+}
+
 /// Every field a column can show: the built-in columns, the numbered baselines and interim plans,
 /// then the custom fields.
 pub fn all_fields(p: &Project) -> Vec<Field> {
@@ -488,6 +511,23 @@ mod tests {
         // A layout with some known columns keeps just those.
         p.set_table_columns(TaskTable::Entry.label(), &["nonsense".to_string(), "name".to_string()]).unwrap();
         assert_eq!(table_fields(&p, TaskTable::Entry), vec![Field::from_key(&p, "name").unwrap()]);
+    }
+
+    /// A saved Entry layout that dropped Notes still offers it, at the front of Insert Column,
+    /// together with the other default column that layout left out.
+    #[test]
+    fn a_saved_layout_without_notes_still_offers_notes() {
+        let mut p = plancraft_core::sample::demo_project(plancraft_core::dates::ymd(2026, 10, 19).unwrap());
+        let table = TaskTable::Entry;
+        p.set_table_columns(table.label(), &["indicators".into(), "mode".into(), "name".into(), "start".into(), "finish".into()]).unwrap();
+        let shown = table_fields(&p, table);
+        assert!(column_choices(&p, table, None).iter().any(|(k, _, on, _)| k == "notes" && !*on));
+        let (quick, rest) = columns_to_insert(&p, table, &shown);
+        let notes_at = quick.iter().position(|f| f.key() == "notes");
+        let delay_at = quick.iter().position(|f| f.key() == "leveling_delay");
+        assert!(notes_at.is_some() && delay_at.is_some());
+        assert!(rest.iter().any(|f| matches!(f, Field::Builtin(TaskCol::LateStart))));
+        assert!(quick.iter().all(|f| !matches!(f, Field::Builtin(TaskCol::LateStart))));
     }
 
     /// The column chooser: hiding removes a column (never the name), extras append, and the

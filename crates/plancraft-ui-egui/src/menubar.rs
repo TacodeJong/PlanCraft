@@ -1090,13 +1090,30 @@ fn toolbar(ui: &mut Ui, st: &mut UiState, info: &MenuInfo, settings: &AppSetting
                 .id(columns_popup)
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .show(|ui| {
-                    ui.set_min_width(200.0);
-                    egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
-                        for (key, title, on, required) in &info.columns {
+                    ui.set_min_width(220.0);
+                    // Columns that are off come first. A saved layout puts Notes and the other
+                    // addable columns after every column already on the sheet, which pushed them
+                    // past the bottom of this menu.
+                    let required: Vec<_> = info.columns.iter().filter(|c| c.3).cloned().collect();
+                    let off: Vec<_> = info.columns.iter().filter(|c| !c.2 && !c.3).cloned().collect();
+                    let on: Vec<_> = info.columns.iter().filter(|c| c.2 && !c.3).cloned().collect();
+                    let row = |ui: &mut egui::Ui, rows: &[(String, String, bool, bool)]| {
+                        for (key, title, on, required) in rows {
                             let mut on = *on;
-                            if ui.add_enabled(!required, egui::Checkbox::new(&mut on, title)).changed() {
+                            if ui.add_enabled(!*required, egui::Checkbox::new(&mut on, title)).changed() {
                                 push(Command::ToggleColumn(key.clone()));
                             }
+                        }
+                    };
+                    egui::ScrollArea::vertical().max_height(480.0).show(ui, |ui| {
+                        row(ui, &required);
+                        if !off.is_empty() {
+                            ui.label(egui::RichText::new(crate::lang::text("tb.columns_add")).weak().small());
+                            row(ui, &off);
+                        }
+                        if !on.is_empty() {
+                            ui.separator();
+                            row(ui, &on);
                         }
                     });
                 });

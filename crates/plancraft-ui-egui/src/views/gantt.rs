@@ -526,24 +526,35 @@ pub fn column_menu_popup(ctx: &egui::Context, p: &Project, st: &UiState, out: &m
         ui.separator();
         ui.menu_button("Insert Column", |ui| {
             use crate::columns::TaskCol;
-            let hidden: Vec<Field> = fields::all_fields(p).into_iter().filter(|f| !shown.contains(f)).collect();
+            let (quick, rest) = fields::columns_to_insert(p, st.table, &shown);
             let mut pick = |ui: &mut egui::Ui, f: &Field| {
                 if ui.button(f.title(p)).clicked() {
                     cmd = Some(Command::InsertColumn { at: col, key: f.key() });
                 }
             };
             // Baseline1–10 and the interim plans go in submenus so the list stays short.
+            // Everyday columns (Notes, leveling delay, the chooser extras) stay at the top.
             let numbered = |f: &Field, n: u8| matches!(f, Field::Builtin(TaskCol::Baseline(m, _)) if *m == n);
             let interim = |f: &Field| matches!(f, Field::Builtin(TaskCol::Interim(..)));
             egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-                for f in hidden.iter().filter(|f| !interim(f) && !(1..=plancraft_core::baseline::MAX_BASELINE).any(|n| numbered(f, n))) {
+                for f in &quick {
                     pick(ui, f);
+                }
+                let tail: Vec<&Field> =
+                    rest.iter().filter(|f| !interim(f) && !(1..=plancraft_core::baseline::MAX_BASELINE).any(|n| numbered(f, n))).collect();
+                if !tail.is_empty() {
+                    if !quick.is_empty() {
+                        ui.separator();
+                    }
+                    for f in tail {
+                        pick(ui, f);
+                    }
                 }
                 ui.separator();
                 ui.menu_button("Baseline1–10", |ui| {
                     for n in 1..=plancraft_core::baseline::MAX_BASELINE {
                         ui.menu_button(PlanSlot::Baseline(n).name(), |ui| {
-                            for f in hidden.iter().filter(|f| numbered(f, n)) {
+                            for f in rest.iter().filter(|f| numbered(f, n)) {
                                 pick(ui, f);
                             }
                         });
@@ -551,7 +562,7 @@ pub fn column_menu_popup(ctx: &egui::Context, p: &Project, st: &UiState, out: &m
                 });
                 ui.menu_button("Interim Plans", |ui| {
                     egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-                        for f in hidden.iter().filter(|f| interim(f)) {
+                        for f in rest.iter().filter(|f| interim(f)) {
                             pick(ui, f);
                         }
                     });

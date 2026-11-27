@@ -46,31 +46,28 @@ fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: &mut
     if show_prop_tabs && !st.sel.tasks.is_empty() {
         let tabs: Vec<_> =
             PropTab::ALL.iter().map(|tab| crate::widgets::panel_tabs::PanelTab { id: tab.id(), label: tab.title().to_owned() }).collect();
-        if let Some(picked) = crate::widgets::panel_tabs::show(&mut child, &tabs, st.properties_tab.id()).picked
+        let strip = crate::widgets::panel_tabs::show(&mut child, &tabs, st.properties_tab.id());
+        if strip.close {
+            // Notes commits on blur; closing the pane does not paint the field, so flush the draft.
+            if st.properties_tab == PropTab::Notes {
+                flush_notes(ui.ctx(), doc, st);
+            }
+            out.push(Command::TogglePropertiesPane);
+        } else if let Some(picked) = strip.picked
             && let Some(tab) = PropTab::ALL.iter().find(|t| t.id() == picked)
         {
             // Notes commits on blur; leaving the tab does not paint the field, so flush the draft.
             if st.properties_tab == PropTab::Notes && *tab != PropTab::Notes {
-                let ids: Vec<TaskId> = doc.project.tasks.iter().filter(|t| st.sel.tasks.contains(&t.id)).map(|t| t.id).collect();
-                if let Some(&first) = ids.first()
-                    && let Some(text) = take_notes_draft(ui.ctx(), first, ids.len() > 1)
-                {
-                    edit(doc, st, "Notes", move |p| {
-                        for id in &ids {
-                            if let Some(t) = p.task_mut(*id) {
-                                t.notes = text.clone();
-                            }
-                        }
-                        Ok(())
-                    });
-                }
+                flush_notes(ui.ctx(), doc, st);
             }
             st.properties_tab = *tab;
         }
     } else {
         // Host label strip when only the properties surface is open (one tab group).
         let host = [crate::widgets::panel_tabs::PanelTab { id: "properties", label: st.t("tb.properties").to_owned() }];
-        let _ = crate::widgets::panel_tabs::show(&mut child, &host, "properties");
+        if crate::widgets::panel_tabs::show(&mut child, &host, "properties").close {
+            out.push(Command::TogglePropertiesPane);
+        }
     }
     let body_top = child.min_rect().bottom();
     let body = Rect::from_min_max(egui::pos2(rect.left() + 10.0, body_top), egui::pos2(rect.right() - 10.0, rect.bottom() - 8.0));
@@ -95,6 +92,21 @@ fn show(ui: &mut Ui, rect: Rect, doc: &mut Document, st: &mut UiState, out: &mut
 
 fn empty(ui: &mut Ui) {
     ui.label(RichText::new(crate::lang::text("prop.no_selection")).color(theme::pal().TEXT_WEAK));
+}
+
+/// Writes the open Notes draft onto the selected tasks before the field leaves the screen.
+fn flush_notes(ctx: &egui::Context, doc: &mut Document, st: &mut UiState) {
+    let ids: Vec<TaskId> = doc.project.tasks.iter().filter(|t| st.sel.tasks.contains(&t.id)).map(|t| t.id).collect();
+    let Some(&first) = ids.first() else { return };
+    let Some(text) = take_notes_draft(ctx, first, ids.len() > 1) else { return };
+    edit(doc, st, "Notes", move |p| {
+        for id in &ids {
+            if let Some(t) = p.task_mut(*id) {
+                t.notes = text.clone();
+            }
+        }
+        Ok(())
+    });
 }
 
 /// A greyed, uneditable field showing a derived value (kept visible rather than hidden).

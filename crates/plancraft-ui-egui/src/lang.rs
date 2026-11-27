@@ -696,6 +696,7 @@ fn pair(key: &str) -> Option<(&'static str, &'static str)> {
         }
         "tb.columns" => ("Columns", "Kolommen"),
         "tb.columns_hint" => ("Choose the visible table columns", "Kies de zichtbare tabelkolommen"),
+        "tb.columns_add" => ("Add a column", "Kolom toevoegen"),
         "common.yes" => ("Yes", "Ja"),
         "qe.new" => ("New Task", "Nieuwe taak"),
         "qe.indent" => ("Indent Task", "Taak inspringen"),
